@@ -455,6 +455,7 @@ export class Orchestrator {
    */
   private async processIssue(issue: Issue): Promise<void> {
     const maxRetries = this.session.config.maxRetries;
+    const issueStartTime = Date.now();
     let attempt = 0;
     let success = false;
 
@@ -520,7 +521,7 @@ export class Orchestrator {
             timestamp: new Date(),
             issue,
             commitHash: this.commits[this.commits.length - 1]?.hash ?? '',
-            duration: 0, // TODO: Track actual duration
+            duration: Date.now() - issueStartTime,
           });
         } else if (attempt < maxRetries) {
           // Record retry
