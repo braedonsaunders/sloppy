@@ -1,0 +1,46 @@
+{
+  "name": "@sloppy/analyzers",
+  "version": "1.0.0",
+  "description": "Code analysis tools for detecting various issues in AI-generated code",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@sloppy/core": "workspace:*",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/typescript-estree": "^8.0.0",
+    "eslint": "^9.0.0",
+    "glob": "^11.0.0",
+    "jscpd": "^4.0.0",
+    "typescript": "^5.7.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "sloppy",
+    "code-quality",
+    "analyzer",
+    "static-analysis",
+    "ai"
+  ],
+  "license": "MIT"
+}
