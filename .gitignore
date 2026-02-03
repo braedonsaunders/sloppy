@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Turbo
+.turbo/
+
+# Sloppy data
+data/
+repos/

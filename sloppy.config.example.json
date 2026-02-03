@@ -1,0 +1,49 @@
+{
+  "$schema": "./packages/core/dist/schema.json",
+  "maxTime": "2h",
+  "provider": {
+    "type": "claude",
+    "model": "claude-sonnet-4-20250514"
+  },
+  "strictness": "high",
+  "approvalMode": false,
+  "issues": {
+    "stubs": true,
+    "duplicates": true,
+    "bugs": true,
+    "typeErrors": true,
+    "lintErrors": true,
+    "missingTests": true,
+    "deadCode": true,
+    "security": true
+  },
+  "ignore": [
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "coverage/**",
+    "*.min.js",
+    "*.bundle.js",
+    "vendor/**",
+    "generated/**"
+  ],
+  "commands": {
+    "test": "npm test",
+    "lint": "npm run lint",
+    "build": "npm run build",
+    "typecheck": "npm run typecheck"
+  },
+  "thresholds": {
+    "minCoverage": 80,
+    "maxDuplicateLines": 10,
+    "maxComplexity": 15
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "backoffMs": 1000
+  },
+  "checkpoints": {
+    "enabled": true,
+    "intervalMinutes": 15
+  }
+}

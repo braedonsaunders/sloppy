@@ -1,0 +1,66 @@
+{
+  "name": "@sloppy/providers",
+  "version": "1.0.0",
+  "description": "AI provider adapters for Sloppy code quality improvement tool",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./claude": {
+      "types": "./dist/claude/index.d.ts",
+      "import": "./dist/claude/index.js"
+    },
+    "./openai": {
+      "types": "./dist/openai/index.d.ts",
+      "import": "./dist/openai/index.js"
+    },
+    "./ollama": {
+      "types": "./dist/ollama/index.d.ts",
+      "import": "./dist/ollama/index.js"
+    },
+    "./cli/claude-code": {
+      "types": "./dist/cli/claude-code.d.ts",
+      "import": "./dist/cli/claude-code.js"
+    },
+    "./cli/codex": {
+      "types": "./dist/cli/codex.d.ts",
+      "import": "./dist/cli/codex.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "@sloppy/core": "workspace:*",
+    "openai": "^4.73.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [
+    "sloppy",
+    "code-quality",
+    "ai",
+    "providers",
+    "claude",
+    "openai",
+    "ollama"
+  ],
+  "license": "MIT"
+}
