@@ -106,7 +106,6 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
     await app.register(fastifyStatic, {
       root: staticDir,
       prefix: '/',
-      decorateReply: false,
     });
     app.log.info(`[server] Static files served from ${staticDir}`);
   } else {

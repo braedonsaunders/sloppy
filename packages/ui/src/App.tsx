@@ -1,20 +1,24 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Session from './pages/Session';
 import Settings from './pages/Settings';
 import NewSession from './pages/NewSession';
-import { useWebSocket } from './hooks/useWebSocket';
+import { wsClient } from './lib/websocket';
 
 export default function App() {
-  const { connect, disconnect } = useWebSocket();
+  const connectedRef = useRef(false);
 
   useEffect(() => {
-    connect();
-    return () => disconnect();
-  }, [connect, disconnect]);
+    // Only connect once, don't disconnect on unmount (singleton)
+    if (!connectedRef.current) {
+      connectedRef.current = true;
+      wsClient.connect();
+    }
+    // No cleanup - WebSocket stays connected for app lifetime
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden bg-dark-900">
