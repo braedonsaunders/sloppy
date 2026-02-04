@@ -44,7 +44,7 @@ export default function GitHubRepoSelector({
       setDebouncedSearch(searchQuery);
       setPage(1);
     }, 300);
-    return () => { clearTimeout(timer); };
+    return (): void => { clearTimeout(timer); };
   }, [searchQuery]);
 
   // Fetch GitHub connection status
@@ -100,12 +100,14 @@ export default function GitHubRepoSelector({
 
   // Set default branch when branches are loaded
   useEffect(() => {
-    if (selectedRepo && branchData?.branches && !selectedBranch) {
+    if (selectedRepo && branchData?.branches && branchData.branches.length > 0 && selectedBranch === '') {
       // Prefer the default branch, otherwise first branch
       const defaultBranch = branchData.branches.find(
         (b) => b.name === selectedRepo.defaultBranch
       );
-      setSelectedBranch(defaultBranch?.name ?? branchData.branches[0]?.name ?? '');
+      const firstBranch = branchData.branches[0];
+      const branchName = defaultBranch !== undefined ? defaultBranch.name : firstBranch.name;
+      setSelectedBranch(branchName);
     }
   }, [selectedRepo, branchData, selectedBranch]);
 
@@ -143,10 +145,10 @@ export default function GitHubRepoSelector({
 
     if (diffDays === 0) {return 'today';}
     if (diffDays === 1) {return 'yesterday';}
-    if (diffDays < 7) {return `${diffDays} days ago`;}
-    if (diffDays < 30) {return `${Math.floor(diffDays / 7)} weeks ago`;}
-    if (diffDays < 365) {return `${Math.floor(diffDays / 30)} months ago`;}
-    return `${Math.floor(diffDays / 365)} years ago`;
+    if (diffDays < 7) {return `${String(diffDays)} days ago`;}
+    if (diffDays < 30) {return `${String(Math.floor(diffDays / 7))} weeks ago`;}
+    if (diffDays < 365) {return `${String(Math.floor(diffDays / 30))} months ago`;}
+    return `${String(Math.floor(diffDays / 365))} years ago`;
   };
 
   if (!isConnected) {
@@ -182,7 +184,7 @@ export default function GitHubRepoSelector({
       isOpen={isOpen}
       onClose={onClose}
       title="Select GitHub Repository"
-      description={`Signed in as ${githubStatus?.user?.login ?? 'unknown'}`}
+      description={`Signed in as ${githubStatus.user?.login ?? 'unknown'}`}
       size="xl"
       footer={
         <>
@@ -298,13 +300,13 @@ export default function GitHubRepoSelector({
                           <GitFork className="h-3.5 w-3.5 text-dark-500 flex-shrink-0" />
                         )}
                       </div>
-                      {repo.description && (
+                      {repo.description !== undefined && repo.description !== '' && (
                         <p className="text-sm text-dark-400 truncate mt-0.5">
                           {repo.description}
                         </p>
                       )}
                       <div className="flex items-center gap-4 mt-1 text-xs text-dark-500">
-                        {repo.language && (
+                        {repo.language !== undefined && repo.language !== '' && (
                           <span className="flex items-center gap-1">
                             <span className="w-2 h-2 rounded-full bg-accent" />
                             {repo.language}
