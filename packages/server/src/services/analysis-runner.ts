@@ -5,10 +5,10 @@
 
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { simpleGit } from 'simple-git';
 import {
   SloppyDatabase,
   type Session,
@@ -113,71 +113,6 @@ function mapSeverity(severity: string): IssueSeverity {
 }
 
 /**
- * Check if a path is a URL (git URL)
- */
-function isGitUrl(path: string): boolean {
-  return path.startsWith('http://') ||
-         path.startsWith('https://') ||
-         path.startsWith('git@') ||
-         path.startsWith('git://');
-}
-
-/**
- * Clone a git repository to a temporary directory
- */
-async function cloneRepository(
-  url: string,
-  branch?: string,
-  logger?: Console
-): Promise<{ localPath: string; cleanup: () => Promise<void> }> {
-  const tempDir = await mkdtemp(join(tmpdir(), 'sloppy-repo-'));
-
-  logger?.info(`[analysis-runner] Cloning repository: ${url}`);
-  logger?.info(`[analysis-runner] Target directory: ${tempDir}`);
-
-  return new Promise((resolve, reject) => {
-    const args = ['clone', '--depth', '1'];
-
-    if (branch) {
-      args.push('--branch', branch);
-    }
-
-    args.push(url, tempDir);
-
-    const git = spawn('git', args);
-
-    let stderr = '';
-
-    git.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    git.on('close', (code) => {
-      if (code === 0) {
-        logger?.info(`[analysis-runner] Cloned to ${tempDir}`);
-        resolve({
-          localPath: tempDir,
-          cleanup: async () => {
-            try {
-              await rm(tempDir, { recursive: true, force: true });
-              logger?.info(`[analysis-runner] Cleaned up ${tempDir}`);
-            } catch (e) {
-              logger?.warn(`[analysis-runner] Failed to cleanup ${tempDir}: ${e}`);
-            }
-          },
-        });
-      } else {
-        reject(new Error(`Git clone failed (exit code ${code}): ${stderr}`));
-      }
-    });
-
-    git.on('error', (error) => {
-      reject(new Error(`Git clone failed: ${error.message}`));
-    });
-  });
-}
-
-/**
  * Runs code analysis for sessions
  */
 export class AnalysisRunner {
@@ -222,49 +157,7 @@ export class AnalysisRunner {
       },
     });
 
-    // Track cleanup function for cloned repos
-    let cleanupClone: (() => Promise<void>) | null = null;
-
     try {
-      // Determine the local path to analyze
-      let analysisPath = session.repo_path;
-
-      // Clone repository if it's a URL
-      if (isGitUrl(session.repo_path)) {
-        // Extract branch from session config if present
-        const sessionConfig = session.config as { branch?: string } | null;
-        const branch = sessionConfig?.branch;
-
-        wsHandler.broadcastToSession(session.id, {
-          type: 'activity:log',
-          data: {
-            sessionId: session.id,
-            type: 'info',
-            message: `Cloning repository${branch ? ` (branch: ${branch})` : ''}...`,
-            timestamp: new Date().toISOString(),
-          },
-        });
-
-        try {
-          const cloneResult = await cloneRepository(session.repo_path, branch, this.logger);
-          analysisPath = cloneResult.localPath;
-          cleanupClone = cloneResult.cleanup;
-
-          wsHandler.broadcastToSession(session.id, {
-            type: 'activity:log',
-            data: {
-              sessionId: session.id,
-              type: 'success',
-              message: `Repository cloned to ${analysisPath}`,
-              timestamp: new Date().toISOString(),
-            },
-          });
-        } catch (cloneError) {
-          const cloneErrorMsg = cloneError instanceof Error ? cloneError.message : String(cloneError);
-          throw new Error(`Failed to clone repository: ${cloneErrorMsg}`);
-        }
-      }
-
       // Get issue types from config
       const config = session.config as { issueTypes?: string[] } | null;
       const issueTypes = config?.issueTypes ?? ['lint', 'type'];
@@ -273,7 +166,6 @@ export class AnalysisRunner {
       const analyzerCategories = this.mapIssueTypesToCategories(issueTypes);
 
       this.logger.info(`[analysis-runner] Running analyzers: ${analyzerCategories.join(', ')}`);
-      this.logger.info(`[analysis-runner] Analysis path: ${analysisPath}`);
 
       // Broadcast analyzer info
       wsHandler.broadcastToSession(session.id, {
@@ -307,10 +199,26 @@ export class AnalysisRunner {
 
       // Get LLM config from database
       const llmConfig = this.getLLMConfig(session);
+      this.logger.info(`[analysis-runner] LLM config: provider=${llmConfig.provider ?? 'none'}, apiKey=${llmConfig.apiKey ? 'present' : 'MISSING'}, model=${llmConfig.model ?? 'default'}`);
 
-      // Run analysis
-      const result = await analyze(
-        analysisPath,
+      // Resolve repo path - clone if it's a URL
+      const { localPath, tempDir } = await this.resolveRepoPath(session.repo_path, session.id, wsHandler);
+
+      this.logger.info(`[analysis-runner] Analysis path: ${localPath}`);
+      wsHandler.broadcastToSession(session.id, {
+        type: 'activity:log',
+        data: {
+          sessionId: session.id,
+          type: 'info',
+          message: `Analyzing path: ${localPath}`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      try {
+        // Run analysis
+        const result = await analyze(
+          localPath,
         {
           include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
           exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**'],
@@ -360,6 +268,8 @@ export class AnalysisRunner {
       });
 
       this.logger.info(`[analysis-runner] Analysis complete for session ${session.id}: ${result.issues.length} issues`);
+      this.logger.info(`[analysis-runner] Analyzers run: ${result.analyzersRun.join(', ')}`);
+      this.logger.info(`[analysis-runner] Summary: ${JSON.stringify(result.summary)}`);
 
       // Broadcast session update with new issue counts
       const stats = this.db.getSessionStats(session.id);
@@ -385,6 +295,17 @@ export class AnalysisRunner {
             reason: 'No issues found',
           },
         });
+      }
+      } finally {
+        // Clean up temp directory if we cloned
+        if (tempDir) {
+          try {
+            await rm(tempDir, { recursive: true, force: true });
+            this.logger.info(`[analysis-runner] Cleaned up temp directory: ${tempDir}`);
+          } catch (cleanupError) {
+            this.logger.warn(`[analysis-runner] Failed to clean up temp directory: ${tempDir}`);
+          }
+        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -416,11 +337,6 @@ export class AnalysisRunner {
       });
     } finally {
       this.runningAnalyses.delete(session.id);
-
-      // Clean up cloned repository
-      if (cleanupClone) {
-        await cleanupClone();
-      }
     }
   }
 
@@ -441,6 +357,67 @@ export class AnalysisRunner {
    */
   isAnalysisRunning(sessionId: string): boolean {
     return this.runningAnalyses.has(sessionId);
+  }
+
+  /**
+   * Resolve repository path - clone if it's a URL, otherwise use directly
+   */
+  private async resolveRepoPath(
+    repoPath: string,
+    sessionId: string,
+    wsHandler: ReturnType<typeof getWebSocketHandler>
+  ): Promise<{ localPath: string; tempDir: string | null }> {
+    // Check if it's a URL (GitHub, GitLab, etc.)
+    const isUrl = repoPath.startsWith('http://') ||
+                  repoPath.startsWith('https://') ||
+                  repoPath.startsWith('git@');
+
+    if (!isUrl) {
+      // Local path - use directly
+      return { localPath: repoPath, tempDir: null };
+    }
+
+    // It's a URL - need to clone
+    this.logger.info(`[analysis-runner] Cloning repository: ${repoPath}`);
+    wsHandler.broadcastToSession(sessionId, {
+      type: 'activity:log',
+      data: {
+        sessionId,
+        type: 'info',
+        message: 'Cloning repository...',
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // Create temp directory
+    const tempDir = await mkdtemp(join(tmpdir(), 'sloppy-'));
+    const localPath = join(tempDir, 'repo');
+
+    try {
+      // Use simpleGit directly since the target directory doesn't exist yet
+      await simpleGit().clone(repoPath, localPath);
+      this.logger.info(`[analysis-runner] Cloned to: ${localPath}`);
+
+      wsHandler.broadcastToSession(sessionId, {
+        type: 'activity:log',
+        data: {
+          sessionId,
+          type: 'success',
+          message: 'Repository cloned successfully',
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      return { localPath, tempDir };
+    } catch (error) {
+      // Clean up temp dir on failure
+      try {
+        await rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+      throw new Error(`Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
