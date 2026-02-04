@@ -11,6 +11,9 @@ import {
   RefreshCw,
   Zap,
   Shield,
+  Github,
+  ExternalLink,
+  Unlink,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
@@ -28,7 +31,7 @@ interface Settings {
 }
 
 export default function Settings(): JSX.Element {
-  const [activeTab, setActiveTab] = useState<'providers' | 'defaults'>('providers');
+  const [activeTab, setActiveTab] = useState<'providers' | 'github' | 'defaults'>('providers');
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -36,7 +39,7 @@ export default function Settings(): JSX.Element {
       <div>
         <h1 className="text-2xl font-semibold text-dark-100">Settings</h1>
         <p className="mt-1 text-dark-400">
-          Configure AI providers and default session settings
+          Configure AI providers, GitHub integration, and default session settings
         </p>
       </div>
 
@@ -55,6 +58,17 @@ export default function Settings(): JSX.Element {
             Providers
           </button>
           <button
+            onClick={() => { setActiveTab('github'); }}
+            className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === 'github'
+                ? 'border-accent text-accent'
+                : 'border-transparent text-dark-400 hover:text-dark-200'
+            }`}
+          >
+            <Github className="h-4 w-4 inline-block mr-2" />
+            GitHub
+          </button>
+          <button
             onClick={() => { setActiveTab('defaults'); }}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === 'defaults'
@@ -70,6 +84,7 @@ export default function Settings(): JSX.Element {
 
       {/* Tab Content */}
       {activeTab === 'providers' && <ProvidersTab />}
+      {activeTab === 'github' && <GitHubTab />}
       {activeTab === 'defaults' && <DefaultsTab />}
     </div>
   );
@@ -605,6 +620,287 @@ function DefaultsTab(): JSX.Element {
         >
           Save Defaults
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function GitHubTab(): JSX.Element {
+  const queryClient = useQueryClient();
+  const [token, setToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+
+  // Fetch GitHub connection status
+  const { data: githubStatus, isLoading } = useQuery({
+    queryKey: ['github', 'status'],
+    queryFn: () => api.github.status(),
+  });
+
+  // Connect mutation
+  const connectMutation = useMutation({
+    mutationFn: (token: string) => api.github.connect(token),
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['github'] });
+      setToken('');
+    },
+  });
+
+  // Disconnect mutation
+  const disconnectMutation = useMutation({
+    mutationFn: () => api.github.disconnect(),
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['github'] });
+    },
+  });
+
+  // Test connection mutation
+  const testMutation = useMutation({
+    mutationFn: () => api.github.test(),
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['github'] });
+    },
+  });
+
+  const handleConnect = (): void => {
+    if (token.trim()) {
+      connectMutation.mutate(token.trim());
+    }
+  };
+
+  const handleDisconnect = (): void => {
+    disconnectMutation.mutate();
+  };
+
+  const handleTest = (): void => {
+    testMutation.mutate();
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-dark-500" />
+      </div>
+    );
+  }
+
+  const isConnected = githubStatus?.connected === true;
+  const user = githubStatus?.user;
+
+  return (
+    <div className="space-y-6">
+      {/* Connection Status Card */}
+      <div className="rounded-xl border border-dark-700 bg-dark-800 overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 bg-dark-850">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-accent">
+              <Github className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-medium text-dark-100">GitHub Integration</h3>
+              <p className="text-sm text-dark-500">
+                Connect to access your repositories
+              </p>
+            </div>
+          </div>
+          <Badge
+            variant={isConnected ? 'success' : 'neutral'}
+            dot
+          >
+            {isConnected ? 'Connected' : 'Not connected'}
+          </Badge>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {isConnected && user ? (
+            <>
+              {/* Connected state */}
+              <div className="flex items-center gap-4 p-4 rounded-lg bg-dark-700/50">
+                {user.avatarUrl && (
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.login}
+                    className="w-12 h-12 rounded-full"
+                  />
+                )}
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-dark-100">{user.name ?? user.login}</span>
+                    {user.name && (
+                      <span className="text-dark-400">@{user.login}</span>
+                    )}
+                  </div>
+                  {githubStatus.scopes && githubStatus.scopes.length > 0 && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-dark-500">Scopes:</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {githubStatus.scopes.map((scope) => (
+                          <Badge key={scope} variant="neutral" size="sm">
+                            {scope}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {githubStatus.configuredAt && (
+                    <p className="text-xs text-dark-500 mt-1">
+                      Connected on {new Date(githubStatus.configuredAt).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+                {user.htmlUrl && (
+                  <a
+                    href={user.htmlUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-dark-400 hover:text-dark-200 transition-colors"
+                  >
+                    <ExternalLink className="h-5 w-5" />
+                  </a>
+                )}
+              </div>
+
+              {/* Test result */}
+              {testMutation.data && (
+                <div
+                  className={`flex items-center gap-2 rounded-lg p-3 ${
+                    testMutation.data.success
+                      ? 'bg-success/10 text-success'
+                      : 'bg-error/10 text-error'
+                  }`}
+                >
+                  {testMutation.data.success ? (
+                    <CheckCircle className="h-4 w-4" />
+                  ) : (
+                    <AlertCircle className="h-4 w-4" />
+                  )}
+                  <span className="text-sm">
+                    {testMutation.data.success
+                      ? `Connection verified. Rate limit: ${testMutation.data.rateLimit?.remaining ?? '?'}/${testMutation.data.rateLimit?.limit ?? '?'}`
+                      : 'Connection test failed. Token may have been revoked.'}
+                  </span>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex items-center gap-3 pt-2">
+                <Button
+                  variant="secondary"
+                  onClick={handleTest}
+                  isLoading={testMutation.isPending}
+                  leftIcon={<RefreshCw className="h-4 w-4" />}
+                >
+                  Test Connection
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={handleDisconnect}
+                  isLoading={disconnectMutation.isPending}
+                  leftIcon={<Unlink className="h-4 w-4" />}
+                >
+                  Disconnect
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Not connected state */}
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-dark-300 mb-4">
+                    Connect your GitHub account using a Personal Access Token (PAT) to browse
+                    and select your repositories, including private ones.
+                  </p>
+
+                  <div className="rounded-lg bg-dark-700/50 p-4 mb-4">
+                    <h4 className="text-sm font-medium text-dark-200 mb-2">How to create a token:</h4>
+                    <ol className="text-sm text-dark-400 space-y-1 list-decimal list-inside">
+                      <li>Go to GitHub Settings &gt; Developer settings &gt; Personal access tokens</li>
+                      <li>Click "Generate new token (classic)"</li>
+                      <li>Select scopes: <code className="bg-dark-600 px-1 py-0.5 rounded text-dark-300">repo</code> (for private repos) or <code className="bg-dark-600 px-1 py-0.5 rounded text-dark-300">public_repo</code> (for public only)</li>
+                      <li>Copy the generated token and paste it below</li>
+                    </ol>
+                    <a
+                      href="https://github.com/settings/tokens/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-accent hover:text-accent/80 text-sm mt-3"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Create a new token on GitHub
+                    </a>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <Input
+                    label="Personal Access Token"
+                    type={showToken ? 'text' : 'password'}
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                    value={token}
+                    onChange={(e) => { setToken(e.target.value); }}
+                    rightIcon={
+                      <button
+                        type="button"
+                        onClick={() => { setShowToken(!showToken); }}
+                        className="text-dark-400 hover:text-dark-200"
+                      >
+                        {showToken ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    }
+                  />
+                  <p className="mt-1.5 text-xs text-dark-500">
+                    Your token is stored securely and only used to access your GitHub repositories.
+                  </p>
+                </div>
+
+                {/* Connect error */}
+                {connectMutation.isError && (
+                  <div className="flex items-center gap-2 rounded-lg p-3 bg-error/10 text-error">
+                    <AlertCircle className="h-4 w-4" />
+                    <span className="text-sm">
+                      {connectMutation.error instanceof Error
+                        ? connectMutation.error.message
+                        : 'Failed to connect. Please check your token.'}
+                    </span>
+                  </div>
+                )}
+
+                <Button
+                  variant="primary"
+                  onClick={handleConnect}
+                  isLoading={connectMutation.isPending}
+                  disabled={!token.trim()}
+                  leftIcon={<Github className="h-4 w-4" />}
+                >
+                  Connect GitHub
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Info card */}
+      <div className="rounded-lg border border-dark-700 bg-dark-800/50 p-4">
+        <h4 className="text-sm font-medium text-dark-200 mb-2">What can you do with GitHub integration?</h4>
+        <ul className="text-sm text-dark-400 space-y-1">
+          <li className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-success" />
+            Browse and select from all your repositories (including private)
+          </li>
+          <li className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-success" />
+            Automatically clone repositories for code quality sessions
+          </li>
+          <li className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-success" />
+            Select specific branches to work on
+          </li>
+        </ul>
       </div>
     </div>
   );

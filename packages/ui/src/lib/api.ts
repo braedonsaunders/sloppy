@@ -198,6 +198,70 @@ export interface Metrics {
   lintErrors: number;
 }
 
+// GitHub Types
+export interface GitHubUser {
+  id: number;
+  login: string;
+  name?: string;
+  avatarUrl?: string;
+  htmlUrl?: string;
+}
+
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: {
+    id: number;
+    login: string;
+    avatarUrl?: string;
+  };
+  htmlUrl: string;
+  cloneUrl: string;
+  sshUrl: string;
+  description?: string;
+  private: boolean;
+  fork: boolean;
+  defaultBranch: string;
+  language?: string;
+  stargazersCount: number;
+  forksCount: number;
+  updatedAt: string;
+  pushedAt?: string;
+}
+
+export interface GitHubBranch {
+  name: string;
+  protected: boolean;
+  commitSha: string;
+}
+
+export interface GitHubStatus {
+  connected: boolean;
+  user: GitHubUser | null;
+  scopes?: string[];
+  configuredAt: string | null;
+}
+
+export interface GitHubConnectResult {
+  connected: boolean;
+  user?: GitHubUser;
+  scopes?: string[];
+  rateLimit?: {
+    limit: number;
+    remaining: number;
+    reset: string;
+  };
+}
+
+export interface GitHubRepoListResponse {
+  repositories: GitHubRepository[];
+  totalCount: number;
+  page: number;
+  perPage: number;
+  hasMore: boolean;
+}
+
 // Server response wrappers
 interface SessionsResponse {
   sessions: Session[];
@@ -416,6 +480,76 @@ export const api = {
         }[];
       }>(`/files/browse${params}`);
     },
+  },
+
+  // GitHub
+  github: {
+    /** Get GitHub connection status */
+    status: (): Promise<GitHubStatus> =>
+      request<GitHubStatus>('/github/status'),
+
+    /** Connect GitHub with a Personal Access Token */
+    connect: (token: string): Promise<GitHubConnectResult> =>
+      request<GitHubConnectResult>('/github/connect', {
+        method: 'POST',
+        body: JSON.stringify({ token }),
+      }),
+
+    /** Disconnect GitHub */
+    disconnect: (): Promise<{ disconnected: boolean }> =>
+      request<{ disconnected: boolean }>('/github/disconnect', {
+        method: 'POST',
+      }),
+
+    /** Test current GitHub connection */
+    test: (): Promise<{
+      success: boolean;
+      user?: GitHubUser;
+      scopes?: string[];
+      rateLimit?: { limit: number; remaining: number; reset: string };
+    }> =>
+      request<{
+        success: boolean;
+        user?: GitHubUser;
+        scopes?: string[];
+        rateLimit?: { limit: number; remaining: number; reset: string };
+      }>('/github/test', { method: 'POST' }),
+
+    /** List user's repositories */
+    listRepositories: (options?: {
+      page?: number;
+      perPage?: number;
+      sort?: 'created' | 'updated' | 'pushed' | 'full_name';
+      direction?: 'asc' | 'desc';
+      visibility?: 'all' | 'public' | 'private';
+      search?: string;
+    }): Promise<GitHubRepoListResponse> => {
+      const params = new URLSearchParams();
+      if (options?.page !== undefined) { params.set('page', String(options.page)); }
+      if (options?.perPage !== undefined) { params.set('perPage', String(options.perPage)); }
+      if (options?.sort !== undefined) { params.set('sort', options.sort); }
+      if (options?.direction !== undefined) { params.set('direction', options.direction); }
+      if (options?.visibility !== undefined) { params.set('visibility', options.visibility); }
+      if (options?.search !== undefined && options.search !== '') { params.set('search', options.search); }
+      const query = params.toString();
+      return request<GitHubRepoListResponse>(`/github/repositories${query !== '' ? `?${query}` : ''}`);
+    },
+
+    /** Search repositories */
+    searchRepositories: (query: string, options?: { page?: number; perPage?: number }): Promise<GitHubRepoListResponse> => {
+      const params = new URLSearchParams({ q: query });
+      if (options?.page !== undefined) { params.set('page', String(options.page)); }
+      if (options?.perPage !== undefined) { params.set('perPage', String(options.perPage)); }
+      return request<GitHubRepoListResponse>(`/github/repositories/search?${params.toString()}`);
+    },
+
+    /** Get repository details */
+    getRepository: (owner: string, repo: string): Promise<{ repository: GitHubRepository }> =>
+      request<{ repository: GitHubRepository }>(`/github/repositories/${owner}/${repo}`),
+
+    /** List repository branches */
+    listBranches: (owner: string, repo: string): Promise<{ branches: GitHubBranch[] }> =>
+      request<{ branches: GitHubBranch[] }>(`/github/repositories/${owner}/${repo}/branches`),
   },
 };
 

@@ -185,3 +185,17 @@ export {
   getAffectedLineRange,
   diffsEqual,
 } from './utils/diff.js';
+
+// =============================================================================
+// GitHub Types
+// =============================================================================
+export {
+  type GitHubUser,
+  type GitHubRepoOwner,
+  type GitHubRepository,
+  type GitHubBranch,
+  type GitHubAuthConfig,
+  type GitHubRepoListResponse,
+  type ListRepositoriesOptions,
+  type GitHubAuthTestResult,
+} from './types/github.js';

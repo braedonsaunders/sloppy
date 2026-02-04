@@ -12,14 +12,18 @@ import {
   Terminal,
   CheckSquare,
   FolderSearch,
+  Github,
+  Lock,
+  ExternalLink,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import Select from '@/components/Select';
 import Badge from '@/components/Badge';
 import FileBrowser from '@/components/FileBrowser';
+import GitHubRepoSelector from '@/components/GitHubRepoSelector';
 import { useSession } from '@/hooks/useSession';
-import { api, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
+import { api, type CreateSessionRequest, type SessionConfig, type GitHubRepository } from '@/lib/api';
 
 // Focus areas for LLM-orchestrated analysis
 // The LLM always orchestrates - these tell it what to prioritize
@@ -48,10 +52,15 @@ export default function NewSession(): JSX.Element {
     queryFn: () => api.settings.get(),
   });
 
+  const { data: githubStatus } = useQuery({
+    queryKey: ['github', 'status'],
+    queryFn: () => api.github.status(),
+  });
+
   // Form state
   const [repoPath, setRepoPath] = useState('');
-  const [branch] = useState('main');
-  const [repoType, setRepoType] = useState<'local' | 'git'>('local');
+  const [branch, setBranch] = useState('main');
+  const [repoType, setRepoType] = useState<'local' | 'git' | 'github'>('local');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
   const [maxTime, setMaxTime] = useState<string>('');
@@ -63,6 +72,8 @@ export default function NewSession(): JSX.Element {
   const [buildCommand, setBuildCommand] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [showGitHubSelector, setShowGitHubSelector] = useState(false);
+  const [selectedGitHubRepo, setSelectedGitHubRepo] = useState<GitHubRepository | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Get configured providers
@@ -86,6 +97,15 @@ export default function NewSession(): JSX.Element {
       prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
     );
   };
+
+  const handleGitHubRepoSelect = (repo: GitHubRepository, selectedBranch: string): void => {
+    setSelectedGitHubRepo(repo);
+    setRepoPath(repo.cloneUrl);
+    setBranch(selectedBranch);
+    setShowGitHubSelector(false);
+  };
+
+  const isGitHubConnected = githubStatus?.connected === true;
 
   const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
@@ -150,7 +170,7 @@ export default function NewSession(): JSX.Element {
           <div className="flex gap-2 mb-4">
             <button
               type="button"
-              onClick={() => { setRepoType('local'); }}
+              onClick={() => { setRepoType('local'); setSelectedGitHubRepo(null); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors ${
                 repoType === 'local'
                   ? 'border-accent bg-accent/10 text-accent'
@@ -162,7 +182,7 @@ export default function NewSession(): JSX.Element {
             </button>
             <button
               type="button"
-              onClick={() => { setRepoType('git'); }}
+              onClick={() => { setRepoType('git'); setSelectedGitHubRepo(null); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors ${
                 repoType === 'git'
                   ? 'border-accent bg-accent/10 text-accent'
@@ -172,9 +192,24 @@ export default function NewSession(): JSX.Element {
               <GitBranch className="h-4 w-4" />
               Git URL
             </button>
+            <button
+              type="button"
+              onClick={() => { setRepoType('github'); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors ${
+                repoType === 'github'
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-dark-600 text-dark-400 hover:border-dark-500'
+              }`}
+            >
+              <Github className="h-4 w-4" />
+              GitHub
+              {isGitHubConnected && (
+                <span className="w-2 h-2 rounded-full bg-success" />
+              )}
+            </button>
           </div>
 
-          {repoType === 'local' ? (
+          {repoType === 'local' && (
             <div className="flex gap-2">
               <div className="flex-1">
                 <Input
@@ -193,13 +228,91 @@ export default function NewSession(): JSX.Element {
                 Browse
               </Button>
             </div>
-          ) : (
+          )}
+
+          {repoType === 'git' && (
             <Input
               placeholder="https://github.com/user/repo.git"
               value={repoPath}
               onChange={(e) => { setRepoPath(e.target.value); }}
               leftIcon={<GitBranch className="h-4 w-4" />}
             />
+          )}
+
+          {repoType === 'github' && (
+            <div className="space-y-4">
+              {!isGitHubConnected ? (
+                <div className="flex items-center gap-3 rounded-lg bg-warning/10 p-4 text-warning">
+                  <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">GitHub not connected</p>
+                    <p className="text-sm text-warning/80 mt-1">
+                      Connect your GitHub account in{' '}
+                      <button
+                        type="button"
+                        onClick={() => { navigate('/settings'); }}
+                        className="underline hover:no-underline"
+                      >
+                        Settings
+                      </button>{' '}
+                      to browse your repositories.
+                    </p>
+                  </div>
+                </div>
+              ) : selectedGitHubRepo ? (
+                <div className="rounded-lg border border-dark-600 bg-dark-700/50 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Github className="h-5 w-5 text-accent" />
+                      <span className="font-medium text-dark-100">{selectedGitHubRepo.fullName}</span>
+                      {selectedGitHubRepo.private && (
+                        <Lock className="h-3.5 w-3.5 text-dark-400" />
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={selectedGitHubRepo.htmlUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-dark-400 hover:text-dark-200 transition-colors"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setShowGitHubSelector(true); }}
+                      >
+                        Change
+                      </Button>
+                    </div>
+                  </div>
+                  {selectedGitHubRepo.description && (
+                    <p className="text-sm text-dark-400 mb-2">{selectedGitHubRepo.description}</p>
+                  )}
+                  <div className="flex items-center gap-4 text-xs text-dark-500">
+                    <span>Branch: <code className="bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">{branch}</code></span>
+                    {selectedGitHubRepo.language && (
+                      <span className="flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-accent" />
+                        {selectedGitHubRepo.language}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => { setShowGitHubSelector(true); }}
+                  leftIcon={<Github className="h-4 w-4" />}
+                  className="w-full justify-center py-6"
+                >
+                  Select Repository from GitHub
+                </Button>
+              )}
+            </div>
           )}
         </section>
 
@@ -441,6 +554,13 @@ export default function NewSession(): JSX.Element {
         onClose={() => { setShowFileBrowser(false); }}
         onSelect={(path) => { setRepoPath(path); }}
         initialPath={repoPath || undefined}
+      />
+
+      {/* GitHub Repo Selector Modal */}
+      <GitHubRepoSelector
+        isOpen={showGitHubSelector}
+        onClose={() => { setShowGitHubSelector(false); }}
+        onSelect={handleGitHubRepoSelect}
       />
     </div>
   );
