@@ -15,6 +15,7 @@ import { CoverageAnalyzer } from './coverage/index.js';
 import { LintAnalyzer } from './lint/index.js';
 import { SecurityAnalyzer } from './security/index.js';
 import { DeadCodeAnalyzer } from './dead-code/index.js';
+import { LLMAnalyzer } from './llm/index.js';
 
 /**
  * Configuration for the orchestrator
@@ -60,6 +61,7 @@ export class AnalysisOrchestrator {
     this.analyzers.set('lint', new LintAnalyzer());
     this.analyzers.set('security', new SecurityAnalyzer());
     this.analyzers.set('dead-code', new DeadCodeAnalyzer());
+    this.analyzers.set('llm', new LLMAnalyzer());
   }
 
   /**
@@ -367,6 +369,7 @@ export class AnalysisOrchestrator {
       lint: 0,
       security: 0,
       'dead-code': 0,
+      llm: 0,
     };
 
     const bySeverity: Record<Severity, number> = {

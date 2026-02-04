@@ -72,6 +72,7 @@ function mapIssueType(category: string): IssueType {
     'dead-code': 'style',
     coverage: 'test',
     stub: 'lint',
+    llm: 'lint', // LLM-detected issues map to lint by default (they include their own category)
   };
   return mapping[category] ?? 'lint';
 }
@@ -312,6 +313,9 @@ export class AnalysisRunner {
       security: ['security'],
       performance: ['bug'],
       style: ['duplicate', 'dead-code'],
+      llm: ['llm'], // LLM-powered deep analysis
+      ai: ['llm'], // Alias for llm
+      deep: ['llm'], // Alias for deep analysis
     };
 
     const categories: Set<string> = new Set();

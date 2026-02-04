@@ -26,6 +26,18 @@ export { CoverageAnalyzer, type CoverageAnalyzerConfig } from './coverage/index.
 export { LintAnalyzer, type LintAnalyzerConfig } from './lint/index.js';
 export { SecurityAnalyzer, type SecurityAnalyzerConfig } from './security/index.js';
 export { DeadCodeAnalyzer, type DeadCodeAnalyzerConfig } from './dead-code/index.js';
+export {
+  LLMAnalyzer,
+  type LLMAnalyzerConfig,
+  FileBrowser,
+  ToolExecutor,
+  TOOL_DEFINITIONS,
+  ReAnalysisLoop,
+  createReAnalysisRunner,
+  type ReAnalysisConfig,
+  type ReAnalysisResult,
+  type AnalysisLoopResult,
+} from './llm/index.js';
 
 // Orchestrator
 export {

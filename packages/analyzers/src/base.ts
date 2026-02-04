@@ -18,7 +18,8 @@ export type IssueCategory =
   | 'coverage'
   | 'lint'
   | 'security'
-  | 'dead-code';
+  | 'dead-code'
+  | 'llm';
 
 /**
  * Represents a location in source code
