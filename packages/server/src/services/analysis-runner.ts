@@ -3,7 +3,6 @@
  * Uses @sloppy/analyzers to detect issues and stores them in the database
  */
 
-import { analyze, type AnalysisResult, type Issue as AnalyzerIssue } from '@sloppy/analyzers';
 import {
   SloppyDatabase,
   type Session,
@@ -12,6 +11,32 @@ import {
   type IssueType,
 } from '../db/database.js';
 import { getWebSocketHandler } from '../websocket/handler.js';
+
+// Types from @sloppy/analyzers (imported dynamically to avoid module resolution issues in dev)
+interface AnalysisResult {
+  issues: Array<{
+    id: string;
+    category: string;
+    severity: string;
+    message: string;
+    location: {
+      file: string;
+      line: number;
+      column: number;
+      endLine?: number;
+      endColumn?: number;
+    };
+    context?: string;
+    suggestion?: string;
+  }>;
+  summary: {
+    total: number;
+    byCategory: Record<string, number>;
+    bySeverity: Record<string, number>;
+  };
+  duration: number;
+  analyzersRun: string[];
+}
 
 export interface AnalysisRunnerOptions {
   db: SloppyDatabase;
@@ -119,6 +144,9 @@ export class AnalysisRunner {
           timestamp: new Date().toISOString(),
         },
       });
+
+      // Dynamically import @sloppy/analyzers to avoid module resolution issues at startup
+      const { analyze } = await import('@sloppy/analyzers');
 
       // Run analysis
       const result = await analyze(
