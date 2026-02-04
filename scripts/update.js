@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * Update script that handles local changes gracefully
- * Stashes changes, pulls, restores stash, then installs and builds
+ * Stashes changes, pulls, restores stash, then installs, builds, and starts
  *
  * Usage:
- *   pnpm update         - Normal update (stash, pull, install, build)
+ *   pnpm update         - Normal update (stash, pull, install, build, start)
  *   pnpm update:clean   - Clean update (also removes dist folders)
  */
 
@@ -81,6 +81,11 @@ async function main() {
       run('git stash pop', { ignoreError: true });
     }
   }
+
+  // Kill existing processes on dev ports and start the server
+  console.log('\nStarting server...');
+  run('pnpm run kill-ports');
+  run('pnpm start');
 }
 
 main().catch((error) => {
