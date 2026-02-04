@@ -13,7 +13,9 @@
     "dev:server": "pnpm --filter @sloppy/server dev",
     "dev:ui": "pnpm --filter @sloppy/ui dev",
     "start": "pnpm --filter @sloppy/server start",
-    "kill-ports": "node scripts/kill-ports.js"
+    "kill-ports": "node scripts/kill-ports.js",
+    "update": "git pull && pnpm install && pnpm build",
+    "update:clean": "git pull && node scripts/clean-dist.js && pnpm install && pnpm build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
