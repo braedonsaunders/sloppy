@@ -303,38 +303,31 @@ export class AnalysisRunner {
   }
 
   /**
-   * Map UI issue types to analyzer categories
+   * Map UI focus areas to analyzer categories
+   * LLM is ALWAYS included - it orchestrates the entire analysis
+   * Focus areas tell the LLM what to prioritize
    */
-  private mapIssueTypesToCategories(issueTypes: string[]): string[] {
-    const mapping: Record<string, string[]> = {
-      // Static analysis
+  private mapIssueTypesToCategories(focusAreas: string[]): string[] {
+    // LLM is always the primary orchestrator
+    const categories: Set<string> = new Set(['llm']);
+
+    // Also run fast static analyzers in parallel for quick wins
+    const staticAnalyzers: Record<string, string[]> = {
       lint: ['lint'],
       type: ['type'],
       test: ['coverage'],
       security: ['security'],
-      // Code quality
-      performance: ['bug'],
-      style: ['duplicate', 'dead-code'],
-      stub: ['stub'], // Stub/TODO detection
-      // AI-powered analysis
-      llm: ['llm'], // LLM-powered deep analysis
-      ai: ['llm'], // Alias for llm
-      deep: ['llm'], // Alias for deep analysis
+      stubs: ['stub'],
+      maintainability: ['duplicate', 'dead-code'],
     };
 
-    const categories: Set<string> = new Set();
-    for (const type of issueTypes) {
-      const mapped = mapping[type];
+    for (const area of focusAreas) {
+      const mapped = staticAnalyzers[area];
       if (mapped) {
         for (const cat of mapped) {
           categories.add(cat);
         }
       }
-    }
-
-    // Always include lint as a baseline
-    if (categories.size === 0) {
-      categories.add('lint');
     }
 
     return Array.from(categories);
