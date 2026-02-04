@@ -25,6 +25,27 @@ export enum ProviderType {
 
   /** OpenAI Codex CLI */
   CODEX_CLI = 'CODEX_CLI',
+
+  /** Google Gemini API */
+  GEMINI = 'GEMINI',
+
+  /** OpenRouter (multi-provider aggregator) */
+  OPENROUTER = 'OPENROUTER',
+
+  /** DeepSeek API */
+  DEEPSEEK = 'DEEPSEEK',
+
+  /** Mistral AI API */
+  MISTRAL = 'MISTRAL',
+
+  /** Groq (fast inference) */
+  GROQ = 'GROQ',
+
+  /** Together AI */
+  TOGETHER = 'TOGETHER',
+
+  /** Cohere API */
+  COHERE = 'COHERE',
 }
 
 /**
@@ -455,6 +476,45 @@ export const RECOMMENDED_MODELS: Record<ProviderType, string[]> = {
   ],
   [ProviderType.CLAUDE_CODE_CLI]: ['default'],
   [ProviderType.CODEX_CLI]: ['default'],
+  [ProviderType.GEMINI]: [
+    'gemini-2.0-flash',
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+    'gemini-1.0-pro',
+  ],
+  [ProviderType.OPENROUTER]: [
+    'anthropic/claude-3.5-sonnet',
+    'openai/gpt-4o',
+    'google/gemini-pro-1.5',
+    'meta-llama/llama-3.1-70b-instruct',
+  ],
+  [ProviderType.DEEPSEEK]: [
+    'deepseek-chat',
+    'deepseek-coder',
+    'deepseek-reasoner',
+  ],
+  [ProviderType.MISTRAL]: [
+    'mistral-large-latest',
+    'mistral-medium-latest',
+    'mistral-small-latest',
+    'codestral-latest',
+  ],
+  [ProviderType.GROQ]: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
+  ],
+  [ProviderType.TOGETHER]: [
+    'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+    'mistralai/Mixtral-8x22B-Instruct-v0.1',
+    'Qwen/Qwen2.5-72B-Instruct-Turbo',
+  ],
+  [ProviderType.COHERE]: [
+    'command-r-plus',
+    'command-r',
+    'command-light',
+  ],
 };
 
 /**
@@ -476,10 +536,20 @@ export function validateProviderConfig(
     errors.push('Model is required');
   }
 
-  if (
-    config.type === ProviderType.CLAUDE ||
-    config.type === ProviderType.OPENAI
-  ) {
+  // Providers that require API keys
+  const apiKeyRequiredProviders = [
+    ProviderType.CLAUDE,
+    ProviderType.OPENAI,
+    ProviderType.GEMINI,
+    ProviderType.OPENROUTER,
+    ProviderType.DEEPSEEK,
+    ProviderType.MISTRAL,
+    ProviderType.GROQ,
+    ProviderType.TOGETHER,
+    ProviderType.COHERE,
+  ];
+
+  if (apiKeyRequiredProviders.includes(config.type as ProviderType)) {
     if (!config.apiKey) {
       errors.push(`API key is required for ${config.type} provider`);
     }

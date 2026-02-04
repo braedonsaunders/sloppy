@@ -16,7 +16,14 @@ export type ProviderType =
   | 'openai'
   | 'ollama'
   | 'claude-cli'
-  | 'codex-cli';
+  | 'codex-cli'
+  | 'gemini'
+  | 'openrouter'
+  | 'deepseek'
+  | 'mistral'
+  | 'groq'
+  | 'together'
+  | 'cohere';
 
 // ============================================================================
 // Configuration Schema
@@ -87,12 +94,94 @@ const CodexCLIConfigSchema = BaseConfigSchema.extend({
   quietMode: z.boolean().optional(),
 });
 
+// OpenAI-compatible providers (use OpenAI SDK with custom base URLs)
+const GeminiConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('gemini'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.enum([
+    'gemini-2.0-flash',
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+    'gemini-1.0-pro',
+  ]).optional(),
+});
+
+const OpenRouterConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('openrouter'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.string().optional(), // OpenRouter supports many models with dynamic naming
+  siteUrl: z.string().optional(), // For OpenRouter rankings
+  siteName: z.string().optional(),
+});
+
+const DeepSeekConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('deepseek'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.enum([
+    'deepseek-chat',
+    'deepseek-coder',
+    'deepseek-reasoner',
+  ]).optional(),
+});
+
+const MistralConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('mistral'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.enum([
+    'mistral-large-latest',
+    'mistral-medium-latest',
+    'mistral-small-latest',
+    'codestral-latest',
+  ]).optional(),
+});
+
+const GroqConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('groq'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.enum([
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it',
+  ]).optional(),
+});
+
+const TogetherConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('together'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.string().optional(), // Together supports many models
+});
+
+const CohereConfigSchema = BaseConfigSchema.extend({
+  type: z.literal('cohere'),
+  apiKey: z.string().optional(),
+  baseUrl: z.string().optional(),
+  model: z.enum([
+    'command-r-plus',
+    'command-r',
+    'command-light',
+  ]).optional(),
+});
+
 export const ProviderConfigSchema = z.discriminatedUnion('type', [
   ClaudeConfigSchema,
   OpenAIConfigSchema,
   OllamaConfigSchema,
   ClaudeCLIConfigSchema,
   CodexCLIConfigSchema,
+  GeminiConfigSchema,
+  OpenRouterConfigSchema,
+  DeepSeekConfigSchema,
+  MistralConfigSchema,
+  GroqConfigSchema,
+  TogetherConfigSchema,
+  CohereConfigSchema,
 ]);
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -230,6 +319,126 @@ export function createProvider(config: ProviderConfig): BaseProvider {
       if (validated.approvalMode !== undefined) codexConfig.approvalMode = validated.approvalMode;
       if (validated.quietMode !== undefined) codexConfig.quietMode = validated.quietMode;
       return new CodexCLIProvider(codexConfig);
+    }
+
+    // OpenAI-compatible providers - use OpenAI provider with custom base URL
+    case 'gemini': {
+      // Google Gemini via OpenAI-compatible endpoint
+      const geminiConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://generativelanguage.googleapis.com/v1beta/openai',
+      };
+      if (validated.apiKey !== undefined) geminiConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) geminiConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) geminiConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) geminiConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) geminiConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) geminiConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) geminiConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) geminiConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) geminiConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(geminiConfig);
+    }
+
+    case 'openrouter': {
+      // OpenRouter is fully OpenAI-compatible
+      const openrouterConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://openrouter.ai/api/v1',
+      };
+      if (validated.apiKey !== undefined) openrouterConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) openrouterConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) openrouterConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) openrouterConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) openrouterConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) openrouterConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) openrouterConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) openrouterConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) openrouterConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(openrouterConfig);
+    }
+
+    case 'deepseek': {
+      // DeepSeek is OpenAI-compatible
+      const deepseekConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://api.deepseek.com/v1',
+      };
+      if (validated.apiKey !== undefined) deepseekConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) deepseekConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) deepseekConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) deepseekConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) deepseekConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) deepseekConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) deepseekConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) deepseekConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) deepseekConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(deepseekConfig);
+    }
+
+    case 'mistral': {
+      // Mistral is OpenAI-compatible
+      const mistralConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://api.mistral.ai/v1',
+      };
+      if (validated.apiKey !== undefined) mistralConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) mistralConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) mistralConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) mistralConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) mistralConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) mistralConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) mistralConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) mistralConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) mistralConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(mistralConfig);
+    }
+
+    case 'groq': {
+      // Groq is OpenAI-compatible
+      const groqConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://api.groq.com/openai/v1',
+      };
+      if (validated.apiKey !== undefined) groqConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) groqConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) groqConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) groqConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) groqConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) groqConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) groqConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) groqConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) groqConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(groqConfig);
+    }
+
+    case 'together': {
+      // Together AI is OpenAI-compatible
+      const togetherConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://api.together.xyz/v1',
+      };
+      if (validated.apiKey !== undefined) togetherConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) togetherConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) togetherConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) togetherConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) togetherConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) togetherConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) togetherConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) togetherConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) togetherConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(togetherConfig);
+    }
+
+    case 'cohere': {
+      // Cohere is OpenAI-compatible
+      const cohereConfig: OpenAIProviderConfig = {
+        baseUrl: validated.baseUrl || 'https://api.cohere.ai/v1',
+      };
+      if (validated.apiKey !== undefined) cohereConfig.apiKey = validated.apiKey;
+      if (validated.model !== undefined) cohereConfig.model = validated.model as OpenAIModel;
+      if (validated.maxTokens !== undefined) cohereConfig.maxTokens = validated.maxTokens;
+      if (validated.temperature !== undefined) cohereConfig.temperature = validated.temperature;
+      if (validated.timeout !== undefined) cohereConfig.timeout = validated.timeout;
+      if (validated.maxRetries !== undefined) cohereConfig.maxRetries = validated.maxRetries;
+      if (validated.rateLimitRpm !== undefined) cohereConfig.rateLimitRpm = validated.rateLimitRpm;
+      if (validated.rateLimitTpm !== undefined) cohereConfig.rateLimitTpm = validated.rateLimitTpm;
+      if (validated.analysisType !== undefined) cohereConfig.analysisType = validated.analysisType;
+      return new OpenAIProvider(cohereConfig);
     }
 
     default:

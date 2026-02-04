@@ -283,6 +283,158 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
             break;
           }
 
+          case 'gemini': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test Google Gemini API
+            const geminiResponse = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models?key=${row.api_key}`,
+              { signal: AbortSignal.timeout(10000) }
+            );
+            if (geminiResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await geminiResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${geminiResponse.status}`;
+            }
+            break;
+          }
+
+          case 'openrouter': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test OpenRouter API
+            const openrouterResponse = await fetch('https://openrouter.ai/api/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (openrouterResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await openrouterResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${openrouterResponse.status}`;
+            }
+            break;
+          }
+
+          case 'deepseek': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test DeepSeek API (OpenAI-compatible)
+            const deepseekResponse = await fetch('https://api.deepseek.com/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (deepseekResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await deepseekResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${deepseekResponse.status}`;
+            }
+            break;
+          }
+
+          case 'mistral': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test Mistral API
+            const mistralResponse = await fetch('https://api.mistral.ai/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (mistralResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await mistralResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${mistralResponse.status}`;
+            }
+            break;
+          }
+
+          case 'groq': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test Groq API (OpenAI-compatible)
+            const groqResponse = await fetch('https://api.groq.com/openai/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (groqResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await groqResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${groqResponse.status}`;
+            }
+            break;
+          }
+
+          case 'together': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test Together AI API (OpenAI-compatible)
+            const togetherResponse = await fetch('https://api.together.xyz/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (togetherResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await togetherResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${togetherResponse.status}`;
+            }
+            break;
+          }
+
+          case 'cohere': {
+            if (!row.api_key) {
+              message = 'API key not configured';
+              break;
+            }
+            // Test Cohere API
+            const cohereResponse = await fetch('https://api.cohere.ai/v1/models', {
+              headers: {
+                'Authorization': `Bearer ${row.api_key}`,
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (cohereResponse.ok) {
+              success = true;
+              message = 'Connection successful';
+            } else {
+              const errorData = await cohereResponse.json() as { error?: { message?: string } };
+              message = errorData.error?.message ?? `HTTP ${cohereResponse.status}`;
+            }
+            break;
+          }
+
           case 'ollama': {
             const baseUrl = row.base_url || 'http://localhost:11434';
             try {
@@ -314,7 +466,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
           }
 
           default:
-            message = 'Unknown provider';
+            message = 'Provider test not implemented';
         }
       } catch (testError) {
         message = testError instanceof Error ? testError.message : 'Connection test failed';
