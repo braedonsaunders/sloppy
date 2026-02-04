@@ -240,5 +240,14 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   return { app, start, stop };
 }
 
+/**
+ * Convenience function to create and start the server
+ */
+export async function startServer(options: ServerOptions = {}): Promise<SloppyServer> {
+  const server = await createServer(options);
+  await server.start();
+  return server;
+}
+
 // Export types
 export type { FastifyInstance };

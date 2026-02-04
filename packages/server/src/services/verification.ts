@@ -15,7 +15,7 @@ import {
   TestError,
   LintError,
   BuildError,
-} from './types';
+} from './types.js';
 
 // ============================================================================
 // Constants
@@ -551,8 +551,8 @@ export class VerificationService {
 
     // Update counts from parsed errors if summary wasn't found
     if (result.errorCount === 0 && result.warningCount === 0 && result.errors.length > 0) {
-      result.errorCount = result.errors.filter((e) => e.severity === 'error').length;
-      result.warningCount = result.errors.filter((e) => e.severity === 'warning').length;
+      result.errorCount = result.errors.filter((e: LintError) => e.severity === 'error').length;
+      result.warningCount = result.errors.filter((e: LintError) => e.severity === 'warning').length;
     }
   }
 
@@ -625,7 +625,7 @@ export class VerificationService {
       /^error(?:\[.+?\])?:\s+(.+)$/gim
     );
     for (const match of genericErrors) {
-      if (!result.errors.some((e) => e.message.includes(match[1]))) {
+      if (!result.errors.some((e: BuildError) => e.message.includes(match[1] ?? ''))) {
         result.errors.push({
           message: match[1],
         });
@@ -708,7 +708,7 @@ export function extractVerificationErrors(result: VerificationResult): string {
 
   if (result.lint && result.lint.status !== 'pass') {
     errors.push('LINT ERRORS:');
-    for (const error of result.lint.errors.filter((e) => e.severity === 'error')) {
+    for (const error of result.lint.errors.filter((e: LintError) => e.severity === 'error')) {
       errors.push(`  ${error.filePath}:${error.line}:${error.column} - [${error.rule}] ${error.message}`);
     }
   }

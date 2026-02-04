@@ -10,9 +10,9 @@ import {
   MetricsDelta,
   Logger,
   DatabaseMetrics,
-} from './types';
-import { IssueTracker } from './issue-tracker';
-import { SloppyEventEmitter } from './event-emitter';
+} from './types.js';
+import { IssueTracker } from './issue-tracker.js';
+import { SloppyEventEmitter } from './event-emitter.js';
 
 // ============================================================================
 // Types

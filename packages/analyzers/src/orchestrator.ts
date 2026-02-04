@@ -31,7 +31,7 @@ export interface OrchestratorConfig {
   /** Maximum issues to return (default: unlimited) */
   maxIssues?: number;
   /** Analyzer-specific configurations */
-  analyzerConfigs?: Record<IssueCategory, Record<string, unknown>>;
+  analyzerConfigs?: Partial<Record<IssueCategory, Record<string, unknown>>>;
 }
 
 /**
@@ -51,16 +51,15 @@ export class AnalysisOrchestrator {
   private readonly analyzers: Map<IssueCategory, BaseAnalyzer>;
 
   constructor() {
-    this.analyzers = new Map([
-      ['stub', new StubAnalyzer()],
-      ['duplicate', new DuplicateAnalyzer()],
-      ['bug', new BugAnalyzer()],
-      ['type', new TypeAnalyzer()],
-      ['coverage', new CoverageAnalyzer()],
-      ['lint', new LintAnalyzer()],
-      ['security', new SecurityAnalyzer()],
-      ['dead-code', new DeadCodeAnalyzer()],
-    ]);
+    this.analyzers = new Map<IssueCategory, BaseAnalyzer>();
+    this.analyzers.set('stub', new StubAnalyzer());
+    this.analyzers.set('duplicate', new DuplicateAnalyzer());
+    this.analyzers.set('bug', new BugAnalyzer());
+    this.analyzers.set('type', new TypeAnalyzer());
+    this.analyzers.set('coverage', new CoverageAnalyzer());
+    this.analyzers.set('lint', new LintAnalyzer());
+    this.analyzers.set('security', new SecurityAnalyzer());
+    this.analyzers.set('dead-code', new DeadCodeAnalyzer());
   }
 
   /**
@@ -164,7 +163,7 @@ export class AnalysisOrchestrator {
   /**
    * Get merged configuration with defaults
    */
-  private getConfig(config: OrchestratorConfig): Required<OrchestratorConfig> {
+  private getConfig(config: OrchestratorConfig): Omit<Required<OrchestratorConfig>, 'analyzerConfigs'> & { analyzerConfigs: Partial<Record<IssueCategory, Record<string, unknown>>> } {
     return {
       analyzers: config.analyzers ?? Array.from(this.analyzers.keys()),
       concurrency: config.concurrency ?? 4,

@@ -7,7 +7,7 @@ import {
   SloppyEvent,
   SloppyEventType,
   Logger,
-} from './types';
+} from './types.js';
 
 // ============================================================================
 // Types

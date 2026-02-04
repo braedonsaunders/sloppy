@@ -184,7 +184,7 @@ export class StubAnalyzer extends BaseAnalyzer {
       }
 
       // Check method definitions in classes
-      if (node.type === 'MethodDefinition' && node.value) {
+      if (node.type === 'MethodDefinition' && node.value && node.value.type === 'FunctionExpression') {
         const funcIssues = this.analyzeFunctionBody(node.value, file, this.getMethodName(node));
         issues.push(...funcIssues);
       }
@@ -390,21 +390,23 @@ export class StubAnalyzer extends BaseAnalyzer {
 
     // Check literal values
     if (arg.type === 'Literal') {
-      const value = String(arg.raw ?? arg.value);
-      if (PLACEHOLDER_VALUES.includes(value)) {
-        return value;
+      // Use type assertion through unknown to avoid complex type narrowing issues
+      const literalNode = arg as unknown as { raw?: string; value: unknown };
+      const rawValue = literalNode.raw ?? String(literalNode.value);
+      if (PLACEHOLDER_VALUES.includes(rawValue)) {
+        return rawValue;
       }
       // Check for TODO/placeholder in string values
-      if (typeof arg.value === 'string') {
-        if (STUB_ERROR_PATTERNS.some((p) => p.test(arg.value as string))) {
-          return `"${arg.value}"`;
+      const litValue = literalNode.value;
+      if (typeof litValue === 'string') {
+        if (STUB_ERROR_PATTERNS.some((p) => p.test(litValue))) {
+          return `"${litValue}"`;
         }
       }
-    }
-
-    // Check for null
-    if (arg.type === 'Literal' && arg.value === null) {
-      return 'null';
+      // Check for null
+      if (litValue === null) {
+        return 'null';
+      }
     }
 
     // Check for undefined identifier
@@ -503,7 +505,7 @@ export class StubAnalyzer extends BaseAnalyzer {
     callback(node);
 
     for (const key of Object.keys(node)) {
-      const value = (node as Record<string, unknown>)[key];
+      const value = (node as unknown as Record<string, unknown>)[key];
       if (value && typeof value === 'object') {
         if (Array.isArray(value)) {
           for (const item of value) {

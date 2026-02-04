@@ -11,7 +11,6 @@ import {
   Check,
   X,
   SkipForward,
-  ExternalLink,
 } from 'lucide-react';
 import Button from './Button';
 import { StatusBadge, SeverityBadge, TypeBadge } from './Badge';

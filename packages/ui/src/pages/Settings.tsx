@@ -26,7 +26,7 @@ interface Settings {
 }
 
 export default function Settings() {
-  const queryClient = useQueryClient();
+  useQueryClient(); // Initialize query client
   const [activeTab, setActiveTab] = useState<'providers' | 'defaults'>('providers');
 
   return (
@@ -302,7 +302,7 @@ function ProviderCard({
 }
 
 function DefaultsTab() {
-  const queryClient = useQueryClient();
+  const defaultsQueryClient = useQueryClient();
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -315,9 +315,9 @@ function DefaultsTab() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (settings: Settings) => api.settings.update(settings),
+    mutationFn: (settings: Settings) => api.settings.update(settings as Record<string, unknown>),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      defaultsQueryClient.invalidateQueries({ queryKey: ['settings'] });
     },
   });
 

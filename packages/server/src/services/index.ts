@@ -4,7 +4,7 @@
  */
 
 // Types
-export * from './types';
+export * from './types.js';
 
 // Event Emitter
 export {
@@ -15,7 +15,7 @@ export {
   createEventEmitter,
   getGlobalEventEmitter,
   resetGlobalEventEmitter,
-} from './event-emitter';
+} from './event-emitter.js';
 
 // Verification Service
 export {
@@ -24,7 +24,7 @@ export {
   createVerificationService,
   formatVerificationResult,
   extractVerificationErrors,
-} from './verification';
+} from './verification.js';
 
 // Issue Tracker
 export {
@@ -34,7 +34,7 @@ export {
   DatabaseAdapter as IssueDatabaseAdapter,
   createIssueTracker,
   InMemoryDatabaseAdapter as InMemoryIssueDatabaseAdapter,
-} from './issue-tracker';
+} from './issue-tracker.js';
 
 // Checkpoint Service
 export {
@@ -43,7 +43,7 @@ export {
   CheckpointDatabaseAdapter,
   createCheckpointService,
   InMemoryCheckpointDatabaseAdapter,
-} from './checkpoint';
+} from './checkpoint.js';
 
 // Metrics Collector
 export {
@@ -55,7 +55,7 @@ export {
   formatMetricsSummary,
   calculateSuccessRate,
   calculateCompletionRate,
-} from './metrics-collector';
+} from './metrics-collector.js';
 
 // Orchestrator
 export {
@@ -65,4 +65,4 @@ export {
   CodeAnalyzer,
   SessionDatabaseAdapter,
   createOrchestrator,
-} from './orchestrator';
+} from './orchestrator.js';

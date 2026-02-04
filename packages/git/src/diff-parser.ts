@@ -2,7 +2,7 @@
  * Diff parsing utilities for @sloppy/git
  */
 
-import { DiffFile, DiffHunk, DiffLine } from './types';
+import { DiffFile, DiffHunk, DiffLine } from './types.js';
 
 /**
  * Parses a unified diff string into structured DiffFile objects
@@ -24,6 +24,7 @@ export function parseDiff(diffString: string): DiffFile[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (line === undefined) continue;
 
     // Match diff header: diff --git a/path b/path
     const diffHeaderMatch = line.match(/^diff --git a\/(.+) b\/(.+)$/);
@@ -101,8 +102,8 @@ export function parseDiff(diffString: string): DiffFile[] {
         currentFile.hunks.push(currentHunk);
       }
 
-      oldLineNum = parseInt(hunkMatch[1], 10);
-      newLineNum = parseInt(hunkMatch[3], 10);
+      oldLineNum = parseInt(hunkMatch[1] ?? '1', 10);
+      newLineNum = parseInt(hunkMatch[3] ?? '1', 10);
 
       currentHunk = {
         oldStart: oldLineNum,
@@ -180,6 +181,9 @@ export function applyDiff(content: string, diff: string): string {
 
   // Use the first file's hunks
   const file = files[0];
+  if (!file) {
+    return content;
+  }
 
   if (file.isBinary) {
     throw new Error('Cannot apply diff to binary file');
@@ -192,34 +196,39 @@ export function applyDiff(content: string, diff: string): string {
   for (const hunk of file.hunks) {
     // Copy lines before the hunk
     while (lineIndex < hunk.oldStart - 1) {
-      result.push(lines[lineIndex]);
+      const line = lines[lineIndex];
+      if (line !== undefined) result.push(line);
       lineIndex++;
     }
 
     // Apply hunk changes
     for (const diffLine of hunk.lines) {
       switch (diffLine.type) {
-        case 'context':
+        case 'context': {
           // Verify context matches
-          if (lines[lineIndex] !== diffLine.content) {
+          const ctxLine = lines[lineIndex];
+          if (ctxLine !== diffLine.content) {
             throw new Error(
               `Context mismatch at line ${lineIndex + 1}: ` +
-              `expected "${diffLine.content}", got "${lines[lineIndex]}"`
+              `expected "${diffLine.content}", got "${ctxLine ?? ''}"`
             );
           }
-          result.push(lines[lineIndex]);
+          if (ctxLine !== undefined) result.push(ctxLine);
           lineIndex++;
           break;
-        case 'remove':
+        }
+        case 'remove': {
           // Verify removed line matches
-          if (lines[lineIndex] !== diffLine.content) {
+          const rmLine = lines[lineIndex];
+          if (rmLine !== diffLine.content) {
             throw new Error(
               `Remove mismatch at line ${lineIndex + 1}: ` +
-              `expected "${diffLine.content}", got "${lines[lineIndex]}"`
+              `expected "${diffLine.content}", got "${rmLine ?? ''}"`
             );
           }
           lineIndex++;
           break;
+        }
         case 'add':
           result.push(diffLine.content);
           break;
@@ -229,7 +238,8 @@ export function applyDiff(content: string, diff: string): string {
 
   // Copy remaining lines
   while (lineIndex < lines.length) {
-    result.push(lines[lineIndex]);
+    const line = lines[lineIndex];
+    if (line !== undefined) result.push(line);
     lineIndex++;
   }
 
@@ -397,13 +407,13 @@ export function invertDiff(diff: string): string {
                 file.changeType,
     additions: file.deletions,
     deletions: file.additions,
-    hunks: file.hunks.map(hunk => ({
+    hunks: file.hunks.map((hunk: DiffHunk) => ({
       ...hunk,
       oldStart: hunk.newStart,
       oldLines: hunk.newLines,
       newStart: hunk.oldStart,
       newLines: hunk.oldLines,
-      lines: hunk.lines.map(line => ({
+      lines: hunk.lines.map((line: DiffLine) => ({
         ...line,
         type: line.type === 'add' ? 'remove' as const :
               line.type === 'remove' ? 'add' as const :

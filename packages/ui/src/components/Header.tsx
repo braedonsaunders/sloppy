@@ -102,7 +102,7 @@ interface ConnectionIndicatorProps {
   state: 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 }
 
-function ConnectionIndicator({ isConnected, state }: ConnectionIndicatorProps) {
+function ConnectionIndicator({ isConnected: _isConnected, state }: ConnectionIndicatorProps) {
   const statusConfig = {
     connected: {
       icon: Wifi,

@@ -16,7 +16,7 @@ import Input from '@/components/Input';
 import Select from '@/components/Select';
 import Badge from '@/components/Badge';
 import { useSession } from '@/hooks/useSession';
-import { api, type Provider, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
+import { api, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
 
 const ISSUE_TYPES = [
   { id: 'lint', label: 'Lint Issues', description: 'ESLint, Prettier violations' },
@@ -31,7 +31,7 @@ export default function NewSession() {
   const navigate = useNavigate();
   const { createSession, isCreating } = useSession();
 
-  const { data: providers, isLoading: isLoadingProviders } = useQuery({
+  const { data: providers, isLoading: _isLoadingProviders } = useQuery({
     queryKey: ['providers'],
     queryFn: () => api.providers.list(),
   });

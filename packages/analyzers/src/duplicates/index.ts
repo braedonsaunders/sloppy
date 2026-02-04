@@ -1,4 +1,38 @@
-import { detectClones, type IClone, type IOptions } from 'jscpd';
+import { detectClones } from 'jscpd';
+
+// Define interfaces locally since jscpd doesn't export them properly
+interface IClone {
+  format: string;
+  duplicationA: {
+    sourceId: string;
+    start: { line: number; column?: number };
+    end: { line: number; column?: number };
+    fragment?: string;
+  };
+  duplicationB: {
+    sourceId: string;
+    start: { line: number; column?: number };
+    end: { line: number; column?: number };
+    fragment?: string;
+  };
+}
+
+interface IOptions {
+  path?: string[];
+  minLines?: number;
+  minTokens?: number;
+  maxSize?: string;
+  maxLines?: number;
+  format?: string[];
+  ignore?: string[];
+  reporters?: string[];
+  output?: string;
+  silent?: boolean;
+  absolute?: boolean;
+  noSymlinks?: boolean;
+  skipLocal?: boolean;
+  threshold?: number;
+}
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -69,7 +103,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
       const tempDir = await this.createTempReport();
 
       // Configure jscpd options
-      const jscpdOptions: Partial<IOptions> = {
+      const jscpdOptions: IOptions = {
         path: [options.rootDir],
         minLines: config.minLines,
         minTokens: config.minTokens,
@@ -160,7 +194,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
         const group: DuplicateGroup = {
           hash: key,
           lines: clone.duplicationA.end.line - clone.duplicationA.start.line + 1,
-          tokens: clone.duplicationA.end.column, // Approximation using column as token count
+          tokens: clone.duplicationA.end.column ?? 0, // Approximation using column as token count
           locations: [],
           fragment: clone.duplicationA.fragment,
         };
@@ -173,17 +207,17 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
       const locA: SourceLocation = {
         file: clone.duplicationA.sourceId,
         line: clone.duplicationA.start.line,
-        column: clone.duplicationA.start.column,
+        column: clone.duplicationA.start.column ?? 1,
         endLine: clone.duplicationA.end.line,
-        endColumn: clone.duplicationA.end.column,
+        endColumn: clone.duplicationA.end.column ?? 1,
       };
 
       const locB: SourceLocation = {
         file: clone.duplicationB.sourceId,
         line: clone.duplicationB.start.line,
-        column: clone.duplicationB.start.column,
+        column: clone.duplicationB.start.column ?? 1,
         endLine: clone.duplicationB.end.line,
-        endColumn: clone.duplicationB.end.column,
+        endColumn: clone.duplicationB.end.column ?? 1,
       };
 
       // Add locations if not already present

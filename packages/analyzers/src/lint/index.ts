@@ -1,4 +1,4 @@
-import { ESLint, type Linter } from 'eslint';
+import { ESLint } from 'eslint';
 import * as path from 'node:path';
 import {
   BaseAnalyzer,
@@ -8,9 +8,10 @@ import {
 } from '../base.js';
 
 /**
- * ESLint rule configuration
+ * ESLint rule configuration - using simpler type definition
  */
-type RuleConfig = Linter.RuleLevelAndOptions | Linter.RuleLevel;
+type RuleLevel = 'off' | 'warn' | 'error' | 0 | 1 | 2;
+type RuleConfig = RuleLevel | [RuleLevel, ...unknown[]];
 
 /**
  * Configuration for lint analysis

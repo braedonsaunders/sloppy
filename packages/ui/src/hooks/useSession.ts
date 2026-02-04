@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type Session, type CreateSessionRequest } from '@/lib/api';
+import { api, type CreateSessionRequest } from '@/lib/api';
 import { useSessionStore } from '@/stores/session';
 import { useIssuesStore } from '@/stores/issues';
 
