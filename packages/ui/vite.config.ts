@@ -34,6 +34,7 @@ export default defineConfig({
           vendor: ['react', 'react-dom', 'react-router-dom'],
           charts: ['recharts'],
           query: ['@tanstack/react-query'],
+          state: ['zustand'],
         },
       },
     },
