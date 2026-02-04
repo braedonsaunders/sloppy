@@ -18,19 +18,18 @@ import { getWebSocketHandler } from '../websocket/handler.js';
 // Validation schemas
 export const CreateSessionSchema = z.object({
   repoPath: z.string().min(1, 'Repository path is required'),
-  branch: z.string().min(1, 'Branch name is required'),
+  branch: z.string().min(1).optional().default('main'),
+  provider: z.string().min(1, 'Provider is required'),
+  model: z.string().optional(),
   maxTimeMinutes: z.number().int().min(1).max(480).optional().default(60),
-  providerConfig: z.object({
-    provider: z.enum(['anthropic', 'openai', 'azure', 'local']).optional(),
-    model: z.string().optional(),
-    apiKeyEnvVar: z.string().optional(),
-  }).optional(),
   config: z.object({
-    analyzers: z.array(z.string()).optional(),
-    autoCommit: z.boolean().optional(),
-    approvalMode: z.boolean().optional(),
-    maxAttempts: z.number().int().min(1).max(10).optional(),
-    ignorePatterns: z.array(z.string()).optional(),
+    maxTime: z.number().optional(),
+    strictness: z.enum(['low', 'medium', 'high']).optional().default('medium'),
+    issueTypes: z.array(z.string()).optional().default(['lint', 'type', 'test']),
+    approvalMode: z.boolean().optional().default(false),
+    testCommand: z.string().optional(),
+    lintCommand: z.string().optional(),
+    buildCommand: z.string().optional(),
   }).optional(),
 });
 
@@ -75,7 +74,10 @@ export class SessionManager {
       repo_path: validated.repoPath,
       branch: validated.branch,
       max_time_minutes: validated.maxTimeMinutes,
-      provider_config: validated.providerConfig,
+      provider_config: {
+        provider: validated.provider,
+        model: validated.model,
+      },
       config: validated.config,
     };
 
