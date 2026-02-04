@@ -28,6 +28,7 @@ interface ProviderRow {
   models: string;
   configured: number;
   options: string;
+  selected_model: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -39,7 +40,12 @@ interface Provider {
   configured: boolean;
   baseUrl?: string;
   hasApiKey: boolean;
+  selectedModel: string | null;
 }
+
+const SelectModelSchema = z.object({
+  model: z.string().min(1, 'Model name is required'),
+});
 
 // Response helpers
 function sendSuccess<T>(reply: FastifyReply, data: T, statusCode = 200): void {
@@ -64,6 +70,7 @@ function rowToProvider(row: ProviderRow): Provider {
     configured: row.configured === 1,
     baseUrl: row.base_url ?? undefined,
     hasApiKey: !!row.api_key,
+    selectedModel: row.selected_model,
   };
 }
 
@@ -79,7 +86,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
   app.get('/api/providers', async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
         FROM providers
         ORDER BY name
       `);
@@ -100,7 +107,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
     try {
       const params = ProviderIdParamsSchema.parse(request.params);
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
@@ -189,7 +196,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
 
       // Fetch updated provider
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
@@ -217,7 +224,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
 
       // Fetch provider
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
@@ -274,7 +281,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
 
       // Fetch provider
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
@@ -315,6 +322,54 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
 
       app.log.error({ error }, 'Failed to refresh models');
       sendError(reply, error instanceof Error ? error.message : 'Failed to refresh models', 500);
+    }
+  });
+
+  /**
+   * POST /api/providers/:id/select-model - Select a model for the provider
+   */
+  app.post('/api/providers/:id/select-model', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = ProviderIdParamsSchema.parse(request.params);
+      const body = SelectModelSchema.parse(request.body);
+
+      // Fetch provider
+      const stmt = db.getRawDb().prepare(`
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
+        FROM providers
+        WHERE id = ?
+      `);
+      const row = stmt.get(params.id) as ProviderRow | undefined;
+
+      if (!row) {
+        sendError(reply, 'Provider not found', 404);
+        return;
+      }
+
+      // Verify model is in the available models list
+      const availableModels = JSON.parse(row.models) as string[];
+      if (!availableModels.includes(body.model)) {
+        sendError(reply, `Model '${body.model}' is not available for this provider`, 400);
+        return;
+      }
+
+      // Update selected model
+      const updateStmt = db.getRawDb().prepare('UPDATE providers SET selected_model = ? WHERE id = ?');
+      updateStmt.run(body.model, params.id);
+
+      app.log.info({ providerId: params.id, model: body.model }, 'Model selected');
+
+      // Return updated provider
+      const updatedRow = stmt.get(params.id) as ProviderRow;
+      sendSuccess(reply, rowToProvider(updatedRow));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
+        return;
+      }
+
+      app.log.error({ error }, 'Failed to select model');
+      sendError(reply, error instanceof Error ? error.message : 'Failed to select model', 500);
     }
   });
 

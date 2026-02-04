@@ -126,6 +126,14 @@ INSERT OR IGNORE INTO providers (id, name, models) VALUES
     ('cohere', 'Cohere', '[]');
     `,
   },
+  {
+    id: 4,
+    name: '004_add_selected_model_to_providers',
+    sql: `
+-- Add selected_model column to providers table
+ALTER TABLE providers ADD COLUMN selected_model TEXT;
+    `,
+  },
 ];
 
 /**
