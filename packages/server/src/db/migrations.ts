@@ -134,6 +134,67 @@ INSERT OR IGNORE INTO providers (id, name, models) VALUES
 ALTER TABLE providers ADD COLUMN selected_model TEXT;
     `,
   },
+  {
+    id: 5,
+    name: '005_add_learnings_table',
+    sql: `
+-- Learnings table: Stores LLM analysis learnings (Ralph pattern)
+-- Used for persisting insights across analysis iterations
+CREATE TABLE IF NOT EXISTS learnings (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    category TEXT NOT NULL DEFAULT 'general',
+    pattern TEXT NOT NULL,
+    description TEXT NOT NULL,
+    file_patterns TEXT, -- JSON array of file patterns this learning applies to
+    confidence REAL DEFAULT 0.8,
+    times_applied INTEGER NOT NULL DEFAULT 0,
+    last_applied_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+);
+
+-- Analysis progress table: Tracks state of ongoing analysis
+CREATE TABLE IF NOT EXISTS analysis_progress (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    iteration INTEGER NOT NULL DEFAULT 0,
+    files_analyzed INTEGER NOT NULL DEFAULT 0,
+    files_total INTEGER NOT NULL DEFAULT 0,
+    issues_found INTEGER NOT NULL DEFAULT 0,
+    issues_fixed INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT '{}', -- JSON: additional state
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+-- Indexes for learnings
+CREATE INDEX IF NOT EXISTS idx_learnings_session_id ON learnings(session_id);
+CREATE INDEX IF NOT EXISTS idx_learnings_category ON learnings(category);
+CREATE INDEX IF NOT EXISTS idx_learnings_pattern ON learnings(pattern);
+
+-- Indexes for analysis_progress
+CREATE INDEX IF NOT EXISTS idx_analysis_progress_session_id ON analysis_progress(session_id);
+
+-- Trigger to update updated_at on learnings
+CREATE TRIGGER IF NOT EXISTS update_learnings_timestamp
+    AFTER UPDATE ON learnings
+    FOR EACH ROW
+BEGIN
+    UPDATE learnings SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+-- Trigger to update updated_at on analysis_progress
+CREATE TRIGGER IF NOT EXISTS update_analysis_progress_timestamp
+    AFTER UPDATE ON analysis_progress
+    FOR EACH ROW
+BEGIN
+    UPDATE analysis_progress SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+    `,
+  },
 ];
 
 /**

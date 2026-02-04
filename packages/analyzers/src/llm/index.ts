@@ -4,6 +4,18 @@
  * An agentic code analyzer that uses LLMs to detect issues
  * beyond what static analyzers can find. The LLM orchestrates
  * the entire analysis process, including running other tools.
+ *
+ * Supports all providers from @sloppy/providers:
+ * - Claude (Anthropic)
+ * - OpenAI
+ * - Ollama (local)
+ * - Gemini (Google)
+ * - OpenRouter
+ * - DeepSeek
+ * - Mistral
+ * - Groq
+ * - Together AI
+ * - Cohere
  */
 
 import {
@@ -24,19 +36,68 @@ import {
 } from './prompts.js';
 
 /**
+ * Supported provider types (matching @sloppy/providers)
+ */
+export type LLMProviderType =
+  | 'claude'
+  | 'openai'
+  | 'ollama'
+  | 'gemini'
+  | 'openrouter'
+  | 'deepseek'
+  | 'mistral'
+  | 'groq'
+  | 'together'
+  | 'cohere';
+
+/**
+ * Provider-specific base URLs
+ */
+const PROVIDER_BASE_URLS: Record<LLMProviderType, string> = {
+  claude: 'https://api.anthropic.com',
+  openai: 'https://api.openai.com/v1',
+  ollama: 'http://localhost:11434/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  openrouter: 'https://openrouter.ai/api/v1',
+  deepseek: 'https://api.deepseek.com/v1',
+  mistral: 'https://api.mistral.ai/v1',
+  groq: 'https://api.groq.com/openai/v1',
+  together: 'https://api.together.xyz/v1',
+  cohere: 'https://api.cohere.ai/v1',
+};
+
+/**
+ * Default models per provider
+ */
+const PROVIDER_DEFAULT_MODELS: Record<LLMProviderType, string> = {
+  claude: 'claude-sonnet-4-20250514',
+  openai: 'gpt-4o',
+  ollama: 'llama3',
+  gemini: 'gemini-2.0-flash',
+  openrouter: 'anthropic/claude-3.5-sonnet',
+  deepseek: 'deepseek-chat',
+  mistral: 'mistral-large-latest',
+  groq: 'llama-3.3-70b-versatile',
+  together: 'meta-llama/Llama-3-70b-chat-hf',
+  cohere: 'command-r-plus',
+};
+
+/**
  * Configuration for the LLM analyzer
  */
 export interface LLMAnalyzerConfig {
   /** API key for the LLM provider */
   apiKey?: string;
-  /** LLM model to use (default: claude-sonnet-4-20250514) */
+  /** LLM model to use */
   model?: string;
-  /** LLM provider (default: anthropic) */
-  provider?: 'anthropic' | 'openai';
-  /** Base URL for the LLM API */
+  /** LLM provider type */
+  provider?: LLMProviderType;
+  /** Base URL for the LLM API (auto-detected from provider if not set) */
   baseUrl?: string;
   /** Maximum tokens for analysis response */
   maxTokens?: number;
+  /** Temperature for generation (0-1) */
+  temperature?: number;
   /** Maximum iterations for agentic analysis */
   maxIterations?: number;
   /** Maximum files to analyze per batch */
@@ -57,6 +118,10 @@ export interface LLMAnalyzerConfig {
   systemPrompt?: string;
   /** Focus areas for analysis */
   focusAreas?: string[];
+  /** Session ID for tracking (for learnings persistence) */
+  sessionId?: string;
+  /** Database path for learnings (optional, enables SQLite persistence) */
+  databasePath?: string;
 }
 
 /**
@@ -102,7 +167,42 @@ interface Message {
 }
 
 /**
+ * Detect the API key based on provider type
+ */
+function detectApiKey(provider: LLMProviderType): string {
+  const envKeys: Record<LLMProviderType, string[]> = {
+    claude: ['ANTHROPIC_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+    ollama: [], // Ollama doesn't need an API key
+    gemini: ['GOOGLE_API_KEY', 'GEMINI_API_KEY'],
+    openrouter: ['OPENROUTER_API_KEY'],
+    deepseek: ['DEEPSEEK_API_KEY'],
+    mistral: ['MISTRAL_API_KEY'],
+    groq: ['GROQ_API_KEY'],
+    together: ['TOGETHER_API_KEY'],
+    cohere: ['COHERE_API_KEY', 'CO_API_KEY'],
+  };
+
+  for (const key of envKeys[provider] ?? []) {
+    if (process.env[key]) return process.env[key]!;
+  }
+
+  // Fallback to common keys
+  return process.env['ANTHROPIC_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
+}
+
+/**
+ * Check if a provider uses OpenAI-compatible API
+ */
+function isOpenAICompatible(provider: LLMProviderType): boolean {
+  return provider !== 'claude';
+}
+
+/**
  * LLM Analyzer - Agentic code analysis using LLMs
+ *
+ * Supports multiple providers through the @sloppy/providers configuration pattern.
+ * All non-Claude providers use OpenAI-compatible APIs.
  */
 export class LLMAnalyzer extends BaseAnalyzer {
   readonly name = 'llm-analyzer';
@@ -115,12 +215,17 @@ export class LLMAnalyzer extends BaseAnalyzer {
 
   constructor(config: LLMAnalyzerConfig = {}) {
     super();
+
+    // Detect provider from config or environment
+    const provider = config.provider ?? 'claude';
+
     this.config = {
-      apiKey: config.apiKey ?? process.env['ANTHROPIC_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '',
-      model: config.model ?? 'claude-sonnet-4-20250514',
-      provider: config.provider ?? 'anthropic',
-      baseUrl: config.baseUrl ?? '',
+      apiKey: config.apiKey ?? detectApiKey(provider),
+      model: config.model ?? PROVIDER_DEFAULT_MODELS[provider],
+      provider,
+      baseUrl: config.baseUrl ?? PROVIDER_BASE_URLS[provider],
       maxTokens: config.maxTokens ?? 8192,
+      temperature: config.temperature ?? 0,
       maxIterations: config.maxIterations ?? 10,
       batchSize: config.batchSize ?? 5,
       runLint: config.runLint ?? true,
@@ -131,7 +236,16 @@ export class LLMAnalyzer extends BaseAnalyzer {
       fileBrowserConfig: config.fileBrowserConfig ?? {},
       systemPrompt: config.systemPrompt ?? '',
       focusAreas: config.focusAreas ?? [],
+      sessionId: config.sessionId ?? '',
+      databasePath: config.databasePath ?? '',
     };
+  }
+
+  /**
+   * Get the effective provider type
+   */
+  get providerType(): LLMProviderType {
+    return this.config.provider;
   }
 
   /**
@@ -408,16 +522,18 @@ Use the tools to explore the codebase and create issues for any problems you fin
 
   /**
    * Call the LLM with tool support
+   * Routes to the appropriate API based on provider type
    */
   private async callLLM(messages: Message[]): Promise<{
     content: string;
     toolCalls?: ToolCall[];
   }> {
-    if (this.config.provider === 'anthropic') {
+    // Claude uses native Anthropic API
+    if (this.config.provider === 'claude') {
       return this.callAnthropic(messages);
-    } else {
-      return this.callOpenAI(messages);
     }
+    // All other providers use OpenAI-compatible API
+    return this.callOpenAICompatible(messages);
   }
 
   /**
@@ -502,16 +618,17 @@ Use the tools to explore the codebase and create issues for any problems you fin
   }
 
   /**
-   * Call OpenAI API
+   * Call OpenAI-compatible API
+   * Used for OpenAI, Ollama, Gemini, OpenRouter, DeepSeek, Mistral, Groq, Together, Cohere
    */
-  private async callOpenAI(messages: Message[]): Promise<{
+  private async callOpenAICompatible(messages: Message[]): Promise<{
     content: string;
     toolCalls?: ToolCall[];
   }> {
     const { default: OpenAI } = await import('openai');
     const client = new OpenAI({
-      apiKey: this.config.apiKey,
-      baseURL: this.config.baseUrl || undefined,
+      apiKey: this.config.apiKey || 'ollama', // Ollama doesn't require a key
+      baseURL: this.config.baseUrl,
     });
 
     // Convert messages to OpenAI format
@@ -721,7 +838,13 @@ Use the tools to explore the codebase and create issues for any problems you fin
 
 // Re-export types and components
 export { FileBrowser, type FileBrowserConfig, type PrioritizedFile, type AnalysisGroup } from './file-browser.js';
-export { ToolExecutor, TOOL_DEFINITIONS } from './tool-executor.js';
+export {
+  ToolExecutor,
+  TOOL_DEFINITIONS,
+  FileLearningsStore,
+  type LearningsStore,
+  type LearningEntry,
+} from './tool-executor.js';
 export {
   ReAnalysisLoop,
   createReAnalysisRunner,

@@ -140,10 +140,16 @@ describe('LLM Analyzer', () => {
       expect(toolNames).toContain('run_tests');
       expect(toolNames).toContain('run_build');
       expect(toolNames).toContain('read_file');
-      expect(toolNames).toContain('search_code');
+      expect(toolNames).toContain('grep');
+      expect(toolNames).toContain('find_files');
       expect(toolNames).toContain('list_files');
       expect(toolNames).toContain('get_file_info');
+      expect(toolNames).toContain('bash');
+      expect(toolNames).toContain('git');
       expect(toolNames).toContain('create_issue');
+      expect(toolNames).toContain('write_learnings');
+      expect(toolNames).toContain('read_learnings');
+      expect(toolNames).toContain('search_learnings');
     });
 
     it('should have descriptions for all tools', () => {

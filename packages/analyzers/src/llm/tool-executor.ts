@@ -7,13 +7,93 @@
  * - Run tests
  * - Run build scripts
  * - Read files
- * - Search for patterns
+ * - Search for patterns (grep)
+ * - Find files
+ * - Execute shell commands
+ * - Persist learnings (Ralph pattern) - via SQLite or file
  */
 
 import { spawn, SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { glob } from 'glob';
+
+/**
+ * Learning entry for persistence
+ */
+export interface LearningEntry {
+  id?: string;
+  category: string;
+  pattern: string;
+  description: string;
+  file_patterns?: string[];
+  confidence?: number;
+}
+
+/**
+ * Learnings store interface for pluggable persistence
+ * Can be backed by SQLite database or file system
+ */
+export interface LearningsStore {
+  /** Write a learning entry */
+  write(learning: LearningEntry): Promise<void>;
+  /** Read all learnings, optionally filtered by category */
+  read(category?: string): Promise<LearningEntry[]>;
+  /** Search learnings by pattern */
+  search(query: string): Promise<LearningEntry[]>;
+  /** Mark a learning as applied */
+  markApplied?(learningId: string): Promise<void>;
+}
+
+/**
+ * File-based learnings store (default fallback)
+ */
+export class FileLearningsStore implements LearningsStore {
+  private readonly filePath: string;
+
+  constructor(rootDir: string, file?: string) {
+    this.filePath = file ?? path.join(rootDir, '.sloppy', 'learnings.json');
+  }
+
+  async write(learning: LearningEntry): Promise<void> {
+    await fs.promises.mkdir(path.dirname(this.filePath), { recursive: true });
+
+    let learnings: LearningEntry[] = [];
+    try {
+      const content = await fs.promises.readFile(this.filePath, 'utf-8');
+      learnings = JSON.parse(content);
+    } catch {
+      // File doesn't exist yet
+    }
+
+    learning.id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    learnings.push(learning);
+
+    await fs.promises.writeFile(this.filePath, JSON.stringify(learnings, null, 2), 'utf-8');
+  }
+
+  async read(category?: string): Promise<LearningEntry[]> {
+    try {
+      const content = await fs.promises.readFile(this.filePath, 'utf-8');
+      const learnings = JSON.parse(content) as LearningEntry[];
+      if (category) {
+        return learnings.filter(l => l.category === category);
+      }
+      return learnings;
+    } catch {
+      return [];
+    }
+  }
+
+  async search(query: string): Promise<LearningEntry[]> {
+    const learnings = await this.read();
+    const lowerQuery = query.toLowerCase();
+    return learnings.filter(l =>
+      l.pattern.toLowerCase().includes(lowerQuery) ||
+      l.description.toLowerCase().includes(lowerQuery)
+    );
+  }
+}
 
 /**
  * Result of executing a tool
@@ -61,6 +141,18 @@ export interface TestResult {
     error: string;
     file?: string;
   }>;
+}
+
+/**
+ * Grep match result
+ */
+export interface GrepMatch {
+  file: string;
+  line: number;
+  column: number;
+  content: string;
+  beforeContext?: string[];
+  afterContext?: string[];
 }
 
 /**
@@ -147,18 +239,65 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'search_code',
-    description: 'Search for a pattern in the codebase. Returns matching files and lines.',
+    name: 'grep',
+    description: 'Search for a pattern in files using grep. Supports regex patterns. Returns matching lines with context.',
     parameters: {
       type: 'object',
       properties: {
         pattern: {
           type: 'string',
-          description: 'Search pattern (regex supported)',
+          description: 'Search pattern (supports regex)',
         },
-        filePattern: {
+        path: {
           type: 'string',
-          description: 'Glob pattern for files to search (optional)',
+          description: 'File or directory path to search (default: current directory)',
+        },
+        include: {
+          type: 'string',
+          description: 'File pattern to include (e.g., "*.ts", "*.{js,jsx}")',
+        },
+        exclude: {
+          type: 'string',
+          description: 'File pattern to exclude (e.g., "node_modules")',
+        },
+        ignoreCase: {
+          type: 'boolean',
+          description: 'Case insensitive search (default: false)',
+        },
+        contextLines: {
+          type: 'number',
+          description: 'Number of context lines before/after match (default: 0)',
+        },
+        maxResults: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 100)',
+        },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'find_files',
+    description: 'Find files matching a pattern. Similar to Unix find command.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description: 'Glob pattern to match (e.g., "**/*.ts", "src/**/*.{js,jsx}")',
+        },
+        path: {
+          type: 'string',
+          description: 'Directory to search in (default: current directory)',
+        },
+        type: {
+          type: 'string',
+          enum: ['file', 'directory', 'all'],
+          description: 'Type of entries to find (default: file)',
+        },
+        maxDepth: {
+          type: 'number',
+          description: 'Maximum directory depth to search',
         },
       },
       required: ['pattern'],
@@ -166,17 +305,21 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_files',
-    description: 'List files in a directory or matching a pattern.',
+    description: 'List files in a directory.',
     parameters: {
       type: 'object',
       properties: {
-        pattern: {
+        path: {
           type: 'string',
-          description: 'Glob pattern (default: **/*.{ts,tsx,js,jsx})',
+          description: 'Directory path (default: current directory)',
         },
-        directory: {
-          type: 'string',
-          description: 'Directory to search in (optional)',
+        recursive: {
+          type: 'boolean',
+          description: 'List recursively (default: false)',
+        },
+        showHidden: {
+          type: 'boolean',
+          description: 'Show hidden files (default: false)',
         },
       },
     },
@@ -196,22 +339,36 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
-    name: 'run_custom_command',
-    description: 'Run a custom shell command (restricted to safe commands).',
+    name: 'bash',
+    description: 'Execute a shell command. Restricted to safe commands for code analysis.',
     parameters: {
       type: 'object',
       properties: {
         command: {
           type: 'string',
-          description: 'Command to run (must be in allowed list)',
+          description: 'Shell command to execute',
         },
-        args: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Command arguments',
+        timeout: {
+          type: 'number',
+          description: 'Timeout in milliseconds (default: 30000)',
         },
       },
       required: ['command'],
+    },
+  },
+  {
+    name: 'git',
+    description: 'Execute git commands for repository analysis.',
+    parameters: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Git command arguments (e.g., ["log", "--oneline", "-10"])',
+        },
+      },
+      required: ['args'],
     },
   },
   {
@@ -258,25 +415,82 @@ export const TOOL_DEFINITIONS = [
       required: ['type', 'severity', 'title', 'description', 'file', 'lineStart', 'lineEnd'],
     },
   },
+  {
+    name: 'write_learnings',
+    description: 'Write learnings from analysis to persist across iterations. Follows Ralph pattern. Stored in SQLite database when available.',
+    parameters: {
+      type: 'object',
+      properties: {
+        learnings: {
+          type: 'string',
+          description: 'Learnings and patterns discovered during analysis',
+        },
+        category: {
+          type: 'string',
+          enum: ['general', 'bug-pattern', 'security', 'performance', 'style', 'testing'],
+          description: 'Category of the learning (default: general)',
+        },
+      },
+      required: ['learnings'],
+    },
+  },
+  {
+    name: 'read_learnings',
+    description: 'Read learnings from previous analysis iterations.',
+    parameters: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['general', 'bug-pattern', 'security', 'performance', 'style', 'testing'],
+          description: 'Filter by category (optional)',
+        },
+      },
+    },
+  },
+  {
+    name: 'search_learnings',
+    description: 'Search for relevant learnings by keyword or pattern.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query to find relevant learnings',
+        },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 /**
- * Allowed commands for custom command execution
+ * Allowed shell commands for bash tool
  */
-const ALLOWED_COMMANDS = new Set([
-  'npm',
-  'npx',
-  'pnpm',
-  'yarn',
-  'node',
-  'cat',
-  'head',
-  'tail',
-  'grep',
-  'find',
-  'wc',
-  'ls',
+const ALLOWED_BASH_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr',
+  'echo', 'printf', 'date', 'pwd', 'env', 'which', 'type',
+  'ls', 'tree', 'file', 'stat', 'du', 'df',
+  'grep', 'awk', 'sed', 'xargs', 'tee',
+  'npm', 'npx', 'pnpm', 'yarn', 'node', 'tsc', 'eslint',
+  'git', 'jq', 'diff', 'patch',
 ]);
+
+/**
+ * Blocked patterns in bash commands
+ */
+const BLOCKED_PATTERNS = [
+  /rm\s+(-rf?|--force)/i,
+  />\s*\/dev\//,
+  /mkfs/,
+  /dd\s+if=/,
+  /chmod\s+777/,
+  /curl.*\|\s*(ba)?sh/,
+  /wget.*\|\s*(ba)?sh/,
+  /eval\s/,
+  /\$\(/,  // command substitution
+  /`/,     // backticks
+];
 
 /**
  * Tool Executor that runs development tools
@@ -284,10 +498,19 @@ const ALLOWED_COMMANDS = new Set([
 export class ToolExecutor {
   private readonly rootDir: string;
   private readonly timeout: number;
+  private learningsStore: LearningsStore;
 
-  constructor(rootDir: string, timeout: number = 60000) {
+  constructor(rootDir: string, timeout: number = 60000, learningsStore?: LearningsStore) {
     this.rootDir = rootDir;
     this.timeout = timeout;
+    this.learningsStore = learningsStore ?? new FileLearningsStore(rootDir);
+  }
+
+  /**
+   * Set a custom learnings store (e.g., SQLite-backed)
+   */
+  setLearningsStore(store: LearningsStore): void {
+    this.learningsStore = store;
   }
 
   /**
@@ -308,17 +531,49 @@ export class ToolExecutor {
         return this.runBuild();
       case 'read_file':
         return this.readFile(params.path as string, params.startLine as number | undefined, params.endLine as number | undefined);
-      case 'search_code':
-        return this.searchCode(params.pattern as string, params.filePattern as string | undefined);
+      case 'grep':
+        return this.grep(params as {
+          pattern: string;
+          path?: string;
+          include?: string;
+          exclude?: string;
+          ignoreCase?: boolean;
+          contextLines?: number;
+          maxResults?: number;
+        });
+      case 'find_files':
+        return this.findFiles(params as {
+          pattern: string;
+          path?: string;
+          type?: 'file' | 'directory' | 'all';
+          maxDepth?: number;
+        });
       case 'list_files':
-        return this.listFiles(params.pattern as string | undefined, params.directory as string | undefined);
+        return this.listFiles(params as {
+          path?: string;
+          recursive?: boolean;
+          showHidden?: boolean;
+        });
       case 'get_file_info':
         return this.getFileInfo(params.path as string);
-      case 'run_custom_command':
-        return this.runCustomCommand(params.command as string, params.args as string[] | undefined);
+      case 'bash':
+        return this.runBash(params.command as string, params.timeout as number | undefined);
+      case 'git':
+        return this.runGit(params.args as string[]);
       case 'create_issue':
         // This is handled specially - just return the params
         return { result: params, output: 'Issue created' };
+      case 'write_learnings':
+        return this.writeLearnings(
+          params.learnings as string,
+          undefined, // file parameter removed, using store
+          true, // append
+          params.category as string | undefined ?? 'general'
+        );
+      case 'read_learnings':
+        return this.readLearnings(undefined, params.category as string | undefined);
+      case 'search_learnings':
+        return this.searchLearnings(params.query as string);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -568,42 +823,90 @@ export class ToolExecutor {
         result: { content, lines: lines.length },
         output: `File: ${filePath} (${lines.length} lines)\n\n${numberedContent}`,
       };
-    } catch (error) {
+    } catch {
       throw new Error(`Failed to read file: ${filePath}`);
     }
   }
 
   /**
-   * Search code for a pattern
+   * Grep - search for patterns in files
    */
-  async searchCode(
-    pattern: string,
-    filePattern?: string
-  ): Promise<{ result: Array<{ file: string; line: number; content: string }>; output: string }> {
-    const matches: Array<{ file: string; line: number; content: string }> = [];
-    const searchPattern = filePattern ?? '**/*.{ts,tsx,js,jsx}';
-    const files = await glob(searchPattern, {
-      cwd: this.rootDir,
-      absolute: true,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'],
-    });
+  async grep(params: {
+    pattern: string;
+    path?: string;
+    include?: string;
+    exclude?: string;
+    ignoreCase?: boolean;
+    contextLines?: number;
+    maxResults?: number;
+  }): Promise<{ result: GrepMatch[]; output: string }> {
+    const {
+      pattern,
+      path: searchPath = '.',
+      include,
+      exclude = '**/node_modules/**',
+      ignoreCase = false,
+      contextLines = 0,
+      maxResults = 100,
+    } = params;
 
-    const regex = new RegExp(pattern, 'gi');
+    const matches: GrepMatch[] = [];
+    const regex = new RegExp(pattern, ignoreCase ? 'gi' : 'g');
 
-    for (const file of files.slice(0, 100)) { // Limit files searched
+    // Find files to search
+    const searchDir = path.isAbsolute(searchPath)
+      ? searchPath
+      : path.join(this.rootDir, searchPath);
+
+    let files: string[];
+    try {
+      const stat = await fs.promises.stat(searchDir);
+      if (stat.isFile()) {
+        files = [searchDir];
+      } else {
+        files = await glob(include || '**/*', {
+          cwd: searchDir,
+          absolute: true,
+          ignore: exclude ? [exclude] : ['**/node_modules/**', '**/dist/**'],
+          nodir: true,
+        });
+      }
+    } catch {
+      files = [];
+    }
+
+    // Search files
+    for (const file of files) {
+      if (matches.length >= maxResults) break;
+
       try {
         const content = await fs.promises.readFile(file, 'utf-8');
         const lines = content.split('\n');
 
-        for (let i = 0; i < lines.length; i++) {
-          if (regex.test(lines[i]!)) {
-            matches.push({
+        for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
+          const line = lines[i]!;
+          regex.lastIndex = 0;
+          const match = regex.exec(line);
+
+          if (match) {
+            const grepMatch: GrepMatch = {
               file: path.relative(this.rootDir, file),
               line: i + 1,
-              content: lines[i]!.trim(),
-            });
+              column: match.index + 1,
+              content: line.trim(),
+            };
+
+            if (contextLines > 0) {
+              grepMatch.beforeContext = lines
+                .slice(Math.max(0, i - contextLines), i)
+                .map(l => l.trim());
+              grepMatch.afterContext = lines
+                .slice(i + 1, Math.min(lines.length, i + contextLines + 1))
+                .map(l => l.trim());
+            }
+
+            matches.push(grepMatch);
           }
-          regex.lastIndex = 0; // Reset regex
         }
       } catch {
         // Skip files that can't be read
@@ -611,32 +914,100 @@ export class ToolExecutor {
     }
 
     return {
-      result: matches.slice(0, 50), // Limit results
+      result: matches,
       output: matches.length > 0
-        ? `Found ${matches.length} matches:\n${matches.slice(0, 20).map(m => `  ${m.file}:${m.line}: ${m.content.substring(0, 80)}`).join('\n')}`
-        : 'No matches found',
+        ? `Found ${matches.length} matches for "${pattern}":\n${matches.map(m =>
+            `  ${m.file}:${m.line}:${m.column}: ${m.content.substring(0, 100)}`
+          ).join('\n')}`
+        : `No matches found for "${pattern}"`,
     };
   }
 
   /**
-   * List files
+   * Find files matching a pattern
    */
-  async listFiles(
-    pattern?: string,
-    directory?: string
-  ): Promise<{ result: string[]; output: string }> {
-    const searchPattern = pattern ?? '**/*.{ts,tsx,js,jsx}';
-    const cwd = directory ? path.join(this.rootDir, directory) : this.rootDir;
+  async findFiles(params: {
+    pattern: string;
+    path?: string;
+    type?: 'file' | 'directory' | 'all';
+    maxDepth?: number;
+  }): Promise<{ result: string[]; output: string }> {
+    const {
+      pattern,
+      path: searchPath = '.',
+      type = 'file',
+      maxDepth,
+    } = params;
 
-    const files = await glob(searchPattern, {
-      cwd,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/build/**'],
-    });
+    const searchDir = path.isAbsolute(searchPath)
+      ? searchPath
+      : path.join(this.rootDir, searchPath);
+
+    const options: Parameters<typeof glob>[1] = {
+      cwd: searchDir,
+      ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**'],
+      absolute: false,
+    };
+
+    if (maxDepth !== undefined) {
+      options.maxDepth = maxDepth;
+    }
+
+    let files: string[];
+    if (type === 'file') {
+      options.nodir = true;
+      const result = await glob(pattern, options);
+      files = result.map(f => String(f));
+    } else if (type === 'directory') {
+      // For directories, get all entries and filter to directories
+      const result = await glob(pattern + '/', { ...options, mark: true });
+      files = result.map(f => String(f).replace(/\/$/, ''));
+    } else {
+      const result = await glob(pattern, options);
+      files = result.map(f => String(f));
+    }
 
     const sortedFiles = files.sort();
+
     return {
       result: sortedFiles,
-      output: `Found ${files.length} files:\n${sortedFiles.slice(0, 50).join('\n')}${files.length > 50 ? '\n...(truncated)' : ''}`,
+      output: `Found ${sortedFiles.length} ${type === 'all' ? 'entries' : type + 's'}:\n${sortedFiles.slice(0, 50).join('\n')}${sortedFiles.length > 50 ? '\n...(truncated)' : ''}`,
+    };
+  }
+
+  /**
+   * List files in a directory
+   */
+  async listFiles(params: {
+    path?: string;
+    recursive?: boolean;
+    showHidden?: boolean;
+  }): Promise<{ result: string[]; output: string }> {
+    const {
+      path: dirPath = '.',
+      recursive = false,
+      showHidden = false,
+    } = params;
+
+    const fullPath = path.isAbsolute(dirPath)
+      ? dirPath
+      : path.join(this.rootDir, dirPath);
+
+    let pattern = recursive ? '**/*' : '*';
+    if (!showHidden) {
+      pattern = recursive ? '**/[!.]*' : '[!.]*';
+    }
+
+    const result = await glob(pattern, {
+      cwd: fullPath,
+      ignore: ['**/node_modules/**', '**/dist/**'],
+      nodir: false,
+    });
+    const files = result.map(f => String(f));
+
+    return {
+      result: files.sort(),
+      output: `${fullPath}:\n${files.sort().join('\n')}`,
     };
   }
 
@@ -687,34 +1058,169 @@ export class ToolExecutor {
   }
 
   /**
-   * Run a custom command (restricted)
+   * Run a bash command (restricted)
    */
-  async runCustomCommand(
+  async runBash(
     command: string,
-    args?: string[]
+    timeout?: number
   ): Promise<{ result: ToolResult; output: string }> {
-    if (!ALLOWED_COMMANDS.has(command)) {
-      throw new Error(`Command '${command}' is not allowed. Allowed commands: ${Array.from(ALLOWED_COMMANDS).join(', ')}`);
+    // Validate command
+    const firstWord = command.trim().split(/\s+/)[0];
+    if (!firstWord || !ALLOWED_BASH_COMMANDS.has(firstWord)) {
+      throw new Error(`Command '${firstWord}' is not allowed. Allowed: ${Array.from(ALLOWED_BASH_COMMANDS).slice(0, 10).join(', ')}...`);
     }
 
-    const result = await this.runCommand(command, args ?? []);
+    // Check for blocked patterns
+    for (const pattern of BLOCKED_PATTERNS) {
+      if (pattern.test(command)) {
+        throw new Error('Command contains blocked pattern for security reasons');
+      }
+    }
+
+    const result = await this.runCommand('bash', ['-c', command], timeout ?? 30000);
+
     return {
       result,
-      output: result.output || result.stderr || 'Command completed',
+      output: result.success
+        ? result.output || '(no output)'
+        : `Command failed (exit ${result.exitCode}): ${result.stderr || result.output}`,
     };
+  }
+
+  /**
+   * Run a git command
+   */
+  async runGit(args: string[]): Promise<{ result: ToolResult; output: string }> {
+    // Validate git args - block destructive operations
+    const blockedGitOps = ['push', 'reset', 'clean', 'checkout', 'rebase', 'merge'];
+    if (blockedGitOps.includes(args[0]!)) {
+      throw new Error(`Git operation '${args[0]}' is not allowed for analysis`);
+    }
+
+    const result = await this.runCommand('git', args);
+
+    return {
+      result,
+      output: result.success
+        ? result.output || '(no output)'
+        : `Git command failed: ${result.stderr || result.output}`,
+    };
+  }
+
+  /**
+   * Write learnings (Ralph pattern)
+   * Now uses pluggable learnings store (SQLite or file-based)
+   */
+  async writeLearnings(
+    learnings: string,
+    file?: string,
+    append: boolean = true,
+    category: string = 'general'
+  ): Promise<{ result: { written: boolean }; output: string }> {
+    try {
+      // Parse learnings - try to extract structured info
+      const learning: LearningEntry = {
+        category,
+        pattern: learnings.split('\n')[0]?.slice(0, 100) ?? 'Learning',
+        description: learnings,
+        confidence: 0.8,
+      };
+
+      // Extract file patterns if mentioned
+      const filePatternMatch = learnings.match(/(?:files?|patterns?):\s*([^\n]+)/i);
+      if (filePatternMatch) {
+        learning.file_patterns = filePatternMatch[1]!.split(',').map(p => p.trim());
+      }
+
+      await this.learningsStore.write(learning);
+
+      return {
+        result: { written: true },
+        output: `Learning recorded: ${learning.pattern.slice(0, 50)}...`,
+      };
+    } catch (error) {
+      return {
+        result: { written: false },
+        output: `Failed to write learning: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /**
+   * Read learnings from store
+   */
+  async readLearnings(file?: string, category?: string): Promise<{ result: { learnings: LearningEntry[]; count: number }; output: string }> {
+    try {
+      const learnings = await this.learningsStore.read(category);
+
+      if (learnings.length === 0) {
+        return {
+          result: { learnings: [], count: 0 },
+          output: 'No previous learnings found',
+        };
+      }
+
+      const output = learnings.map((l, i) =>
+        `${i + 1}. [${l.category}] ${l.pattern}\n   ${l.description.slice(0, 200)}${l.description.length > 200 ? '...' : ''}`
+      ).join('\n\n');
+
+      return {
+        result: { learnings, count: learnings.length },
+        output: `Found ${learnings.length} learnings:\n\n${output}`,
+      };
+    } catch (error) {
+      return {
+        result: { learnings: [], count: 0 },
+        output: `Failed to read learnings: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /**
+   * Search learnings by query
+   */
+  async searchLearnings(query: string): Promise<{ result: LearningEntry[]; output: string }> {
+    try {
+      const learnings = await this.learningsStore.search(query);
+
+      if (learnings.length === 0) {
+        return {
+          result: [],
+          output: `No learnings found matching "${query}"`,
+        };
+      }
+
+      const output = learnings.map((l, i) =>
+        `${i + 1}. [${l.category}] ${l.pattern}`
+      ).join('\n');
+
+      return {
+        result: learnings,
+        output: `Found ${learnings.length} learnings matching "${query}":\n${output}`,
+      };
+    } catch (error) {
+      return {
+        result: [],
+        output: `Search failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   /**
    * Run a shell command
    */
-  private async runCommand(command: string, args: string[]): Promise<ToolResult> {
+  private async runCommand(
+    command: string,
+    args: string[],
+    timeout?: number
+  ): Promise<ToolResult> {
     const startTime = Date.now();
 
     return new Promise((resolve) => {
       const options: SpawnOptions = {
         cwd: this.rootDir,
         shell: true,
-        timeout: this.timeout,
+        timeout: timeout ?? this.timeout,
       };
 
       const proc = spawn(command, args, options);

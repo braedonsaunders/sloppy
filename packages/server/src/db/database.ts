@@ -128,6 +128,66 @@ export interface UpdateIssueInput {
   attempts?: number;
 }
 
+// Learnings types
+export type LearningCategory = 'general' | 'bug-pattern' | 'security' | 'performance' | 'style' | 'testing';
+
+export interface Learning {
+  id: string;
+  session_id: string | null;
+  category: LearningCategory;
+  pattern: string;
+  description: string;
+  file_patterns: string | null;
+  confidence: number;
+  times_applied: number;
+  last_applied_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateLearningInput {
+  session_id?: string;
+  category?: LearningCategory;
+  pattern: string;
+  description: string;
+  file_patterns?: string[];
+  confidence?: number;
+}
+
+export interface UpdateLearningInput {
+  confidence?: number;
+  times_applied?: number;
+  last_applied_at?: string;
+}
+
+// Analysis progress types
+export interface AnalysisProgress {
+  id: string;
+  session_id: string;
+  iteration: number;
+  files_analyzed: number;
+  files_total: number;
+  issues_found: number;
+  issues_fixed: number;
+  state: string;
+  started_at: string;
+  updated_at: string;
+}
+
+export interface CreateAnalysisProgressInput {
+  session_id: string;
+  files_total: number;
+  state?: Record<string, unknown>;
+}
+
+export interface UpdateAnalysisProgressInput {
+  iteration?: number;
+  files_analyzed?: number;
+  issues_found?: number;
+  issues_fixed?: number;
+  state?: Record<string, unknown>;
+}
+
 export interface DatabaseOptions {
   path: string;
   logger?: Console;
@@ -588,6 +648,163 @@ export class SloppyDatabase {
    */
   getRawDb(): Database.Database {
     return this.db;
+  }
+
+  // ==================== Learning CRUD ====================
+
+  createLearning(input: CreateLearningInput): Learning {
+    const id = nanoid();
+    const filePatterns = input.file_patterns ? JSON.stringify(input.file_patterns) : null;
+
+    this.db.prepare(`
+      INSERT INTO learnings (id, session_id, category, pattern, description, file_patterns, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.session_id ?? null,
+      input.category ?? 'general',
+      input.pattern,
+      input.description,
+      filePatterns,
+      input.confidence ?? 0.8
+    );
+
+    return this.getLearning(id)!;
+  }
+
+  getLearning(id: string): Learning | null {
+    return this.db.prepare('SELECT * FROM learnings WHERE id = ?').get(id) as Learning | null;
+  }
+
+  listLearnings(sessionId?: string): Learning[] {
+    if (sessionId) {
+      return this.db.prepare('SELECT * FROM learnings WHERE session_id = ? ORDER BY created_at DESC').all(sessionId) as Learning[];
+    }
+    return this.db.prepare('SELECT * FROM learnings ORDER BY times_applied DESC, created_at DESC').all() as Learning[];
+  }
+
+  listLearningsByCategory(category: LearningCategory): Learning[] {
+    return this.db.prepare('SELECT * FROM learnings WHERE category = ? ORDER BY times_applied DESC').all(category) as Learning[];
+  }
+
+  searchLearnings(pattern: string): Learning[] {
+    return this.db.prepare(`
+      SELECT * FROM learnings
+      WHERE pattern LIKE ? OR description LIKE ?
+      ORDER BY confidence DESC, times_applied DESC
+    `).all(`%${pattern}%`, `%${pattern}%`) as Learning[];
+  }
+
+  updateLearning(id: string, input: UpdateLearningInput): Learning | null {
+    const learning = this.getLearning(id);
+    if (!learning) return null;
+
+    const updates: string[] = [];
+    const values: unknown[] = [];
+
+    if (input.confidence !== undefined) {
+      updates.push('confidence = ?');
+      values.push(input.confidence);
+    }
+    if (input.times_applied !== undefined) {
+      updates.push('times_applied = ?');
+      values.push(input.times_applied);
+    }
+    if (input.last_applied_at !== undefined) {
+      updates.push('last_applied_at = ?');
+      values.push(input.last_applied_at);
+    }
+
+    if (updates.length === 0) return learning;
+
+    values.push(id);
+    const sql = `UPDATE learnings SET ${updates.join(', ')} WHERE id = ?`;
+    this.db.prepare(sql).run(...values);
+
+    return this.getLearning(id);
+  }
+
+  incrementLearningApplied(id: string): Learning | null {
+    const learning = this.getLearning(id);
+    if (!learning) return null;
+
+    this.db.prepare(`
+      UPDATE learnings SET times_applied = times_applied + 1, last_applied_at = datetime('now')
+      WHERE id = ?
+    `).run(id);
+
+    return this.getLearning(id);
+  }
+
+  deleteLearning(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM learnings WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  // ==================== Analysis Progress CRUD ====================
+
+  createAnalysisProgress(input: CreateAnalysisProgressInput): AnalysisProgress {
+    const id = nanoid();
+    const state = JSON.stringify(input.state ?? {});
+
+    this.db.prepare(`
+      INSERT INTO analysis_progress (id, session_id, files_total, state)
+      VALUES (?, ?, ?, ?)
+    `).run(id, input.session_id, input.files_total, state);
+
+    return this.getAnalysisProgress(id)!;
+  }
+
+  getAnalysisProgress(id: string): AnalysisProgress | null {
+    return this.db.prepare('SELECT * FROM analysis_progress WHERE id = ?').get(id) as AnalysisProgress | null;
+  }
+
+  getAnalysisProgressBySession(sessionId: string): AnalysisProgress | null {
+    return this.db.prepare(
+      'SELECT * FROM analysis_progress WHERE session_id = ? ORDER BY started_at DESC LIMIT 1'
+    ).get(sessionId) as AnalysisProgress | null;
+  }
+
+  updateAnalysisProgress(id: string, input: UpdateAnalysisProgressInput): AnalysisProgress | null {
+    const progress = this.getAnalysisProgress(id);
+    if (!progress) return null;
+
+    const updates: string[] = [];
+    const values: unknown[] = [];
+
+    if (input.iteration !== undefined) {
+      updates.push('iteration = ?');
+      values.push(input.iteration);
+    }
+    if (input.files_analyzed !== undefined) {
+      updates.push('files_analyzed = ?');
+      values.push(input.files_analyzed);
+    }
+    if (input.issues_found !== undefined) {
+      updates.push('issues_found = ?');
+      values.push(input.issues_found);
+    }
+    if (input.issues_fixed !== undefined) {
+      updates.push('issues_fixed = ?');
+      values.push(input.issues_fixed);
+    }
+    if (input.state !== undefined) {
+      updates.push('state = ?');
+      values.push(JSON.stringify(input.state));
+    }
+
+    if (updates.length === 0) return progress;
+
+    values.push(id);
+    const sql = `UPDATE analysis_progress SET ${updates.join(', ')} WHERE id = ?`;
+    this.db.prepare(sql).run(...values);
+
+    return this.getAnalysisProgress(id);
+  }
+
+  deleteAnalysisProgress(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM analysis_progress WHERE id = ?').run(id);
+    return result.changes > 0;
   }
 }
 
