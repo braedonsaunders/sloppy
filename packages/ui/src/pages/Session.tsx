@@ -10,6 +10,12 @@ import {
   CheckCircle,
   RefreshCw,
   Trash2,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  Cpu,
+  Zap,
+  FileCode,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Badge, { StatusBadge } from '@/components/Badge';
@@ -18,6 +24,7 @@ import IssueCard from '@/components/IssueCard';
 import CommitCard from '@/components/CommitCard';
 import ActivityLog, { ActivityIndicator } from '@/components/ActivityLog';
 import MetricsChart from '@/components/MetricsChart';
+import LLMRequestPanel, { LLMStatusIndicator } from '@/components/LLMRequestPanel';
 import { ConfirmModal } from '@/components/Modal';
 import Select from '@/components/Select';
 import Input from '@/components/Input';
@@ -57,6 +64,8 @@ export default function Session() {
   // Store data
   const activities = useSessionStore((s) => s.activities);
   const metrics = useSessionStore((s) => s.metrics);
+  const llmRequests = useSessionStore((s) => s.llmRequests || []);
+  const activeLLMRequest = useSessionStore((s) => s.activeLLMRequest);
   const issues = useIssuesStore(selectFilteredIssues);
   const issueStats = useIssuesStore(selectIssueStats);
   const commits = useIssuesStore((s) => s.commits);
@@ -118,6 +127,13 @@ export default function Session() {
   const elapsedMinutes = Math.floor(session.stats.elapsedTime / 60);
   const elapsedSeconds = session.stats.elapsedTime % 60;
 
+  // Calculate issue breakdown
+  const issueBreakdown = {
+    errors: issues.filter(i => i.severity === 'error').length,
+    warnings: issues.filter(i => i.severity === 'warning').length,
+    info: issues.filter(i => i.severity === 'info').length,
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
@@ -130,6 +146,9 @@ export default function Session() {
           <p className="mt-1 text-dark-400">
             {session.provider} / {session.model} • {session.config.strictness} strictness
           </p>
+          <p className="mt-0.5 text-xs text-dark-500 font-mono truncate max-w-md">
+            {session.repoPath}
+          </p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -140,6 +159,14 @@ export default function Session() {
               {String(elapsedMinutes).padStart(2, '0')}:
               {String(elapsedSeconds).padStart(2, '0')}
             </span>
+          </div>
+
+          {/* LLM Status (compact) */}
+          <div className="hidden md:flex items-center gap-2 rounded-lg bg-dark-800 px-4 py-2 border border-dark-700">
+            <LLMStatusIndicator
+              activeRequest={activeLLMRequest}
+              totalRequests={llmRequests.length}
+            />
           </div>
 
           {/* Action buttons */}
@@ -184,46 +211,114 @@ export default function Session() {
         </div>
       </div>
 
-      {/* Progress Section */}
-      <div className="rounded-xl border border-dark-700 bg-dark-800 p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-dark-400">Overall Progress</span>
-              <span className="text-sm font-medium text-dark-200">
-                {session.stats.issuesResolved} / {session.stats.issuesFound} issues resolved
-              </span>
-            </div>
-            <ProgressBar
-              value={progress}
-              variant={session.status === 'running' ? 'gradient' : 'default'}
-              animated={session.status === 'running'}
-              size="lg"
-            />
+      {/* Stats Overview Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+        {/* Issues Found */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <FileCode className="h-4 w-4" />
+            <span className="text-xs font-medium">Issues Found</span>
           </div>
-
-          {/* Quick Stats */}
-          <div className="flex gap-6 lg:ml-8">
-            <div className="text-center">
-              <p className="text-2xl font-semibold text-success">
-                {session.stats.issuesResolved}
-              </p>
-              <p className="text-xs text-dark-500">Resolved</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-semibold text-warning">
-                {issueStats.pending}
-              </p>
-              <p className="text-xs text-dark-500">Pending</p>
-            </div>
-            <div className="text-center">
-              <p className="text-2xl font-semibold text-accent">
-                {session.stats.commitsCreated}
-              </p>
-              <p className="text-xs text-dark-500">Commits</p>
-            </div>
+          <p className="text-2xl font-semibold text-dark-100">{session.stats.issuesFound}</p>
+          <div className="mt-2 flex items-center gap-2 text-xs">
+            <span className="text-error flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" /> {issueBreakdown.errors}
+            </span>
+            <span className="text-warning flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" /> {issueBreakdown.warnings}
+            </span>
+            <span className="text-accent flex items-center gap-1">
+              <Info className="h-3 w-3" /> {issueBreakdown.info}
+            </span>
           </div>
         </div>
+
+        {/* Issues Resolved */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <CheckCircle className="h-4 w-4" />
+            <span className="text-xs font-medium">Resolved</span>
+          </div>
+          <p className="text-2xl font-semibold text-success">{session.stats.issuesResolved}</p>
+          <p className="text-xs text-dark-500 mt-2">
+            {session.stats.issuesFound > 0
+              ? `${Math.round(progress)}% complete`
+              : 'No issues yet'}
+          </p>
+        </div>
+
+        {/* Pending */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <Clock className="h-4 w-4" />
+            <span className="text-xs font-medium">Pending</span>
+          </div>
+          <p className="text-2xl font-semibold text-warning">{issueStats.pending}</p>
+          <p className="text-xs text-dark-500 mt-2">
+            {issueStats.inProgress > 0 && `${issueStats.inProgress} in progress`}
+          </p>
+        </div>
+
+        {/* Commits */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <GitCommit className="h-4 w-4" />
+            <span className="text-xs font-medium">Commits</span>
+          </div>
+          <p className="text-2xl font-semibold text-accent">{session.stats.commitsCreated}</p>
+          <p className="text-xs text-dark-500 mt-2">{commits.length} in session</p>
+        </div>
+
+        {/* LLM Requests */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <Cpu className="h-4 w-4" />
+            <span className="text-xs font-medium">LLM Requests</span>
+          </div>
+          <p className="text-2xl font-semibold text-dark-100">{llmRequests.length}</p>
+          <p className="text-xs text-dark-500 mt-2">
+            {activeLLMRequest ? (
+              <span className="text-accent">Processing...</span>
+            ) : (
+              'Idle'
+            )}
+          </p>
+        </div>
+
+        {/* Token Usage */}
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
+          <div className="flex items-center gap-2 text-dark-400 mb-2">
+            <Zap className="h-4 w-4" />
+            <span className="text-xs font-medium">Tokens Used</span>
+          </div>
+          <p className="text-2xl font-semibold text-dark-100">
+            {formatTokens(
+              llmRequests.reduce(
+                (acc, r) => acc + (r.inputTokens || 0) + (r.outputTokens || 0),
+                0
+              )
+            )}
+          </p>
+          <p className="text-xs text-dark-500 mt-2">
+            Total input + output
+          </p>
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="rounded-xl border border-dark-700 bg-dark-800 p-5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm text-dark-400">Overall Progress</span>
+          <span className="text-sm font-medium text-dark-200">
+            {session.stats.issuesResolved} / {session.stats.issuesFound} issues resolved
+          </span>
+        </div>
+        <ProgressBar
+          value={progress}
+          variant={session.status === 'running' ? 'gradient' : 'default'}
+          animated={session.status === 'running'}
+          size="lg"
+        />
 
         {/* Current Activity */}
         {session.status === 'running' && activities.length > 0 && (
@@ -236,77 +331,91 @@ export default function Session() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-dark-700">
-        <nav className="flex gap-1">
-          {(['issues', 'commits', 'activity', 'metrics'] as Tab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                activeTab === tab
-                  ? 'border-accent text-accent'
-                  : 'border-transparent text-dark-400 hover:text-dark-200'
-              }`}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-              {tab === 'issues' && issues.length > 0 && (
-                <Badge variant="neutral" size="sm" className="ml-2">
-                  {issues.length}
-                </Badge>
-              )}
-              {tab === 'commits' && commits.length > 0 && (
-                <Badge variant="neutral" size="sm" className="ml-2">
-                  {commits.length}
-                </Badge>
-              )}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      <div className="min-h-[400px]">
-        {activeTab === 'issues' && (
-          <IssuesPanel
-            issues={issues}
-            filters={filters}
-            onSetFilters={setFilters}
-            onClearFilters={clearFilters}
-            onApprove={(issueId) => approveIssueMutation.mutate(issueId)}
-            onReject={(issueId) => rejectIssueMutation.mutate(issueId)}
-            onSkip={(issueId) => skipIssueMutation.mutate(issueId)}
-            approvalMode={session.config.approvalMode}
-          />
-        )}
-
-        {activeTab === 'commits' && (
-          <CommitsPanel
-            commits={commits}
-            onRevert={(commitId) => revertCommitMutation.mutate(commitId)}
-            isReverting={revertCommitMutation.isPending}
-          />
-        )}
-
-        {activeTab === 'activity' && (
-          <ActivityLog activities={activities} maxHeight="600px" />
-        )}
-
-        {activeTab === 'metrics' && (
-          <div className="space-y-6">
-            <MetricsChart
-              data={metrics}
-              metrics={['issuesFound', 'issuesResolved']}
-              height={300}
-            />
-            <MetricsChart
-              data={metrics}
-              type="bar"
-              metrics={['testsPassing', 'testsFailing', 'lintErrors']}
-              height={250}
-            />
+      {/* Main Content Area - Two Column Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column - Tabs and Content */}
+        <div className="lg:col-span-2 space-y-4">
+          {/* Tabs */}
+          <div className="border-b border-dark-700">
+            <nav className="flex gap-1">
+              {(['issues', 'commits', 'activity', 'metrics'] as Tab[]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                    activeTab === tab
+                      ? 'border-accent text-accent'
+                      : 'border-transparent text-dark-400 hover:text-dark-200'
+                  }`}
+                >
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  {tab === 'issues' && issues.length > 0 && (
+                    <Badge variant="neutral" size="sm" className="ml-2">
+                      {issues.length}
+                    </Badge>
+                  )}
+                  {tab === 'commits' && commits.length > 0 && (
+                    <Badge variant="neutral" size="sm" className="ml-2">
+                      {commits.length}
+                    </Badge>
+                  )}
+                </button>
+              ))}
+            </nav>
           </div>
-        )}
+
+          {/* Tab Content */}
+          <div className="min-h-[400px]">
+            {activeTab === 'issues' && (
+              <IssuesPanel
+                issues={issues}
+                filters={filters}
+                onSetFilters={setFilters}
+                onClearFilters={clearFilters}
+                onApprove={(issueId) => approveIssueMutation.mutate(issueId)}
+                onReject={(issueId) => rejectIssueMutation.mutate(issueId)}
+                onSkip={(issueId) => skipIssueMutation.mutate(issueId)}
+                approvalMode={session.config.approvalMode}
+              />
+            )}
+
+            {activeTab === 'commits' && (
+              <CommitsPanel
+                commits={commits}
+                onRevert={(commitId) => revertCommitMutation.mutate(commitId)}
+                isReverting={revertCommitMutation.isPending}
+              />
+            )}
+
+            {activeTab === 'activity' && (
+              <ActivityLog activities={activities} maxHeight="600px" />
+            )}
+
+            {activeTab === 'metrics' && (
+              <div className="space-y-6">
+                <MetricsChart
+                  data={metrics}
+                  metrics={['issuesFound', 'issuesResolved']}
+                  height={300}
+                />
+                <MetricsChart
+                  data={metrics}
+                  type="bar"
+                  metrics={['testsPassing', 'testsFailing', 'lintErrors']}
+                  height={250}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Column - LLM Requests Panel */}
+        <div className="space-y-4">
+          <LLMRequestPanel
+            requests={llmRequests}
+            activeRequest={activeLLMRequest}
+          />
+        </div>
       </div>
 
       {/* Modals */}
@@ -333,6 +442,12 @@ export default function Session() {
       />
     </div>
   );
+}
+
+function formatTokens(count: number): string {
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return count.toString();
 }
 
 interface IssuesPanelProps {
@@ -386,6 +501,17 @@ function IssuesPanel({
           ]}
           value={filters.type || ''}
           onChange={(e) => onSetFilters({ type: (e.target.value || undefined) as IssueFilter['type'] })}
+          className="w-40"
+        />
+        <Select
+          options={[
+            { value: '', label: 'All severities' },
+            { value: 'error', label: 'Errors' },
+            { value: 'warning', label: 'Warnings' },
+            { value: 'info', label: 'Info' },
+          ]}
+          value={filters.severity || ''}
+          onChange={(e) => onSetFilters({ severity: (e.target.value || undefined) as IssueFilter['severity'] })}
           className="w-40"
         />
         <Input
