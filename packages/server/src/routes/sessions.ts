@@ -237,6 +237,67 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   });
 
   /**
+   * GET /api/sessions/:id/stats - Get session stats
+   */
+  app.get('/api/sessions/:id/stats', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = SessionIdParamsSchema.parse(request.params);
+      const session = await sessionManager.getSession(params.id);
+
+      if (!session) {
+        sendError(reply, 'Session not found', 404);
+        return;
+      }
+
+      // Return session stats
+      sendSuccess(reply, {
+        issuesFound: session.stats.totalIssues,
+        issuesResolved: session.stats.resolvedIssues,
+        commitsCreated: session.stats.totalCommits,
+        elapsedTime: session.started_at
+          ? Math.round((Date.now() - new Date(session.started_at).getTime()) / 1000)
+          : 0,
+        estimatedTimeRemaining: null,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
+        return;
+      }
+
+      app.log.error({ error }, 'Failed to get session stats');
+      sendError(reply, error instanceof Error ? error.message : 'Failed to get session stats', 500);
+    }
+  });
+
+  /**
+   * GET /api/sessions/:id/activity - Get session activity log
+   */
+  app.get('/api/sessions/:id/activity', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = SessionIdParamsSchema.parse(request.params);
+      const session = await sessionManager.getSession(params.id);
+
+      if (!session) {
+        sendError(reply, 'Session not found', 404);
+        return;
+      }
+
+      // Return empty activity array - activity is streamed via WebSocket
+      // Historical activity storage could be added later
+      sendSuccess(reply, []);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
+        return;
+      }
+
+      app.log.error({ error }, 'Failed to get session activity');
+      sendError(reply, error instanceof Error ? error.message : 'Failed to get session activity', 500);
+    }
+  });
+
+  /**
    * DELETE /api/sessions/:id - Delete a session
    */
   app.delete('/api/sessions/:id', async (request: FastifyRequest, reply: FastifyReply) => {

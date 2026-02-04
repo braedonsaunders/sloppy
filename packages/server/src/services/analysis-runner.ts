@@ -145,8 +145,18 @@ export class AnalysisRunner {
         },
       });
 
-      // Dynamically import @sloppy/analyzers to avoid module resolution issues at startup
-      const { analyze } = await import('@sloppy/analyzers');
+      // Dynamically import @sloppy/analyzers
+      let analyzerModule: { analyze: typeof import('@sloppy/analyzers')['analyze'] };
+      try {
+        analyzerModule = await import('@sloppy/analyzers');
+      } catch (importError) {
+        const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
+        this.logger.error(`[analysis-runner] Failed to load analyzers: ${importErrorMsg}`);
+        throw new Error(
+          'Analyzers package not available. Run "pnpm build" to build all packages, then restart the server.'
+        );
+      }
+      const { analyze } = analyzerModule;
 
       // Run analysis
       const result = await analyze(
