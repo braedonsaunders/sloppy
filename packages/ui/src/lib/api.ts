@@ -98,6 +98,7 @@ export interface SessionStats {
 
 export interface CreateSessionRequest {
   repoPath: string;
+  branch?: string;
   provider: string;
   model?: string;
   config: Partial<SessionConfig>;

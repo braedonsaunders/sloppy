@@ -43,6 +43,7 @@ export default function NewSession() {
 
   // Form state
   const [repoPath, setRepoPath] = useState('');
+  const [branch, setBranch] = useState('main');
   const [repoType, setRepoType] = useState<'local' | 'git'>('local');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
@@ -110,6 +111,7 @@ export default function NewSession() {
 
       const request: CreateSessionRequest = {
         repoPath: repoType === 'git' ? repoPath : repoPath,
+        branch: branch || undefined,
         provider,
         model: model || undefined,
         config,
@@ -176,6 +178,17 @@ export default function NewSession() {
             onChange={(e) => setRepoPath(e.target.value)}
             leftIcon={repoType === 'local' ? <FolderOpen className="h-4 w-4" /> : <GitBranch className="h-4 w-4" />}
           />
+
+          <div className="mt-4">
+            <Input
+              label="Branch"
+              placeholder="main"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              leftIcon={<GitBranch className="h-4 w-4" />}
+              hint="The branch to analyze (defaults to main)"
+            />
+          </div>
         </section>
 
         {/* Provider Section */}
