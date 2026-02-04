@@ -303,7 +303,7 @@ export class AnalysisOrchestrator {
 
     for (const issue of issues) {
       // Create a key based on file, line, and message
-      const key = `${issue.location.file}:${issue.location.line}:${issue.message}`;
+      const key = `${issue.location.file}:${String(issue.location.line)}:${issue.message}`;
 
       if (!seen.has(key)) {
         seen.add(key);
@@ -347,7 +347,7 @@ export class AnalysisOrchestrator {
    */
   private createEmptyResult(
     startTime: number,
-    config: Required<OrchestratorConfig>
+    _config: Required<OrchestratorConfig>
   ): AnalysisResult {
     return this.createResult([], startTime, []);
   }

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -17,7 +18,7 @@ export interface HeaderProps {
   onMenuClick?: () => void;
 }
 
-export default function Header({ className, onMenuClick }: HeaderProps) {
+export default function Header({ className, onMenuClick }: HeaderProps): JSX.Element {
   const location = useLocation();
   const { isConnected, connectionState } = useWebSocket();
 
@@ -31,7 +32,7 @@ export default function Header({ className, onMenuClick }: HeaderProps) {
       {/* Left section */}
       <div className="flex items-center gap-4">
         {/* Mobile menu button */}
-        {onMenuClick && (
+        {onMenuClick !== undefined && (
           <button
             onClick={onMenuClick}
             className="lg:hidden p-2 text-dark-400 hover:text-dark-200 transition-colors"
@@ -102,7 +103,7 @@ interface ConnectionIndicatorProps {
   state: 'connecting' | 'connected' | 'disconnected' | 'reconnecting';
 }
 
-function ConnectionIndicator({ isConnected: _isConnected, state }: ConnectionIndicatorProps) {
+function ConnectionIndicator({ isConnected: _isConnected, state }: ConnectionIndicatorProps): JSX.Element {
   const statusConfig = {
     connected: {
       icon: Wifi,
@@ -150,8 +151,14 @@ function ConnectionIndicator({ isConnected: _isConnected, state }: ConnectionInd
 }
 
 function getPageTitle(pathname: string): string {
-  if (pathname === '/settings') return 'Settings';
-  if (pathname === '/session/new') return 'New Session';
-  if (pathname.startsWith('/session/')) return 'Session';
+  if (pathname === '/settings') {
+    return 'Settings';
+  }
+  if (pathname === '/session/new') {
+    return 'New Session';
+  }
+  if (pathname.startsWith('/session/')) {
+    return 'Session';
+  }
   return 'Dashboard';
 }

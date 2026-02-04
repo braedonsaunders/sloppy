@@ -73,7 +73,7 @@ export class StubAnalyzer extends BaseAnalyzer {
 
     for (const file of fileContents) {
       try {
-        const fileIssues = await this.analyzeFile(file, options);
+        const fileIssues = this.analyzeFile(file, options);
         issues.push(...fileIssues);
       } catch (error) {
         this.logError(`Failed to analyze ${file.path}`, error);
@@ -83,10 +83,10 @@ export class StubAnalyzer extends BaseAnalyzer {
     return issues;
   }
 
-  private async analyzeFile(
+  private analyzeFile(
     file: FileContent,
     options: AnalyzerOptions
-  ): Promise<Issue[]> {
+  ): Issue[] {
     const issues: Issue[] = [];
 
     // First, detect stub comments using simple line scanning
@@ -106,7 +106,7 @@ export class StubAnalyzer extends BaseAnalyzer {
       // Analyze AST for stub patterns
       const astIssues = this.analyzeAST(ast, file, options);
       issues.push(...astIssues);
-    } catch (error) {
+    } catch {
       // If parsing fails, fall back to regex-based detection
       this.log(options, `AST parsing failed for ${file.path}, using fallback detection`);
       const fallbackIssues = this.fallbackDetection(file);
@@ -130,16 +130,17 @@ export class StubAnalyzer extends BaseAnalyzer {
         const match = line.match(pattern);
         if (match) {
           // Verify it's actually in a comment
-          const commentMatch = line.match(/\/\/.*|\/\*.*?\*\/|\/\*.*$/);
+          const commentMatch = /\/\/.*|\/\*.*?\*\/|\/\*.*$/.exec(line);
           if (commentMatch) {
-            const severity = this.getCommentSeverity(match[0] ?? '');
+            const matchedText = match[0];
+            const severity = this.getCommentSeverity(matchedText);
             issues.push(
               this.createIssue({
                 id: this.generateIssueId(
                   this.category,
                   file.path,
                   lineNumber,
-                  match[0]?.toLowerCase()
+                  matchedText.toLowerCase()
                 ),
                 severity,
                 message: `${match[0]} comment found`,
@@ -168,25 +169,30 @@ export class StubAnalyzer extends BaseAnalyzer {
   private analyzeAST(
     ast: TSESTree.Program,
     file: FileContent,
-    options: AnalyzerOptions
+    _options: AnalyzerOptions
   ): Issue[] {
     const issues: Issue[] = [];
 
     this.traverseAST(ast, (node) => {
       // Check function declarations
+      const nodeType = node.type as string;
       if (
-        node.type === 'FunctionDeclaration' ||
-        node.type === 'FunctionExpression' ||
-        node.type === 'ArrowFunctionExpression'
+        nodeType === 'FunctionDeclaration' ||
+        nodeType === 'FunctionExpression' ||
+        nodeType === 'ArrowFunctionExpression'
       ) {
-        const funcIssues = this.analyzeFunctionBody(node, file);
+        const funcNode = node as TSESTree.FunctionDeclaration | TSESTree.FunctionExpression | TSESTree.ArrowFunctionExpression;
+        const funcIssues = this.analyzeFunctionBody(funcNode, file);
         issues.push(...funcIssues);
       }
 
       // Check method definitions in classes
-      if (node.type === 'MethodDefinition' && node.value && node.value.type === 'FunctionExpression') {
-        const funcIssues = this.analyzeFunctionBody(node.value, file, this.getMethodName(node));
-        issues.push(...funcIssues);
+      if (nodeType === 'MethodDefinition') {
+        const methodNode = node as TSESTree.MethodDefinition;
+        if ((methodNode.value.type as string) === 'FunctionExpression') {
+          const funcIssues = this.analyzeFunctionBody(methodNode.value as TSESTree.FunctionExpression, file, this.getMethodName(methodNode));
+          issues.push(...funcIssues);
+        }
       }
     });
 
@@ -205,9 +211,7 @@ export class StubAnalyzer extends BaseAnalyzer {
     const funcName = methodName ?? this.getFunctionName(node) ?? 'anonymous function';
     const body = node.body;
 
-    if (!body || !node.loc) {
-      return issues;
-    }
+    // node.loc is always defined after parsing with loc: true
 
     // Check for empty function body
     if (this.isEmptyBody(body)) {
@@ -256,7 +260,7 @@ export class StubAnalyzer extends BaseAnalyzer {
 
     // Check for functions that return placeholder values
     const placeholderReturn = this.hasPlaceholderReturn(statements);
-    if (placeholderReturn) {
+    if (placeholderReturn !== null && placeholderReturn !== '') {
       issues.push(
         this.createIssue({
           severity: 'warning',
@@ -302,17 +306,20 @@ export class StubAnalyzer extends BaseAnalyzer {
    * Check if a function body is empty
    */
   private isEmptyBody(body: TSESTree.BlockStatement | TSESTree.Expression): boolean {
-    if (body.type === 'BlockStatement') {
-      if (body.body.length === 0) {
+    const bodyType = body.type as string;
+    if (bodyType === 'BlockStatement') {
+      const blockBody = (body as TSESTree.BlockStatement).body;
+      if (blockBody.length === 0) {
         return true;
       }
       // Check if only contains empty return or pass-like statements
-      if (body.body.length === 1) {
-        const stmt = body.body[0];
-        if (stmt?.type === 'ReturnStatement' && !stmt.argument) {
+      if (blockBody.length === 1) {
+        const stmt = blockBody[0];
+        const stmtType = stmt.type as string;
+        if (stmtType === 'ReturnStatement' && !(stmt as TSESTree.ReturnStatement).argument) {
           return true;
         }
-        if (stmt?.type === 'EmptyStatement') {
+        if (stmtType === 'EmptyStatement') {
           return true;
         }
       }
@@ -324,8 +331,9 @@ export class StubAnalyzer extends BaseAnalyzer {
    * Get statements from function body
    */
   private getBodyStatements(body: TSESTree.BlockStatement | TSESTree.Expression): TSESTree.Statement[] {
-    if (body.type === 'BlockStatement') {
-      return body.body;
+    const bodyType = body.type as string;
+    if (bodyType === 'BlockStatement') {
+      return (body as TSESTree.BlockStatement).body;
     }
     // For arrow functions with expression body, wrap in synthetic return
     return [];
@@ -340,34 +348,41 @@ export class StubAnalyzer extends BaseAnalyzer {
     }
 
     const stmt = statements[0];
-    if (stmt?.type !== 'ThrowStatement' || !stmt.argument) {
+    const stmtType = stmt.type as string;
+    if (stmtType !== 'ThrowStatement') {
       return false;
     }
-
-    const throwArg = stmt.argument;
+    const throwStmt = stmt as TSESTree.ThrowStatement;
+    const throwArg = throwStmt.argument;
+    const throwArgType = throwArg.type as string;
 
     // Check for throw new Error('not implemented')
-    if (throwArg.type === 'NewExpression') {
-      const callee = throwArg.callee;
-      if (callee.type === 'Identifier' &&
-          (callee.name === 'Error' || callee.name === 'NotImplementedError')) {
-        const args = throwArg.arguments;
-        if (args.length > 0) {
-          const arg = args[0];
-          if (arg?.type === 'Literal' && typeof arg.value === 'string') {
-            return STUB_ERROR_PATTERNS.some((pattern) => pattern.test(arg.value as string));
+    if (throwArgType === 'NewExpression') {
+      const newExpr = throwArg as TSESTree.NewExpression;
+      const callee = newExpr.callee;
+      const calleeType = callee.type as string;
+      if (calleeType === 'Identifier') {
+        const calleeId = callee as TSESTree.Identifier;
+        if (calleeId.name === 'Error' || calleeId.name === 'NotImplementedError') {
+          const args = newExpr.arguments;
+          if (args.length > 0) {
+            const arg = args[0];
+            const argType = arg.type as string;
+            if (argType === 'Literal' && typeof (arg as TSESTree.Literal).value === 'string') {
+              return STUB_ERROR_PATTERNS.some((pattern) => pattern.test((arg as TSESTree.Literal).value as string));
+            }
           }
-        }
-        // throw new NotImplementedError() without message
-        if (callee.name === 'NotImplementedError') {
-          return true;
+          // throw new NotImplementedError() without message
+          if (calleeId.name === 'NotImplementedError') {
+            return true;
+          }
         }
       }
     }
 
     // Check for throw 'not implemented'
-    if (throwArg.type === 'Literal' && typeof throwArg.value === 'string') {
-      return STUB_ERROR_PATTERNS.some((pattern) => pattern.test(throwArg.value as string));
+    if (throwArgType === 'Literal' && typeof (throwArg as TSESTree.Literal).value === 'string') {
+      return STUB_ERROR_PATTERNS.some((pattern) => pattern.test((throwArg as TSESTree.Literal).value as string));
     }
 
     return false;
@@ -382,14 +397,20 @@ export class StubAnalyzer extends BaseAnalyzer {
     }
 
     const stmt = statements[0];
-    if (stmt?.type !== 'ReturnStatement' || !stmt.argument) {
+    const stmtType = stmt.type as string;
+    if (stmtType !== 'ReturnStatement') {
+      return null;
+    }
+    const returnStmt = stmt as TSESTree.ReturnStatement;
+    if (returnStmt.argument === null) {
       return null;
     }
 
-    const arg = stmt.argument;
+    const arg = returnStmt.argument;
+    const argType = arg.type as string;
 
     // Check literal values
-    if (arg.type === 'Literal') {
+    if (argType === 'Literal') {
       // Use type assertion through unknown to avoid complex type narrowing issues
       const literalNode = arg as unknown as { raw?: string; value: unknown };
       const rawValue = literalNode.raw ?? String(literalNode.value);
@@ -410,17 +431,17 @@ export class StubAnalyzer extends BaseAnalyzer {
     }
 
     // Check for undefined identifier
-    if (arg.type === 'Identifier' && arg.name === 'undefined') {
+    if (argType === 'Identifier' && (arg as TSESTree.Identifier).name === 'undefined') {
       return 'undefined';
     }
 
     // Check for empty object literal {}
-    if (arg.type === 'ObjectExpression' && arg.properties.length === 0) {
+    if (argType === 'ObjectExpression' && (arg as TSESTree.ObjectExpression).properties.length === 0) {
       return '{}';
     }
 
     // Check for empty array literal []
-    if (arg.type === 'ArrayExpression' && arg.elements.length === 0) {
+    if (argType === 'ArrayExpression' && (arg as TSESTree.ArrayExpression).elements.length === 0) {
       return '[]';
     }
 
@@ -436,27 +457,31 @@ export class StubAnalyzer extends BaseAnalyzer {
     }
 
     for (const stmt of statements) {
-      if (stmt.type !== 'ExpressionStatement') {
+      const stmtType = stmt.type as string;
+      if (stmtType !== 'ExpressionStatement') {
         return false;
       }
 
-      const expr = stmt.expression;
-      if (expr.type !== 'CallExpression') {
+      const expr = (stmt as TSESTree.ExpressionStatement).expression;
+      const exprType = expr.type as string;
+      if (exprType !== 'CallExpression') {
         return false;
       }
 
-      const callee = expr.callee;
+      const callee = (expr as TSESTree.CallExpression).callee;
+      const calleeType = callee.type as string;
 
       // Check for console.log, console.warn, etc.
-      if (callee.type === 'MemberExpression') {
-        const obj = callee.object;
-        if (obj.type === 'Identifier' && obj.name === 'console') {
+      if (calleeType === 'MemberExpression') {
+        const obj = (callee as TSESTree.MemberExpression).object;
+        const objType = obj.type as string;
+        if (objType === 'Identifier' && (obj as TSESTree.Identifier).name === 'console') {
           continue;
         }
       }
 
       // Check for print()
-      if (callee.type === 'Identifier' && callee.name === 'print') {
+      if (calleeType === 'Identifier' && (callee as TSESTree.Identifier).name === 'print') {
         continue;
       }
 
@@ -472,11 +497,18 @@ export class StubAnalyzer extends BaseAnalyzer {
   private getFunctionName(
     node: TSESTree.FunctionDeclaration | TSESTree.FunctionExpression | TSESTree.ArrowFunctionExpression
   ): string | null {
-    if (node.type === 'FunctionDeclaration' && node.id) {
-      return node.id.name;
+    const nodeType = node.type as string;
+    if (nodeType === 'FunctionDeclaration') {
+      const funcDecl = node as TSESTree.FunctionDeclaration;
+      if (funcDecl.id !== null) {
+        return funcDecl.id.name;
+      }
     }
-    if (node.type === 'FunctionExpression' && node.id) {
-      return node.id.name;
+    if (nodeType === 'FunctionExpression') {
+      const funcExpr = node as TSESTree.FunctionExpression;
+      if (funcExpr.id !== null) {
+        return funcExpr.id.name;
+      }
     }
     return null;
   }
@@ -486,11 +518,12 @@ export class StubAnalyzer extends BaseAnalyzer {
    */
   private getMethodName(node: TSESTree.MethodDefinition): string {
     const key = node.key;
-    if (key.type === 'Identifier') {
-      return key.name;
+    const keyType = key.type as string;
+    if (keyType === 'Identifier') {
+      return (key as TSESTree.Identifier).name;
     }
-    if (key.type === 'Literal') {
-      return String(key.value);
+    if (keyType === 'Literal') {
+      return String((key as TSESTree.Literal).value);
     }
     return 'computed method';
   }
@@ -506,10 +539,10 @@ export class StubAnalyzer extends BaseAnalyzer {
 
     for (const key of Object.keys(node)) {
       const value = (node as unknown as Record<string, unknown>)[key];
-      if (value && typeof value === 'object') {
+      if (value !== null && value !== undefined && typeof value === 'object') {
         if (Array.isArray(value)) {
           for (const item of value) {
-            if (item && typeof item === 'object' && 'type' in item) {
+            if (item !== null && item !== undefined && typeof item === 'object' && 'type' in item) {
               this.traverseAST(item as TSESTree.Node, callback);
             }
           }

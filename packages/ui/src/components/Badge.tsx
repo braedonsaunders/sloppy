@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { type HTMLAttributes, type ReactNode } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -38,7 +39,7 @@ export default function Badge({
   dot,
   children,
   ...props
-}: BadgeProps) {
+}: BadgeProps): JSX.Element {
   return (
     <span
       className={twMerge(
@@ -51,7 +52,7 @@ export default function Badge({
       )}
       {...props}
     >
-      {dot && (
+      {dot === true && (
         <span
           className={clsx(
             'h-1.5 w-1.5 rounded-full',
@@ -59,7 +60,7 @@ export default function Badge({
           )}
         />
       )}
-      {icon && <span className="flex-shrink-0">{icon}</span>}
+      {icon !== undefined && icon !== null && <span className="flex-shrink-0">{icon}</span>}
       {children}
     </span>
   );
@@ -71,7 +72,7 @@ export function StatusBadge({
   ...props
 }: Omit<BadgeProps, 'variant' | 'children'> & {
   status: 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'pending' | 'in_progress' | 'resolved' | 'skipped' | 'approved' | 'rejected';
-}) {
+}): JSX.Element {
   const statusConfig: Record<
     string,
     { variant: BadgeProps['variant']; label: string }
@@ -89,7 +90,7 @@ export function StatusBadge({
     rejected: { variant: 'error', label: 'Rejected' },
   };
 
-  const config = statusConfig[status] || { variant: 'neutral', label: status };
+  const config = statusConfig[status] ?? { variant: 'neutral', label: status };
 
   return (
     <Badge variant={config.variant} dot {...props}>
@@ -103,7 +104,7 @@ export function SeverityBadge({
   ...props
 }: Omit<BadgeProps, 'variant' | 'children'> & {
   severity: 'error' | 'warning' | 'info';
-}) {
+}): JSX.Element {
   const severityConfig: Record<
     string,
     { variant: BadgeProps['variant']; label: string }
@@ -127,7 +128,7 @@ export function TypeBadge({
   ...props
 }: Omit<BadgeProps, 'variant' | 'children'> & {
   type: 'lint' | 'type' | 'test' | 'security' | 'performance' | 'style';
-}) {
+}): JSX.Element {
   const typeLabels: Record<string, string> = {
     lint: 'Lint',
     type: 'Type',
@@ -139,7 +140,7 @@ export function TypeBadge({
 
   return (
     <Badge variant="neutral" {...props}>
-      {typeLabels[type] || type}
+      {typeLabels[type] ?? type}
     </Badge>
   );
 }

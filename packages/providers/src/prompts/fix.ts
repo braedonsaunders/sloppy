@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Issue, FixResult, FixResultSchema } from '../base.js';
+import { Issue, FixResult } from '../base.js';
 
 // ============================================================================
 // Fix Types
@@ -141,22 +141,22 @@ export function generateFixUserPrompt(options: FixPromptOptions): string {
   parts.push(`**Title**: ${issue.title}`);
   parts.push(`**Severity**: ${issue.severity}`);
   parts.push(`**Category**: ${issue.category}`);
-  parts.push(`**Location**: ${issue.location.file}:${issue.location.startLine}-${issue.location.endLine}`);
+  parts.push(`**Location**: ${issue.location.file}:${String(issue.location.startLine)}-${String(issue.location.endLine)}`);
   parts.push('');
   parts.push('**Description**:');
   parts.push(issue.description);
   parts.push('');
 
-  if (issue.suggestedFix) {
+  if (issue.suggestedFix !== undefined && issue.suggestedFix !== '') {
     parts.push('**Suggested Fix**:');
     parts.push(issue.suggestedFix);
     parts.push('');
   }
 
   // Category-specific instructions
-  const categoryInstructions = FIX_TYPE_INSTRUCTIONS[issue.category];
-  const defaultInstructions = FIX_TYPE_INSTRUCTIONS['default'];
-  const instructions = categoryInstructions ?? defaultInstructions ?? '';
+  const instructions = issue.category in FIX_TYPE_INSTRUCTIONS
+    ? FIX_TYPE_INSTRUCTIONS[issue.category]
+    : FIX_TYPE_INSTRUCTIONS.default;
   parts.push('## Fix Requirements');
   parts.push(instructions);
   parts.push('');
@@ -174,7 +174,7 @@ export function generateFixUserPrompt(options: FixPromptOptions): string {
   parts.push('');
 
   // Additional context
-  if (additionalContext) {
+  if (additionalContext !== undefined && additionalContext !== '') {
     parts.push('## Additional Context');
     parts.push(additionalContext);
     parts.push('');
@@ -190,7 +190,7 @@ export function generateFixUserPrompt(options: FixPromptOptions): string {
 
   // Highlight the relevant section
   parts.push('## Relevant Code Section');
-  parts.push(`Lines ${issue.location.startLine}-${issue.location.endLine}:`);
+  parts.push(`Lines ${String(issue.location.startLine)}-${String(issue.location.endLine)}:`);
   parts.push('');
   parts.push('```' + (language ?? detectLanguage(filePath)));
   parts.push(extractLines(fileContent, issue.location.startLine, issue.location.endLine));
@@ -247,18 +247,18 @@ export function parseFixResponse(response: string): FixResult {
   // Extract JSON from response
   let jsonStr = response;
 
-  const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch?.[1]) {
+  const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(response);
+  if (codeBlockMatch?.[1] !== undefined && codeBlockMatch[1] !== '') {
     jsonStr = codeBlockMatch[1].trim();
   }
 
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (jsonMatch?.[0]) {
+  const jsonMatch = /\{[\s\S]*\}/.exec(jsonStr);
+  if (jsonMatch?.[0] !== undefined && jsonMatch[0] !== '') {
     jsonStr = jsonMatch[0];
   }
 
   // Parse and validate
-  const parsed = JSON.parse(jsonStr);
+  const parsed: unknown = JSON.parse(jsonStr);
   const partial = PartialFixResultSchema.parse(parsed);
 
   return {

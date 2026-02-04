@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import {
   AnalysisResult,
-  AnalysisResultSchema,
   Issue,
   IssueCategory,
   IssueSeverity,
@@ -22,7 +21,7 @@ export type AnalysisType =
 
 export interface AnalysisPromptOptions {
   type: AnalysisType;
-  files: Array<{ path: string; content: string; language?: string }>;
+  files: { path: string; content: string; language?: string }[];
   context?: string;
   focusAreas?: string[];
   ignorePatterns?: string[];
@@ -161,7 +160,7 @@ export function generateAnalysisUserPrompt(options: AnalysisPromptOptions): stri
   parts.push('');
 
   // Add context if provided
-  if (context) {
+  if (context !== undefined && context !== '') {
     parts.push('## Additional Context');
     parts.push(context);
     parts.push('');
@@ -184,10 +183,10 @@ export function generateAnalysisUserPrompt(options: AnalysisPromptOptions): stri
   }
 
   // Add constraints
-  if (maxIssues || minSeverity) {
+  if ((maxIssues !== undefined && maxIssues !== 0) || minSeverity !== undefined) {
     parts.push('## Constraints');
-    if (maxIssues) {
-      parts.push(`- Report at most ${maxIssues} issues`);
+    if (maxIssues !== undefined && maxIssues !== 0) {
+      parts.push(`- Report at most ${String(maxIssues)} issues`);
     }
     if (minSeverity) {
       const severityOrder = ['hint', 'info', 'warning', 'error'];
@@ -304,19 +303,19 @@ export function parseAnalysisResponse(
   // Extract JSON from response (may be wrapped in markdown code blocks)
   let jsonStr = response;
 
-  const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch?.[1]) {
+  const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(response);
+  if (codeBlockMatch?.[1] !== undefined && codeBlockMatch[1] !== '') {
     jsonStr = codeBlockMatch[1].trim();
   }
 
   // Try to find JSON object
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (jsonMatch?.[0]) {
+  const jsonMatch = /\{[\s\S]*\}/.exec(jsonStr);
+  if (jsonMatch?.[0] !== undefined && jsonMatch[0] !== '') {
     jsonStr = jsonMatch[0];
   }
 
   // Parse and validate
-  const parsed = JSON.parse(jsonStr);
+  const parsed: unknown = JSON.parse(jsonStr);
   const partial = PartialAnalysisResultSchema.parse(parsed);
 
   // Normalize and complete the result
@@ -397,7 +396,7 @@ function generateIssueId(
   index: number,
 ): string {
   const prefix = category.slice(0, 3).toUpperCase();
-  const hash = simpleHash(`${file}:${line}:${index}`);
+  const hash = simpleHash(`${file}:${String(line)}:${String(index)}`);
   return `${prefix}-${hash}`;
 }
 

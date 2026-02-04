@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
@@ -22,7 +23,7 @@ export interface SidebarProps {
   className?: string;
 }
 
-export default function Sidebar({ className }: SidebarProps) {
+export default function Sidebar({ className }: SidebarProps): JSX.Element {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
@@ -54,7 +55,7 @@ export default function Sidebar({ className }: SidebarProps) {
           </Link>
         )}
         <button
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          onClick={() => { setIsCollapsed(!isCollapsed); }}
           className={clsx(
             'p-1.5 text-dark-500 hover:text-dark-300 transition-colors rounded-lg hover:bg-dark-700',
             isCollapsed && 'mx-auto'
@@ -108,7 +109,7 @@ export default function Sidebar({ className }: SidebarProps) {
                   key={session.id}
                   session={session}
                   isActive={location.pathname === `/session/${session.id}`}
-                  onClick={() => navigate(`/session/${session.id}`)}
+                  onClick={() => { navigate(`/session/${session.id}`); }}
                 />
               ))}
             </div>
@@ -127,7 +128,7 @@ export default function Sidebar({ className }: SidebarProps) {
                   key={session.id}
                   session={session}
                   isActive={location.pathname === `/session/${session.id}`}
-                  onClick={() => navigate(`/session/${session.id}`)}
+                  onClick={() => { navigate(`/session/${session.id}`); }}
                 />
               ))}
             </div>
@@ -165,7 +166,7 @@ interface NavItemProps {
   isCollapsed: boolean;
 }
 
-function NavItem({ to, icon: Icon, label, isActive, isCollapsed }: NavItemProps) {
+function NavItem({ to, icon: Icon, label, isActive, isCollapsed }: NavItemProps): JSX.Element {
   return (
     <Link
       to={to}
@@ -190,7 +191,7 @@ interface SessionItemProps {
   onClick: () => void;
 }
 
-function SessionItem({ session, isActive, onClick }: SessionItemProps) {
+function SessionItem({ session, isActive, onClick }: SessionItemProps): JSX.Element {
   const statusIcons = {
     running: Clock,
     paused: PauseCircle,
@@ -199,11 +200,12 @@ function SessionItem({ session, isActive, onClick }: SessionItemProps) {
     stopped: XCircle,
   };
 
-  const StatusIcon = statusIcons[session.status] || Clock;
+  const StatusIcon = statusIcons[session.status];
 
   // Handle both camelCase (repoPath) and snake_case (repo_path) field names
-  const repoPath = session.repoPath || (session as unknown as { repo_path?: string }).repo_path || '';
-  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
+  const repoPath = session.repoPath;
+  const repoName = repoPath.split('/').pop() ?? repoPath;
+  const displayName = repoName !== '' ? repoName : 'Unknown';
 
   return (
     <button
@@ -226,9 +228,9 @@ function SessionItem({ session, isActive, onClick }: SessionItemProps) {
         )}
       />
       <div className="flex-1 min-w-0">
-        <p className="truncate font-medium">{repoName}</p>
+        <p className="truncate font-medium">{displayName}</p>
         <p className="text-xs text-dark-500 truncate">
-          {session.stats?.issuesResolved ?? 0}/{session.stats?.issuesFound ?? 0} resolved
+          {session.stats.issuesResolved}/{session.stats.issuesFound} resolved
         </p>
       </div>
     </button>

@@ -7,7 +7,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { glob } from 'glob';
 import type { FileContent } from '../base.js';
 
 /**
@@ -99,8 +98,8 @@ const DEFAULT_CONFIG: Required<FileBrowserConfig> = {
 export class FileBrowser {
   private readonly config: Required<FileBrowserConfig>;
   private readonly rootDir: string;
-  private fileCache: Map<string, FileContent> = new Map();
-  private importGraph: Map<string, Set<string>> = new Map();
+  private fileCache = new Map<string, FileContent>();
+  private importGraph = new Map<string, Set<string>>();
 
   constructor(rootDir: string, config: FileBrowserConfig = {}) {
     this.rootDir = rootDir;
@@ -193,8 +192,9 @@ export class FileBrowser {
    */
   async readFile(filePath: string): Promise<FileContent | null> {
     // Check cache first
-    if (this.fileCache.has(filePath)) {
-      return this.fileCache.get(filePath)!;
+    const cached = this.fileCache.get(filePath);
+    if (cached !== undefined) {
+      return cached;
     }
 
     try {
@@ -229,7 +229,7 @@ export class FileBrowser {
     lineEnd: number
   ): Promise<string> {
     const file = await this.readFile(filePath);
-    if (!file) return '';
+    if (!file) {return '';}
 
     const contextStart = Math.max(0, lineStart - this.config.contextLines - 1);
     const contextEnd = Math.min(
@@ -339,7 +339,7 @@ export class FileBrowser {
       .replace(/\*/g, '[^/]*')
       .replace(/\{\{DOUBLE_STAR\}\}/g, '.*')
       .replace(/\./g, '\\.')
-      .replace(/\{([^}]+)\}/g, (_, group) => `(${group.replace(/,/g, '|')})`);
+      .replace(/\{([^}]+)\}/g, (_: string, group: string) => `(${group.replace(/,/g, '|')})`);
 
     const regex = new RegExp(`^${regexPattern}$`);
     return regex.test(filePath);
@@ -351,7 +351,7 @@ export class FileBrowser {
   private async buildImportGraph(filePaths: string[]): Promise<void> {
     for (const filePath of filePaths) {
       const content = await this.readFile(filePath);
-      if (!content) continue;
+      if (!content) {continue;}
 
       const imports = this.extractImports(content.content, filePath);
       this.importGraph.set(filePath, imports);
@@ -370,12 +370,12 @@ export class FileBrowser {
 
     let match;
     while ((match = importRegex.exec(content)) !== null) {
-      const importPath = this.resolveImportPath(match[1]!, currentFile);
-      if (importPath) imports.add(importPath);
+      const importPath = this.resolveImportPath(match[1], currentFile);
+      if (importPath !== null && importPath !== '') {imports.add(importPath);}
     }
     while ((match = requireRegex.exec(content)) !== null) {
-      const importPath = this.resolveImportPath(match[1]!, currentFile);
-      if (importPath) imports.add(importPath);
+      const importPath = this.resolveImportPath(match[1], currentFile);
+      if (importPath !== null && importPath !== '') {imports.add(importPath);}
     }
 
     return imports;
@@ -394,7 +394,7 @@ export class FileBrowser {
     }
 
     const currentDir = path.dirname(currentFile);
-    let resolved = path.resolve(currentDir, importPath);
+    const resolved = path.resolve(currentDir, importPath);
 
     // Try common extensions
     const extensions = ['.ts', '.tsx', '.js', '.jsx', ''];
@@ -449,7 +449,10 @@ export class FileBrowser {
       if (!byDirectory.has(dir)) {
         byDirectory.set(dir, []);
       }
-      byDirectory.get(dir)!.push(file);
+      const dirFiles = byDirectory.get(dir);
+      if (dirFiles !== undefined) {
+        dirFiles.push(file);
+      }
     }
 
     // Create groups for directories with multiple files
@@ -521,9 +524,9 @@ export class FileBrowser {
    */
   private generateGroupName(dirPath: string): string {
     const parts = dirPath.split('/').filter(Boolean);
-    if (parts.length === 0) return 'Root Files';
+    if (parts.length === 0) {return 'Root Files';}
 
-    const lastPart = parts[parts.length - 1]!;
+    const lastPart = parts[parts.length - 1];
     // Capitalize first letter
     return lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
   }

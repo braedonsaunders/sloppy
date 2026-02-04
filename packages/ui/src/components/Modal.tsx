@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { clsx } from 'clsx';
@@ -39,22 +40,26 @@ export default function Modal({
   closeOnEscape = true,
   footer,
   className,
-}: ModalProps) {
+}: ModalProps): JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Handle escape key
   useEffect(() => {
-    if (!isOpen || !closeOnEscape) return;
+    if (!isOpen || !closeOnEscape) {
+      return;
+    }
 
-    const handleEscape = (e: KeyboardEvent) => {
+    const handleEscape = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         onClose();
       }
     };
 
     document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
+    return (): void => {
+      document.removeEventListener('keydown', handleEscape);
+    };
   }, [isOpen, closeOnEscape, onClose]);
 
   // Lock body scroll when modal is open
@@ -62,18 +67,23 @@ export default function Modal({
     if (isOpen) {
       const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
-      return () => {
+      return (): void => {
         document.body.style.overflow = originalOverflow;
       };
     }
+    return undefined;
   }, [isOpen]);
 
   // Focus trap
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      return;
+    }
 
-    const handleTabKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !contentRef.current) return;
+    const handleTabKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Tab' || contentRef.current === null) {
+        return;
+      }
 
       const focusableElements = contentRef.current.querySelectorAll(
         'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
@@ -85,20 +95,24 @@ export default function Modal({
 
       if (e.shiftKey && document.activeElement === firstElement) {
         e.preventDefault();
-        lastElement?.focus();
+        lastElement.focus();
       } else if (!e.shiftKey && document.activeElement === lastElement) {
         e.preventDefault();
-        firstElement?.focus();
+        firstElement.focus();
       }
     };
 
     document.addEventListener('keydown', handleTabKey);
-    return () => document.removeEventListener('keydown', handleTabKey);
+    return (): void => {
+      document.removeEventListener('keydown', handleTabKey);
+    };
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    return null;
+  }
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
+  const handleOverlayClick = (e: React.MouseEvent): void => {
     if (closeOnOverlayClick && e.target === overlayRef.current) {
       onClose();
     }
@@ -111,8 +125,8 @@ export default function Modal({
       onClick={handleOverlayClick}
       role="dialog"
       aria-modal="true"
-      aria-labelledby={title ? 'modal-title' : undefined}
-      aria-describedby={description ? 'modal-description' : undefined}
+      aria-labelledby={title !== undefined ? 'modal-title' : undefined}
+      aria-describedby={description !== undefined ? 'modal-description' : undefined}
     >
       <div
         ref={contentRef}
@@ -125,10 +139,10 @@ export default function Modal({
         )}
       >
         {/* Header */}
-        {(title || showCloseButton) && (
+        {(title !== undefined || showCloseButton) && (
           <div className="flex items-start justify-between border-b border-dark-700 px-6 py-4">
             <div>
-              {title && (
+              {title !== undefined && (
                 <h2
                   id="modal-title"
                   className="text-lg font-semibold text-dark-100"
@@ -136,7 +150,7 @@ export default function Modal({
                   {title}
                 </h2>
               )}
-              {description && (
+              {description !== undefined && (
                 <p
                   id="modal-description"
                   className="mt-1 text-sm text-dark-400"
@@ -163,7 +177,7 @@ export default function Modal({
         <div className="px-6 py-4">{children}</div>
 
         {/* Footer */}
-        {footer && (
+        {footer !== undefined && (
           <div className="flex items-center justify-end gap-3 border-t border-dark-700 px-6 py-4">
             {footer}
           </div>
@@ -197,7 +211,7 @@ export function ConfirmModal({
   cancelText = 'Cancel',
   variant = 'primary',
   isLoading = false,
-}: ConfirmModalProps) {
+}: ConfirmModalProps): JSX.Element {
   return (
     <Modal
       isOpen={isOpen}

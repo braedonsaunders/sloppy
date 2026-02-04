@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Issue, VerifyResult, VerifyResultSchema } from '../base.js';
+import { Issue, VerifyResult } from '../base.js';
 
 // ============================================================================
 // Verify Types
@@ -81,13 +81,13 @@ export function generateVerifyUserPrompt(options: VerifyPromptOptions): string {
   parts.push(`**Title**: ${issue.title}`);
   parts.push(`**Severity**: ${issue.severity}`);
   parts.push(`**Category**: ${issue.category}`);
-  parts.push(`**Location**: ${issue.location.file}:${issue.location.startLine}-${issue.location.endLine}`);
+  parts.push(`**Location**: ${issue.location.file}:${String(issue.location.startLine)}-${String(issue.location.endLine)}`);
   parts.push('');
   parts.push('**Description**:');
   parts.push(issue.description);
   parts.push('');
 
-  if (issue.suggestedFix) {
+  if (issue.suggestedFix !== undefined && issue.suggestedFix !== '') {
     parts.push('**Original Suggested Fix**:');
     parts.push(issue.suggestedFix);
     parts.push('');
@@ -119,7 +119,7 @@ export function generateVerifyUserPrompt(options: VerifyPromptOptions): string {
   parts.push('');
 
   // Additional context
-  if (additionalContext) {
+  if (additionalContext !== undefined && additionalContext !== '') {
     parts.push('## Additional Context');
     parts.push(additionalContext);
     parts.push('');
@@ -253,18 +253,18 @@ export function parseVerifyResponse(response: string): VerifyResult {
   // Extract JSON from response
   let jsonStr = response;
 
-  const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch?.[1]) {
+  const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(response);
+  if (codeBlockMatch?.[1] !== undefined && codeBlockMatch[1] !== '') {
     jsonStr = codeBlockMatch[1].trim();
   }
 
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (jsonMatch?.[0]) {
+  const jsonMatch = /\{[\s\S]*\}/.exec(jsonStr);
+  if (jsonMatch?.[0] !== undefined && jsonMatch[0] !== '') {
     jsonStr = jsonMatch[0];
   }
 
   // Parse and validate
-  const parsed = JSON.parse(jsonStr);
+  const parsed: unknown = JSON.parse(jsonStr);
   const partial = PartialVerifyResultSchema.parse(parsed);
 
   return {
@@ -326,7 +326,7 @@ function formatWithLineNumbers(
   content: string,
   highlightStart: number,
   highlightEnd: number,
-  contextLines: number = 5,
+  contextLines = 5,
 ): string {
   const lines = content.split('\n');
   const start = Math.max(0, highlightStart - contextLines - 1);

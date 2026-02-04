@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useEffect, useRef } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -42,7 +43,7 @@ export default function ActivityLog({
   maxHeight = '400px',
   autoScroll = true,
   className,
-}: ActivityLogProps) {
+}: ActivityLogProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -92,9 +93,9 @@ interface ActivityItemProps {
   activity: Activity;
 }
 
-function ActivityItem({ activity }: ActivityItemProps) {
-  const Icon = activityIcons[activity.type] || Clock;
-  const colorClass = activityColors[activity.type] || activityColors.waiting;
+function ActivityItem({ activity }: ActivityItemProps): JSX.Element {
+  const Icon = activityIcons[activity.type];
+  const colorClass = activityColors[activity.type];
 
   const time = new Date(activity.timestamp).toLocaleTimeString([], {
     hour: '2-digit',
@@ -114,7 +115,7 @@ function ActivityItem({ activity }: ActivityItemProps) {
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm text-dark-200">{activity.message}</p>
-        {activity.details && (
+        {activity.details !== undefined && (
           <ActivityDetails details={activity.details} />
         )}
       </div>
@@ -127,12 +128,14 @@ interface ActivityDetailsProps {
   details: Record<string, unknown>;
 }
 
-function ActivityDetails({ details }: ActivityDetailsProps) {
+function ActivityDetails({ details }: ActivityDetailsProps): JSX.Element | null {
   const entries = Object.entries(details).filter(
     ([, value]) => value !== undefined && value !== null
   );
 
-  if (entries.length === 0) return null;
+  if (entries.length === 0) {
+    return null;
+  }
 
   return (
     <div className="mt-1.5 space-y-1">
@@ -156,11 +159,21 @@ function formatKey(key: string): string {
 }
 
 function formatValue(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') return value.toString();
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  if (Array.isArray(value)) return value.join(', ');
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value.toString();
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+  if (Array.isArray(value)) {
+    return value.join(', ');
+  }
+  if (typeof value === 'object' && value !== null) {
+    return JSON.stringify(value);
+  }
   return String(value);
 }
 
@@ -175,8 +188,8 @@ export function ActivityIndicator({
   activity,
   isActive = false,
   className,
-}: ActivityIndicatorProps) {
-  if (!activity && !isActive) {
+}: ActivityIndicatorProps): JSX.Element {
+  if (activity === undefined && !isActive) {
     return (
       <div className={twMerge('flex items-center gap-2', className)}>
         <span className="h-2 w-2 rounded-full bg-dark-600" />
@@ -185,7 +198,7 @@ export function ActivityIndicator({
     );
   }
 
-  if (!activity) {
+  if (activity === undefined) {
     return (
       <div className={twMerge('flex items-center gap-2', className)}>
         <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
@@ -194,8 +207,8 @@ export function ActivityIndicator({
     );
   }
 
-  const Icon = activityIcons[activity.type] || Clock;
-  const colorClass = activityColors[activity.type] || activityColors.waiting;
+  const Icon = activityIcons[activity.type];
+  const colorClass = activityColors[activity.type];
 
   return (
     <div className={twMerge('flex items-center gap-2', className)}>

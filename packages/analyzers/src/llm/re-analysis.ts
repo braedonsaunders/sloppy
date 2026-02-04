@@ -8,8 +8,7 @@
  */
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-import type { Issue, IssueCategory, Severity, AnalyzerOptions } from '../base.js';
+import type { Issue } from '../base.js';
 import { ToolExecutor } from './tool-executor.js';
 import { generateReAnalysisPrompt, mapToIssueCategory, mapToSeverity } from './prompts.js';
 
@@ -138,7 +137,7 @@ export class ReAnalysisLoop {
     this.rootDir = rootDir;
     this.config = {
       ...DEFAULT_CONFIG,
-      apiKey: config.apiKey ?? process.env['ANTHROPIC_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '',
+      apiKey: config.apiKey ?? process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? '',
       ...config,
     };
     this.toolExecutor = new ToolExecutor(rootDir);
@@ -261,7 +260,7 @@ export class ReAnalysisLoop {
         break;
       }
 
-      console.log(`[Re-Analysis] Iteration ${iteration + 1}: ${currentIssues.length} issues to process`);
+      console.warn(`[Re-Analysis] Iteration ${String(iteration + 1)}: ${String(currentIssues.length)} issues to process`);
 
       const newIssues: Issue[] = [];
       const resolvedInIteration: Issue[] = [];
@@ -271,7 +270,7 @@ export class ReAnalysisLoop {
         // Try to fix the issue
         const fixResult = await fixCallback(issue);
 
-        if (!fixResult || !fixResult.fixApplied) {
+        if (fixResult?.fixApplied !== true) {
           failedInIteration.push(issue);
           continue;
         }
@@ -341,7 +340,7 @@ export class ReAnalysisLoop {
       const response = await this.callLLM(RE_ANALYSIS_SYSTEM_PROMPT, prompt);
 
       // Parse JSON response
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      const jsonMatch = /\{[\s\S]*\}/.exec(response);
       if (!jsonMatch) {
         return {
           issueResolved: false,
@@ -354,7 +353,7 @@ export class ReAnalysisLoop {
       const parsed = JSON.parse(jsonMatch[0]) as {
         originalIssueResolved: boolean;
         resolutionAssessment: string;
-        newIssues: Array<{
+        newIssues: {
           type: string;
           severity: string;
           title: string;
@@ -362,13 +361,13 @@ export class ReAnalysisLoop {
           lineStart: number;
           lineEnd: number;
           suggestedFix?: string;
-        }>;
+        }[];
         remainingConcerns: string[];
       };
 
       // Convert new issues to Issue format
       const newIssues: Issue[] = parsed.newIssues.map((i, idx) => ({
-        id: `reanalysis-${Date.now()}-${idx}`,
+        id: `reanalysis-${String(Date.now())}-${String(idx)}`,
         category: mapToIssueCategory(i.type),
         severity: mapToSeverity(i.severity),
         message: i.title,
@@ -442,10 +441,10 @@ export class ReAnalysisLoop {
    * Check if all verifications passed
    */
   private allVerificationsPassed(verification: ReAnalysisResult['verification']): boolean {
-    if (verification.tests && !verification.tests.passed) return false;
-    if (verification.lint && !verification.lint.passed) return false;
-    if (verification.typeCheck && !verification.typeCheck.passed) return false;
-    if (verification.build && !verification.build.passed) return false;
+    if (verification.tests && !verification.tests.passed) {return false;}
+    if (verification.lint && !verification.lint.passed) {return false;}
+    if (verification.typeCheck && !verification.typeCheck.passed) {return false;}
+    if (verification.build && !verification.build.passed) {return false;}
     return true;
   }
 
@@ -455,10 +454,10 @@ export class ReAnalysisLoop {
   private generateSummary(result: AnalysisLoopResult): string {
     const parts: string[] = [];
 
-    parts.push(`Analysis Loop completed after ${result.iterations} iteration(s).`);
-    parts.push(`Total issues found: ${result.allIssues.length}`);
-    parts.push(`Issues resolved: ${result.resolvedIssues.length}`);
-    parts.push(`Issues remaining: ${result.failedIssues.length}`);
+    parts.push(`Analysis Loop completed after ${String(result.iterations)} iteration(s).`);
+    parts.push(`Total issues found: ${String(result.allIssues.length)}`);
+    parts.push(`Issues resolved: ${String(result.resolvedIssues.length)}`);
+    parts.push(`Issues remaining: ${String(result.failedIssues.length)}`);
 
     if (result.isClean) {
       parts.push('✓ Codebase is clean!');

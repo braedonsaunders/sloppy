@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState, useMemo } from 'react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import { twMerge } from 'tailwind-merge';
@@ -88,16 +89,18 @@ export default function DiffViewer({
   collapsible = false,
   defaultExpanded = true,
   maxHeight = '500px',
-}: DiffViewerProps) {
+}: DiffViewerProps): JSX.Element {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [copied, setCopied] = useState<'old' | 'new' | null>(null);
 
   const hasChanges = useMemo(() => oldValue !== newValue, [oldValue, newValue]);
 
-  const handleCopy = async (content: string, type: 'old' | 'new') => {
-    await navigator.clipboard.writeText(content);
+  const handleCopy = (content: string, type: 'old' | 'new'): void => {
+    void navigator.clipboard.writeText(content);
     setCopied(type);
-    setTimeout(() => setCopied(null), 2000);
+    setTimeout(() => {
+      setCopied(null);
+    }, 2000);
   };
 
   if (!hasChanges) {
@@ -123,7 +126,9 @@ export default function DiffViewer({
       {/* Header */}
       {collapsible && (
         <button
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={() => {
+            setIsExpanded(!isExpanded);
+          }}
           className="flex w-full items-center justify-between px-4 py-3 bg-dark-800 hover:bg-dark-700 transition-colors"
         >
           <span className="text-sm font-medium text-dark-200">Diff View</span>
@@ -143,7 +148,9 @@ export default function DiffViewer({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => handleCopy(oldValue, 'old')}
+              onClick={() => {
+                handleCopy(oldValue, 'old');
+              }}
               className="h-7 px-2"
               title="Copy original"
             >
@@ -156,7 +163,9 @@ export default function DiffViewer({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => handleCopy(newValue, 'new')}
+              onClick={() => {
+                handleCopy(newValue, 'new');
+              }}
               className="h-7 px-2"
               title="Copy modified"
             >
@@ -199,7 +208,7 @@ export interface InlineDiffProps {
   className?: string;
 }
 
-export function InlineDiff({ oldValue, newValue, className }: InlineDiffProps) {
+export function InlineDiff({ oldValue, newValue, className }: InlineDiffProps): JSX.Element {
   if (oldValue === newValue) {
     return (
       <code className={twMerge('text-dark-300 font-mono text-sm', className)}>

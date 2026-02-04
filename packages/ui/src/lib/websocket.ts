@@ -1,23 +1,23 @@
 // Helper to convert snake_case keys to camelCase
 function snakeToCamel(str: string): string {
-  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+  return str.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
-function normalizeKeys<T>(obj: unknown): T {
+function normalizeKeys(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
-    return obj as T;
+    return obj;
   }
   if (Array.isArray(obj)) {
-    return obj.map(normalizeKeys) as T;
+    return obj.map((item: unknown) => normalizeKeys(item));
   }
   if (typeof obj === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       result[snakeToCamel(key)] = normalizeKeys(value);
     }
-    return result as T;
+    return result;
   }
-  return obj as T;
+  return obj;
 }
 
 export type WebSocketMessageType =
@@ -61,8 +61,8 @@ export class WebSocketClient {
   private ws: WebSocket | null = null;
   private options: Required<WebSocketClientOptions>;
   private reconnectAttempts = 0;
-  private handlers: Map<string, Set<MessageHandler>> = new Map();
-  private globalHandlers: Set<MessageHandler> = new Set();
+  private handlers = new Map<string, Set<MessageHandler>>();
+  private globalHandlers = new Set<MessageHandler>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isConnecting = false;
@@ -111,7 +111,10 @@ export class WebSocketClient {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
     }
-    this.handlers.get(type)!.add(handler as MessageHandler);
+    const handlers = this.handlers.get(type);
+    if (handlers !== undefined) {
+      handlers.add(handler as MessageHandler);
+    }
 
     return () => {
       this.handlers.get(type)?.delete(handler as MessageHandler);
@@ -151,33 +154,34 @@ export class WebSocketClient {
   }
 
   get connectionState(): 'connecting' | 'connected' | 'disconnected' | 'reconnecting' {
-    if (this.isConnecting) return 'connecting';
-    if (this.ws?.readyState === WebSocket.OPEN) return 'connected';
-    if (this.reconnectTimer) return 'reconnecting';
+    if (this.isConnecting) {return 'connecting';}
+    if (this.ws?.readyState === WebSocket.OPEN) {return 'connected';}
+    if (this.reconnectTimer) {return 'reconnecting';}
     return 'disconnected';
   }
 
   private setupEventHandlers(): void {
-    if (!this.ws) return;
+    if (!this.ws) {return;}
 
-    this.ws.onopen = () => {
-      console.log('WebSocket connected');
+    this.ws.onopen = (): void => {
+      // WebSocket connected
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this.startHeartbeat();
     };
 
-    this.ws.onmessage = (event) => {
+    this.ws.onmessage = (event: MessageEvent): void => {
       try {
-        const raw = JSON.parse(event.data);
+        const parsed: unknown = JSON.parse(String(event.data));
+        const raw = parsed as Record<string, unknown>;
         // Normalize message format: server sends 'data', client expects 'payload'
         // Also normalize snake_case keys to camelCase
         const payload = normalizeKeys(raw.payload ?? raw.data);
         const message: WebSocketMessage = {
-          type: raw.type,
-          sessionId: raw.sessionId ?? raw.session_id,
+          type: raw.type as WebSocketMessageType,
+          sessionId: (raw.sessionId ?? raw.session_id) as string | undefined,
           payload,
-          timestamp: raw.timestamp,
+          timestamp: raw.timestamp as string,
         };
         this.handleMessage(message);
       } catch (error) {
@@ -185,13 +189,13 @@ export class WebSocketClient {
       }
     };
 
-    this.ws.onerror = (error) => {
+    this.ws.onerror = (error: Event): void => {
       console.error('WebSocket error:', error);
       this.isConnecting = false;
     };
 
-    this.ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
+    this.ws.onclose = (event: CloseEvent): void => {
+      console.warn('WebSocket closed:', event.code, event.reason);
       this.isConnecting = false;
       this.cleanup();
 
@@ -247,7 +251,7 @@ export class WebSocketClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (this.reconnectTimer) {return;}
 
     if (this.reconnectAttempts >= this.options.maxReconnectAttempts) {
       console.error('Max reconnect attempts reached');
@@ -255,7 +259,7 @@ export class WebSocketClient {
     }
 
     const delay = this.options.reconnectInterval * Math.pow(2, this.reconnectAttempts);
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1})`);
+    console.warn(`Reconnecting in ${String(delay)}ms (attempt ${String(this.reconnectAttempts + 1)})`);
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;

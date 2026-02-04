@@ -53,7 +53,7 @@ export class BugAnalyzer extends BaseAnalyzer {
     'shadowed-variable',
   ];
 
-  async analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
+  analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
     const issues: Issue[] = [];
     const config = this.getConfig(options);
 
@@ -86,12 +86,12 @@ export class BugAnalyzer extends BaseAnalyzer {
         }
       }
 
-      this.log(options, `Analyzed ${files.length} files, found ${issues.length} potential bugs`);
+      this.log(options, `Analyzed ${String(files.length)} files, found ${String(issues.length)} potential bugs`);
     } catch (error) {
       this.logError('Failed to create TypeScript program', error);
     }
 
-    return issues;
+    return Promise.resolve(issues);
   }
 
   /**
@@ -144,8 +144,8 @@ export class BugAnalyzer extends BaseAnalyzer {
       skipLibCheck: true,
     };
 
-    if (tsconfigPath) {
-      const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+    if (tsconfigPath !== undefined && tsconfigPath !== '') {
+      const configFile = ts.readConfigFile(tsconfigPath, (p: string) => ts.sys.readFile(p));
       if (!configFile.error) {
         const parsed = ts.parseJsonConfigFileContent(
           configFile.config,
@@ -167,7 +167,7 @@ export class BugAnalyzer extends BaseAnalyzer {
     checker: ts.TypeChecker,
     program: ts.Program,
     config: Required<BugAnalyzerConfig>,
-    options: AnalyzerOptions
+    _options: AnalyzerOptions
   ): Issue[] {
     const issues: Issue[] = [];
     const patterns = new Set(config.patterns);
@@ -611,7 +611,10 @@ export class BugAnalyzer extends BaseAnalyzer {
     const varName = node.name.text;
 
     // Walk up the scope chain to find shadowed variables
-    let parent = node.parent?.parent?.parent; // Go up to block/function level
+    // Navigate up the tree: VariableDeclaration -> VariableDeclarationList -> VariableStatement -> Block/Function
+    const parentNode = node.parent;
+    const grandParent = parentNode.parent;
+    let parent: ts.Node | undefined = grandParent.parent as ts.Node | undefined; // Go up to block/function level
 
     while (parent) {
       if (ts.isFunctionDeclaration(parent) ||

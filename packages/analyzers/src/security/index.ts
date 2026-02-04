@@ -48,7 +48,7 @@ interface SecurityPattern {
 const SECRET_PATTERNS: SecurityPattern[] = [
   {
     type: 'hardcoded-secret',
-    pattern: /(?:api[_-]?key|apikey)\s*[:=]\s*['"`]([a-zA-Z0-9_\-]{20,})['"`]/i,
+    pattern: /(?:api[_-]?key|apikey)\s*[:=]\s*['"`]([a-zA-Z0-9_-]{20,})['"`]/i,
     severity: 'error',
     message: 'Potential hardcoded API key detected',
     description: 'Hardcoded API keys can be extracted from source code and misused.',
@@ -83,7 +83,7 @@ const SECRET_PATTERNS: SecurityPattern[] = [
   },
   {
     type: 'hardcoded-secret',
-    pattern: /(?:bearer|token)\s+[a-zA-Z0-9_\-\.]{20,}/i,
+    pattern: /(?:bearer|token)\s+[a-zA-Z0-9_.-]{20,}/i,
     severity: 'error',
     message: 'Potential hardcoded bearer token detected',
     description: 'Bearer tokens should not be hardcoded.',
@@ -288,7 +288,7 @@ export class SecurityAnalyzer extends BaseAnalyzer {
         issues.push(...regexIssues);
 
         // Run AST-based detection for more accurate results
-        const astIssues = await this.detectWithAST(file, config, options);
+        const astIssues = this.detectWithAST(file, config, options);
         issues.push(...astIssues);
       } catch (error) {
         this.logError(`Failed to analyze ${file.path}`, error);
@@ -298,7 +298,7 @@ export class SecurityAnalyzer extends BaseAnalyzer {
     // Deduplicate issues (regex and AST might find the same issues)
     const uniqueIssues = this.deduplicateIssues(issues);
 
-    this.log(options, `Found ${uniqueIssues.length} security issues in ${files.length} files`);
+    this.log(options, `Found ${String(uniqueIssues.length)} security issues in ${String(files.length)} files`);
 
     return uniqueIssues;
   }
@@ -356,7 +356,7 @@ export class SecurityAnalyzer extends BaseAnalyzer {
         }
 
         // Check for false positives
-        if (pattern.falsePositivePatterns?.some((fp) => fp.test(line))) {
+        if (pattern.falsePositivePatterns?.some((fp) => fp.test(line)) === true) {
           continue;
         }
 
@@ -423,11 +423,11 @@ export class SecurityAnalyzer extends BaseAnalyzer {
   /**
    * Detect security issues using AST analysis
    */
-  private async detectWithAST(
+  private detectWithAST(
     file: FileContent,
-    config: Required<SecurityAnalyzerConfig>,
+    _config: Required<SecurityAnalyzerConfig>,
     options: AnalyzerOptions
-  ): Promise<Issue[]> {
+  ): Issue[] {
     const issues: Issue[] = [];
 
     try {
@@ -459,7 +459,7 @@ export class SecurityAnalyzer extends BaseAnalyzer {
           issues.push(prototypeIssue);
         }
       });
-    } catch (error) {
+    } catch {
       this.log(options, `AST parsing failed for ${file.path}, using regex-only detection`);
     }
 
@@ -473,29 +473,34 @@ export class SecurityAnalyzer extends BaseAnalyzer {
     node: TSESTree.Node,
     file: FileContent
   ): Issue | null {
-    if (
-      node.type === 'CallExpression' &&
-      node.callee.type === 'Identifier' &&
-      node.callee.name === 'eval' &&
-      node.loc
-    ) {
-      return this.createIssue({
-        severity: 'error',
-        message: 'eval() usage detected',
-        description: 'eval() can execute arbitrary code and is a security risk.',
-        location: {
-          file: file.path,
-          line: node.loc.start.line,
-          column: node.loc.start.column + 1,
-        },
-        suggestion: 'Avoid eval(). Use safer alternatives like JSON.parse() for data.',
-        metadata: {
-          vulnerabilityType: 'xss',
-        },
-      });
+    const nodeType = node.type as string;
+    if (nodeType !== 'CallExpression') {
+      return null;
+    }
+    const callNode = node as TSESTree.CallExpression;
+    const calleeType = callNode.callee.type as string;
+    if (calleeType !== 'Identifier') {
+      return null;
+    }
+    const callee = callNode.callee as TSESTree.Identifier;
+    if (callee.name !== 'eval') {
+      return null;
     }
 
-    return null;
+    return this.createIssue({
+      severity: 'error',
+      message: 'eval() usage detected',
+      description: 'eval() can execute arbitrary code and is a security risk.',
+      location: {
+        file: file.path,
+        line: node.loc.start.line,
+        column: node.loc.start.column + 1,
+      },
+      suggestion: 'Avoid eval(). Use safer alternatives like JSON.parse() for data.',
+      metadata: {
+        vulnerabilityType: 'xss',
+      },
+    });
   }
 
   /**
@@ -505,53 +510,57 @@ export class SecurityAnalyzer extends BaseAnalyzer {
     node: TSESTree.Node,
     file: FileContent
   ): Issue | null {
-    if (node.type !== 'CallExpression' || !node.loc) {
+    const nodeType = node.type as string;
+    if (nodeType !== 'CallExpression') {
       return null;
     }
+    const callNode = node as TSESTree.CallExpression;
+    const calleeType = callNode.callee.type as string;
 
     // Check for Function constructor
-    if (
-      node.callee.type === 'Identifier' &&
-      node.callee.name === 'Function'
-    ) {
-      return this.createIssue({
-        severity: 'error',
-        message: 'Function constructor usage detected',
-        description: 'The Function constructor can execute arbitrary code like eval().',
-        location: {
-          file: file.path,
-          line: node.loc.start.line,
-          column: node.loc.start.column + 1,
-        },
-        suggestion: 'Avoid Function constructor. Use regular function declarations.',
-        metadata: {
-          vulnerabilityType: 'xss',
-        },
-      });
-    }
+    if (calleeType === 'Identifier') {
+      const calleeName = (callNode.callee as TSESTree.Identifier).name;
+      if (calleeName === 'Function') {
+        return this.createIssue({
+          severity: 'error',
+          message: 'Function constructor usage detected',
+          description: 'The Function constructor can execute arbitrary code like eval().',
+          location: {
+            file: file.path,
+            line: node.loc.start.line,
+            column: node.loc.start.column + 1,
+          },
+          suggestion: 'Avoid Function constructor. Use regular function declarations.',
+          metadata: {
+            vulnerabilityType: 'xss',
+          },
+        });
+      }
 
-    // Check for setTimeout/setInterval with string argument
-    if (
-      node.callee.type === 'Identifier' &&
-      (node.callee.name === 'setTimeout' || node.callee.name === 'setInterval') &&
-      node.arguments.length > 0 &&
-      node.arguments[0]?.type === 'Literal' &&
-      typeof (node.arguments[0] as TSESTree.Literal).value === 'string'
-    ) {
-      return this.createIssue({
-        severity: 'warning',
-        message: `${node.callee.name}() with string argument`,
-        description: 'Passing a string to setTimeout/setInterval is evaluated like eval().',
-        location: {
-          file: file.path,
-          line: node.loc.start.line,
-          column: node.loc.start.column + 1,
-        },
-        suggestion: 'Pass a function reference instead of a string.',
-        metadata: {
-          vulnerabilityType: 'xss',
-        },
-      });
+      // Check for setTimeout/setInterval with string argument
+      if (
+        (calleeName === 'setTimeout' || calleeName === 'setInterval') &&
+        callNode.arguments.length > 0
+      ) {
+        const firstArg = callNode.arguments[0];
+        const argType = firstArg.type as string;
+        if (argType === 'Literal' && typeof (firstArg as TSESTree.Literal).value === 'string') {
+          return this.createIssue({
+            severity: 'warning',
+            message: `${calleeName}() with string argument`,
+            description: 'Passing a string to setTimeout/setInterval is evaluated like eval().',
+            location: {
+              file: file.path,
+              line: node.loc.start.line,
+              column: node.loc.start.column + 1,
+            },
+            suggestion: 'Pass a function reference instead of a string.',
+            metadata: {
+              vulnerabilityType: 'xss',
+            },
+          });
+        }
+      }
     }
 
     return null;
@@ -565,29 +574,32 @@ export class SecurityAnalyzer extends BaseAnalyzer {
     file: FileContent
   ): Issue | null {
     // Check for __proto__ or constructor.prototype access
-    if (
-      node.type === 'MemberExpression' &&
-      node.property.type === 'Identifier' &&
-      node.loc
-    ) {
-      const propName = node.property.name;
+    const nodeType = node.type as string;
+    if (nodeType !== 'MemberExpression') {
+      return null;
+    }
+    const memberNode = node as TSESTree.MemberExpression;
+    const propType = memberNode.property.type as string;
+    if (propType !== 'Identifier') {
+      return null;
+    }
+    const propName = (memberNode.property as TSESTree.Identifier).name;
 
-      if (propName === '__proto__') {
-        return this.createIssue({
-          severity: 'warning',
-          message: '__proto__ property access detected',
-          description: 'Direct __proto__ access can lead to prototype pollution.',
-          location: {
-            file: file.path,
-            line: node.loc.start.line,
-            column: node.loc.start.column + 1,
-          },
-          suggestion: 'Use Object.getPrototypeOf() or Object.setPrototypeOf() instead.',
-          metadata: {
-            vulnerabilityType: 'prototype-pollution',
-          },
-        });
-      }
+    if (propName === '__proto__') {
+      return this.createIssue({
+        severity: 'warning',
+        message: '__proto__ property access detected',
+        description: 'Direct __proto__ access can lead to prototype pollution.',
+        location: {
+          file: file.path,
+          line: node.loc.start.line,
+          column: node.loc.start.column + 1,
+        },
+        suggestion: 'Use Object.getPrototypeOf() or Object.setPrototypeOf() instead.',
+        metadata: {
+          vulnerabilityType: 'prototype-pollution',
+        },
+      });
     }
 
     return null;
@@ -604,10 +616,10 @@ export class SecurityAnalyzer extends BaseAnalyzer {
 
     for (const key of Object.keys(node)) {
       const value = (node as unknown as Record<string, unknown>)[key];
-      if (value && typeof value === 'object') {
+      if (value !== null && value !== undefined && typeof value === 'object') {
         if (Array.isArray(value)) {
           for (const item of value) {
-            if (item && typeof item === 'object' && 'type' in item) {
+            if (item !== null && item !== undefined && typeof item === 'object' && 'type' in item) {
               this.traverseAST(item as TSESTree.Node, callback);
             }
           }
@@ -626,7 +638,7 @@ export class SecurityAnalyzer extends BaseAnalyzer {
     const unique: Issue[] = [];
 
     for (const issue of issues) {
-      const key = `${issue.location.file}:${issue.location.line}:${issue.message}`;
+      const key = `${issue.location.file}:${String(issue.location.line)}:${issue.message}`;
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(issue);

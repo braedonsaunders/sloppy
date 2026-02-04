@@ -23,11 +23,9 @@ import {
   type Issue,
   type AnalyzerOptions,
   type IssueCategory,
-  type Severity,
-  type FileContent,
 } from '../base.js';
 import { FileBrowser, type FileBrowserConfig } from './file-browser.js';
-import { ToolExecutor, TOOL_DEFINITIONS, type ESLintIssue, type TypeScriptError } from './tool-executor.js';
+import { ToolExecutor, TOOL_DEFINITIONS } from './tool-executor.js';
 import {
   LLM_ANALYSIS_SYSTEM_PROMPT,
   generateAnalysisPrompt,
@@ -183,19 +181,16 @@ function detectApiKey(provider: LLMProviderType): string {
     cohere: ['COHERE_API_KEY', 'CO_API_KEY'],
   };
 
-  for (const key of envKeys[provider] ?? []) {
-    if (process.env[key]) return process.env[key]!;
+  const keys = envKeys[provider];
+  for (const key of keys) {
+    const value = process.env[key];
+    if (value !== undefined && value !== '') {return value;}
   }
 
   // Fallback to common keys
-  return process.env['ANTHROPIC_API_KEY'] ?? process.env['OPENAI_API_KEY'] ?? '';
-}
-
-/**
- * Check if a provider uses OpenAI-compatible API
- */
-function isOpenAICompatible(provider: LLMProviderType): boolean {
-  return provider !== 'claude';
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  return anthropicKey !== undefined && anthropicKey !== '' ? anthropicKey : (openaiKey !== undefined && openaiKey !== '' ? openaiKey : '');
 }
 
 /**
@@ -264,14 +259,14 @@ export class LLMAnalyzer extends BaseAnalyzer {
     this.toolExecutor = new ToolExecutor(options.rootDir, this.config.toolTimeout);
 
     try {
-      this.log(options, `Starting LLM analysis of ${files.length} files`);
+      this.log(options, `Starting LLM analysis of ${String(files.length)} files`);
 
       // Phase 1: Run static tools first to gather context
       const toolContext = await this.runInitialTools(options);
 
       // Phase 2: Explore and prioritize files
       const exploration = await this.fileBrowser.explore(files);
-      this.log(options, `Prioritized ${exploration.prioritizedFiles.length} files for analysis`);
+      this.log(options, `Prioritized ${String(exploration.prioritizedFiles.length)} files for analysis`);
 
       // Phase 3: Run agentic analysis
       const agentIssues = await this.runAgenticAnalysis(
@@ -292,11 +287,11 @@ export class LLMAnalyzer extends BaseAnalyzer {
         issues.push(...groupIssues);
       }
 
-      this.log(options, `LLM analysis complete. Found ${issues.length} issues`);
+      this.log(options, `LLM analysis complete. Found ${String(issues.length)} issues`);
     } catch (error) {
       this.logError('LLM analysis failed', error);
     } finally {
-      this.fileBrowser?.clearCache();
+      this.fileBrowser.clearCache();
     }
 
     return this.deduplicateIssues(issues);
@@ -308,46 +303,46 @@ export class LLMAnalyzer extends BaseAnalyzer {
   private async runInitialTools(options: AnalyzerOptions): Promise<string> {
     const contextParts: string[] = [];
 
-    if (this.config.runLint) {
+    if (this.config.runLint && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running ESLint...');
-        const lintResult = await this.toolExecutor!.runESLint();
+        const lintResult = await this.toolExecutor.runESLint();
         contextParts.push(`## ESLint Results\n${lintResult.output}`);
 
         // Convert ESLint issues to analyzer issues immediately
         // These will be deduplicated later
       } catch (error) {
-        this.log(options, `ESLint failed: ${error}`);
+        this.log(options, `ESLint failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    if (this.config.runTypeCheck) {
+    if (this.config.runTypeCheck && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running TypeScript check...');
-        const typeResult = await this.toolExecutor!.runTypeCheck();
+        const typeResult = await this.toolExecutor.runTypeCheck();
         contextParts.push(`## TypeScript Check Results\n${typeResult.output}`);
       } catch (error) {
-        this.log(options, `TypeScript check failed: ${error}`);
+        this.log(options, `TypeScript check failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    if (this.config.runTests) {
+    if (this.config.runTests && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running tests...');
-        const testResult = await this.toolExecutor!.runTests();
+        const testResult = await this.toolExecutor.runTests();
         contextParts.push(`## Test Results\n${testResult.output}`);
       } catch (error) {
-        this.log(options, `Tests failed: ${error}`);
+        this.log(options, `Tests failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    if (this.config.runBuild) {
+    if (this.config.runBuild && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running build...');
-        const buildResult = await this.toolExecutor!.runBuild();
+        const buildResult = await this.toolExecutor.runBuild();
         contextParts.push(`## Build Results\n${buildResult.output}`);
       } catch (error) {
-        this.log(options, `Build failed: ${error}`);
+        this.log(options, `Build failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -376,7 +371,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
 
     // Run agentic loop
     for (let iteration = 0; iteration < this.config.maxIterations; iteration++) {
-      this.log(options, `Agentic iteration ${iteration + 1}/${this.config.maxIterations}`);
+      this.log(options, `Agentic iteration ${String(iteration + 1)}/${String(this.config.maxIterations)}`);
 
       try {
         const response = await this.callLLM(messages);
@@ -413,7 +408,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
           messages.push({ role: 'assistant', content: response.content });
         }
       } catch (error) {
-        this.logError(`Iteration ${iteration + 1} failed`, error);
+        this.logError(`Iteration ${String(iteration + 1)} failed`, error);
         break;
       }
     }
@@ -432,8 +427,11 @@ export class LLMAnalyzer extends BaseAnalyzer {
     const issues: Issue[] = [];
 
     // Read file contents
-    const fileContents = await this.fileBrowser!.readFiles(files.slice(0, this.config.batchSize));
-    if (fileContents.length === 0) return issues;
+    if (this.fileBrowser === null) {
+      return issues;
+    }
+    const fileContents = await this.fileBrowser.readFiles(files.slice(0, this.config.batchSize));
+    if (fileContents.length === 0) {return issues;}
 
     // Build analysis prompt
     const filesForPrompt = fileContents.map(f => ({
@@ -443,7 +441,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
 
     const analysisPrompt = generateAnalysisPrompt(
       filesForPrompt,
-      `Analyzing ${groupName}: ${files.length} related files.${
+      `Analyzing ${groupName}: ${String(files.length)} related files.${
         this.config.focusAreas.length > 0
           ? `\nFocus areas: ${this.config.focusAreas.join(', ')}`
           : ''
@@ -504,7 +502,7 @@ ${options.rootDir}
 
 ## Files Available for Analysis
 ${files.slice(0, 50).join('\n')}
-${files.length > 50 ? `\n... and ${files.length - 50} more files` : ''}
+${files.length > 50 ? `\n... and ${String(files.length - 50)} more files` : ''}
 
 ${toolContext ? `## Initial Tool Results\n${toolContext}` : ''}
 
@@ -564,14 +562,14 @@ Use the tools to explore the codebase and create issues for any problems you fin
             }],
           };
         }
-        if (m.toolCalls && m.toolCalls.length > 0) {
+        if (m.toolCalls !== undefined && m.toolCalls.length > 0) {
           return {
             role: 'assistant' as const,
             content: [
-              ...(m.content ? [{ type: 'text' as const, text: m.content }] : []),
+              ...(m.content !== '' ? [{ type: 'text' as const, text: m.content }] : []),
               ...m.toolCalls.map(tc => ({
                 type: 'tool_use' as const,
-                id: tc.name + '_' + Date.now(),
+                id: tc.name + '_' + String(Date.now()),
                 name: tc.name,
                 input: tc.parameters,
               })),
@@ -645,7 +643,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
           role: 'assistant' as const,
           content: m.content || null,
           tool_calls: m.toolCalls.map((tc, i) => ({
-            id: `call_${i}`,
+            id: `call_${String(i)}`,
             type: 'function' as const,
             function: {
               name: tc.name,
@@ -655,7 +653,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
         };
       }
       return {
-        role: m.role as 'system' | 'user' | 'assistant',
+        role: m.role,
         content: m.content,
       };
     });
@@ -678,14 +676,15 @@ Use the tools to explore the codebase and create issues for any problems you fin
     });
 
     const choice = response.choices[0];
-    const content = choice?.message?.content ?? '';
+    const message = choice.message;
+    const content = message.content ?? '';
     const toolCalls: ToolCall[] = [];
 
-    if (choice?.message?.tool_calls) {
-      for (const tc of choice.message.tool_calls) {
+    if (message.tool_calls) {
+      for (const tc of message.tool_calls) {
         toolCalls.push({
           name: tc.function.name,
-          parameters: JSON.parse(tc.function.arguments),
+          parameters: JSON.parse(tc.function.arguments) as Record<string, unknown>,
         });
       }
     }
@@ -720,7 +719,10 @@ Use the tools to explore the codebase and create issues for any problems you fin
         return `Issue created: ${issue.message}`;
       }
 
-      const result = await this.toolExecutor!.executeTool(toolCall.name, toolCall.parameters);
+      if (this.toolExecutor === null) {
+        return 'Tool executor not initialized';
+      }
+      const result = await this.toolExecutor.executeTool(toolCall.name, toolCall.parameters);
       return result.output;
     } catch (error) {
       return `Error executing ${toolCall.name}: ${error instanceof Error ? error.message : String(error)}`;
@@ -731,8 +733,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
    * Create an issue from LLM parameters
    */
   private createIssueFromLLM(params: Record<string, unknown>): Issue {
-    const category = mapToIssueCategory(params.type as string);
     const severity = mapToSeverity(params.severity as string);
+    const confidence = typeof params.confidence === 'number' ? params.confidence : 0.8;
 
     return this.createIssue({
       severity,
@@ -746,7 +748,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
       },
       suggestion: params.suggestedFix as string | undefined,
       metadata: {
-        confidence: params.confidence as number ?? 0.8,
+        confidence,
         source: 'llm-analyzer',
         llmCategory: params.type,
       },
@@ -762,10 +764,10 @@ Use the tools to explore the codebase and create issues for any problems you fin
     // Try to parse as JSON
     try {
       // Look for JSON in the response
-      const jsonMatch = response.match(/\{[\s\S]*"issues"[\s\S]*\}/);
-      if (jsonMatch) {
+      const jsonMatch = /\{[\s\S]*"issues"[\s\S]*\}/.exec(response);
+      if (jsonMatch !== null) {
         const parsed = JSON.parse(jsonMatch[0]) as LLMResponse;
-        if (parsed.issues && Array.isArray(parsed.issues)) {
+        if (Array.isArray(parsed.issues)) {
           for (const llmIssue of parsed.issues) {
             try {
               const issue = this.convertLLMIssue(llmIssue, options);
@@ -825,7 +827,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
     const unique: Issue[] = [];
 
     for (const issue of issues) {
-      const key = `${issue.location.file}:${issue.location.line}:${issue.message}`;
+      const key = `${issue.location.file}:${String(issue.location.line)}:${issue.message}`;
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(issue);

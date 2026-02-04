@@ -50,7 +50,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         className={twMerge(
           clsx(baseStyles, variantStyles[variant], sizeStyles[size], className)
         )}
-        disabled={disabled || isLoading}
+        disabled={disabled === true || isLoading}
         {...props}
       >
         {isLoading ? (

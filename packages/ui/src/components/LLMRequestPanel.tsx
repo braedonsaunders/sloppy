@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -58,15 +59,15 @@ export default function LLMRequestPanel({
   requests,
   activeRequest,
   className,
-}: LLMRequestPanelProps) {
+}: LLMRequestPanelProps): JSX.Element {
   const completedRequests = requests.filter((r) => r.status === 'completed');
   const totalTokens = requests.reduce(
-    (acc, r) => acc + (r.inputTokens || 0) + (r.outputTokens || 0),
+    (acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0),
     0
   );
   const avgDuration =
     completedRequests.length > 0
-      ? completedRequests.reduce((acc, r) => acc + (r.duration || 0), 0) /
+      ? completedRequests.reduce((acc, r) => acc + (r.duration ?? 0), 0) /
         completedRequests.length
       : 0;
 
@@ -147,7 +148,7 @@ interface ActiveRequestCardProps {
   request: LLMRequest;
 }
 
-function ActiveRequestCard({ request }: ActiveRequestCardProps) {
+function ActiveRequestCard({ request }: ActiveRequestCardProps): JSX.Element {
   const elapsed = Date.now() - new Date(request.startedAt).getTime();
 
   return (
@@ -185,15 +186,15 @@ function ActiveRequestCard({ request }: ActiveRequestCardProps) {
       )}
 
       {/* Token counts if available */}
-      {(request.inputTokens || request.outputTokens) && (
+      {(request.inputTokens !== undefined || request.outputTokens !== undefined) && (
         <div className="flex items-center gap-4 text-xs">
-          {request.inputTokens && (
+          {request.inputTokens !== undefined && (
             <div className="flex items-center gap-1 text-dark-400">
               <ArrowUp className="h-3 w-3" />
               <span>{request.inputTokens.toLocaleString()} in</span>
             </div>
           )}
-          {request.outputTokens && (
+          {request.outputTokens !== undefined && (
             <div className="flex items-center gap-1 text-dark-400">
               <ArrowDown className="h-3 w-3" />
               <span>{request.outputTokens.toLocaleString()} out</span>
@@ -209,7 +210,7 @@ interface RequestRowProps {
   request: LLMRequest;
 }
 
-function RequestRow({ request }: RequestRowProps) {
+function RequestRow({ request }: RequestRowProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
 
   const StatusIcon =
@@ -237,7 +238,8 @@ function RequestRow({ request }: RequestRowProps) {
   return (
     <div>
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => { setExpanded(!expanded); }}
+        type="button"
         className="w-full p-3 flex items-center gap-3 hover:bg-dark-700/50 transition-colors text-left"
       >
         <StatusIcon
@@ -258,12 +260,12 @@ function RequestRow({ request }: RequestRowProps) {
         </div>
 
         <div className="flex items-center gap-3 text-xs text-dark-500">
-          {request.duration && (
+          {request.duration !== undefined && (
             <span className="font-mono">{(request.duration / 1000).toFixed(1)}s</span>
           )}
-          {(request.inputTokens || request.outputTokens) && (
+          {(request.inputTokens !== undefined || request.outputTokens !== undefined) && (
             <span className="font-mono">
-              {((request.inputTokens || 0) + (request.outputTokens || 0)).toLocaleString()} tok
+              {((request.inputTokens ?? 0) + (request.outputTokens ?? 0)).toLocaleString()} tok
             </span>
           )}
           <span>{time}</span>
@@ -283,20 +285,20 @@ function RequestRow({ request }: RequestRowProps) {
               <ArrowUp className="h-3.5 w-3.5 text-dark-500" />
               <span className="text-xs text-dark-400">Input:</span>
               <span className="text-xs font-mono text-dark-200">
-                {request.inputTokens?.toLocaleString() || '—'}
+                {request.inputTokens !== undefined ? request.inputTokens.toLocaleString() : '—'}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <ArrowDown className="h-3.5 w-3.5 text-dark-500" />
               <span className="text-xs text-dark-400">Output:</span>
               <span className="text-xs font-mono text-dark-200">
-                {request.outputTokens?.toLocaleString() || '—'}
+                {request.outputTokens !== undefined ? request.outputTokens.toLocaleString() : '—'}
               </span>
             </div>
           </div>
 
           {/* Prompt preview */}
-          {request.prompt && (
+          {request.prompt !== undefined && (
             <div>
               <p className="text-xs text-dark-500 mb-1">Prompt:</p>
               <pre className="text-xs font-mono text-dark-300 bg-dark-900 rounded p-2 max-h-24 overflow-auto whitespace-pre-wrap">
@@ -307,7 +309,7 @@ function RequestRow({ request }: RequestRowProps) {
           )}
 
           {/* Response preview */}
-          {request.response && (
+          {request.response !== undefined && (
             <div>
               <p className="text-xs text-dark-500 mb-1">Response:</p>
               <pre className="text-xs font-mono text-dark-300 bg-dark-900 rounded p-2 max-h-24 overflow-auto whitespace-pre-wrap">
@@ -318,7 +320,7 @@ function RequestRow({ request }: RequestRowProps) {
           )}
 
           {/* Error */}
-          {request.error && (
+          {request.error !== undefined && (
             <div className="text-xs text-error bg-error/10 rounded p-2">
               {request.error}
             </div>
@@ -340,10 +342,10 @@ export function LLMStatusIndicator({
   activeRequest,
   totalRequests,
   className,
-}: LLMStatusIndicatorProps) {
+}: LLMStatusIndicatorProps): JSX.Element {
   return (
     <div className={twMerge('flex items-center gap-2', className)}>
-      {activeRequest ? (
+      {activeRequest !== undefined ? (
         <>
           <div className="relative">
             <Cpu className="h-4 w-4 text-accent" />

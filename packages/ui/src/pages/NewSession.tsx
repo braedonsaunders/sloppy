@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -33,11 +34,11 @@ const FOCUS_AREAS = [
   { id: 'stubs', label: 'Completeness', description: 'TODOs, stubs, incomplete implementations' },
 ];
 
-export default function NewSession() {
+export default function NewSession(): JSX.Element {
   const navigate = useNavigate();
   const { createSession, isCreating } = useSession();
 
-  const { data: providers, isLoading: _isLoadingProviders } = useQuery({
+  const { data: providers } = useQuery({
     queryKey: ['providers'],
     queryFn: () => api.providers.list(),
   });
@@ -49,7 +50,7 @@ export default function NewSession() {
 
   // Form state
   const [repoPath, setRepoPath] = useState('');
-  const [branch, _setBranch] = useState('main');
+  const [branch] = useState('main');
   const [repoType, setRepoType] = useState<'local' | 'git'>('local');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
@@ -65,37 +66,37 @@ export default function NewSession() {
   const [error, setError] = useState<string | null>(null);
 
   // Get configured providers
-  const configuredProviders = providers?.filter((p) => p.configured) || [];
+  const configuredProviders = providers?.filter((p) => p.configured) ?? [];
   const selectedProvider = providers?.find((p) => p.id === provider);
 
   // Apply defaults from settings
   useState(() => {
-    if (settings) {
-      const s = settings as Record<string, unknown>;
-      if (s.defaultProvider) setProvider(s.defaultProvider as string);
-      if (s.defaultModel) setModel(s.defaultModel as string);
-      if (s.defaultStrictness) setStrictness(s.defaultStrictness as 'low' | 'medium' | 'high');
-      if (s.defaultMaxTime) setMaxTime(String(s.defaultMaxTime));
-      if (s.approvalModeDefault) setApprovalMode(s.approvalModeDefault as boolean);
+    if (settings !== undefined) {
+      const s = settings;
+      if (typeof s.defaultProvider === 'string' && s.defaultProvider !== '') {setProvider(s.defaultProvider);}
+      if (typeof s.defaultModel === 'string' && s.defaultModel !== '') {setModel(s.defaultModel);}
+      if (typeof s.defaultStrictness === 'string' && s.defaultStrictness !== '') {setStrictness(s.defaultStrictness as 'low' | 'medium' | 'high');}
+      if (typeof s.defaultMaxTime === 'number') {setMaxTime(String(s.defaultMaxTime));}
+      if (typeof s.approvalModeDefault === 'boolean') {setApprovalMode(s.approvalModeDefault);}
     }
   });
 
-  const toggleFocusArea = (area: string) => {
+  const toggleFocusArea = (area: string): void => {
     setFocusAreas((prev) =>
       prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
     );
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent): void => {
     e.preventDefault();
     setError(null);
 
-    if (!repoPath) {
+    if (repoPath === '') {
       setError('Please enter a repository path');
       return;
     }
 
-    if (!provider) {
+    if (provider === '') {
       setError('Please select a provider');
       return;
     }
@@ -105,29 +106,27 @@ export default function NewSession() {
       return;
     }
 
-    try {
-      const config: Partial<SessionConfig> = {
-        maxTime: maxTime ? parseInt(maxTime) * 60 : undefined, // Convert to seconds
-        strictness,
-        issueTypes: focusAreas, // Focus areas are passed as issueTypes to the backend
-        approvalMode,
-        testCommand: testCommand || undefined,
-        lintCommand: lintCommand || undefined,
-        buildCommand: buildCommand || undefined,
-      };
+    const config: Partial<SessionConfig> = {
+      maxTime: maxTime !== '' ? parseInt(maxTime) * 60 : undefined, // Convert to seconds
+      strictness,
+      issueTypes: focusAreas, // Focus areas are passed as issueTypes to the backend
+      approvalMode,
+      testCommand: testCommand !== '' ? testCommand : undefined,
+      lintCommand: lintCommand !== '' ? lintCommand : undefined,
+      buildCommand: buildCommand !== '' ? buildCommand : undefined,
+    };
 
-      const request: CreateSessionRequest = {
-        repoPath: repoType === 'git' ? repoPath : repoPath,
-        branch: branch || undefined,
-        provider,
-        model: model || undefined,
-        config,
-      };
+    const sessionRequest: CreateSessionRequest = {
+      repoPath: repoType === 'git' ? repoPath : repoPath,
+      branch: branch !== '' ? branch : undefined,
+      provider,
+      model: model !== '' ? model : undefined,
+      config,
+    };
 
-      await createSession(request);
-    } catch (err) {
+    createSession(sessionRequest).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : 'Failed to create session');
-    }
+    });
   };
 
   return (
@@ -151,7 +150,7 @@ export default function NewSession() {
           <div className="flex gap-2 mb-4">
             <button
               type="button"
-              onClick={() => setRepoType('local')}
+              onClick={() => { setRepoType('local'); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors ${
                 repoType === 'local'
                   ? 'border-accent bg-accent/10 text-accent'
@@ -163,7 +162,7 @@ export default function NewSession() {
             </button>
             <button
               type="button"
-              onClick={() => setRepoType('git')}
+              onClick={() => { setRepoType('git'); }}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg border transition-colors ${
                 repoType === 'git'
                   ? 'border-accent bg-accent/10 text-accent'
@@ -181,14 +180,14 @@ export default function NewSession() {
                 <Input
                   placeholder="/path/to/your/project"
                   value={repoPath}
-                  onChange={(e) => setRepoPath(e.target.value)}
+                  onChange={(e) => { setRepoPath(e.target.value); }}
                   leftIcon={<FolderOpen className="h-4 w-4" />}
                 />
               </div>
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => setShowFileBrowser(true)}
+                onClick={() => { setShowFileBrowser(true); }}
                 leftIcon={<FolderSearch className="h-4 w-4" />}
               >
                 Browse
@@ -198,7 +197,7 @@ export default function NewSession() {
             <Input
               placeholder="https://github.com/user/repo.git"
               value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
+              onChange={(e) => { setRepoPath(e.target.value); }}
               leftIcon={<GitBranch className="h-4 w-4" />}
             />
           )}
@@ -220,7 +219,7 @@ export default function NewSession() {
                   Please configure at least one AI provider in{' '}
                   <button
                     type="button"
-                    onClick={() => navigate('/settings')}
+                    onClick={() => { navigate('/settings'); }}
                     className="underline hover:no-underline"
                   >
                     Settings
@@ -254,10 +253,10 @@ export default function NewSession() {
                   ...(selectedProvider?.models.map((m) => ({
                     value: m,
                     label: m,
-                  })) || []),
+                  })) ?? []),
                 ]}
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
+                onChange={(e) => { setModel(e.target.value); }}
                 disabled={!provider}
               />
             </div>
@@ -279,7 +278,7 @@ export default function NewSession() {
               max={480}
               placeholder="No limit"
               value={maxTime}
-              onChange={(e) => setMaxTime(e.target.value)}
+              onChange={(e) => { setMaxTime(e.target.value); }}
               hint="Leave empty for no time limit"
             />
 
@@ -291,7 +290,7 @@ export default function NewSession() {
                 { value: 'high', label: 'High - Thorough, more changes' },
               ]}
               value={strictness}
-              onChange={(e) => setStrictness(e.target.value as 'low' | 'medium' | 'high')}
+              onChange={(e) => { setStrictness(e.target.value as 'low' | 'medium' | 'high'); }}
             />
           </div>
 
@@ -310,7 +309,7 @@ export default function NewSession() {
                 <button
                   key={area.id}
                   type="button"
-                  onClick={() => toggleFocusArea(area.id)}
+                  onClick={() => { toggleFocusArea(area.id); }}
                   className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
                     focusAreas.includes(area.id)
                       ? 'border-accent bg-accent/10'
@@ -349,7 +348,7 @@ export default function NewSession() {
               type="checkbox"
               id="approvalMode"
               checked={approvalMode}
-              onChange={(e) => setApprovalMode(e.target.checked)}
+              onChange={(e) => { setApprovalMode(e.target.checked); }}
               className="h-4 w-4 rounded border-dark-600 bg-dark-700 text-accent focus:ring-accent"
             />
             <label htmlFor="approvalMode" className="text-sm text-dark-200">
@@ -362,7 +361,7 @@ export default function NewSession() {
         <section className="rounded-xl border border-dark-700 bg-dark-800 overflow-hidden">
           <button
             type="button"
-            onClick={() => setShowAdvanced(!showAdvanced)}
+            onClick={() => { setShowAdvanced(!showAdvanced); }}
             className="flex w-full items-center justify-between p-6 text-left hover:bg-dark-750 transition-colors"
           >
             <div className="flex items-center gap-2">
@@ -384,7 +383,7 @@ export default function NewSession() {
                 label="Test Command"
                 placeholder="npm test"
                 value={testCommand}
-                onChange={(e) => setTestCommand(e.target.value)}
+                onChange={(e) => { setTestCommand(e.target.value); }}
                 hint="Command to run tests"
               />
 
@@ -392,7 +391,7 @@ export default function NewSession() {
                 label="Lint Command"
                 placeholder="npm run lint"
                 value={lintCommand}
-                onChange={(e) => setLintCommand(e.target.value)}
+                onChange={(e) => { setLintCommand(e.target.value); }}
                 hint="Command to run linting"
               />
 
@@ -400,7 +399,7 @@ export default function NewSession() {
                 label="Build Command"
                 placeholder="npm run build"
                 value={buildCommand}
-                onChange={(e) => setBuildCommand(e.target.value)}
+                onChange={(e) => { setBuildCommand(e.target.value); }}
                 hint="Command to build the project"
               />
             </div>
@@ -408,7 +407,7 @@ export default function NewSession() {
         </section>
 
         {/* Error Message */}
-        {error && (
+        {error !== null && (
           <div className="flex items-center gap-2 rounded-lg bg-error/10 p-4 text-error">
             <AlertTriangle className="h-5 w-5 flex-shrink-0" />
             <p className="text-sm">{error}</p>
@@ -420,7 +419,7 @@ export default function NewSession() {
           <Button
             type="button"
             variant="secondary"
-            onClick={() => navigate('/')}
+            onClick={() => { navigate('/'); }}
           >
             Cancel
           </Button>
@@ -439,8 +438,8 @@ export default function NewSession() {
       {/* File Browser Modal */}
       <FileBrowser
         isOpen={showFileBrowser}
-        onClose={() => setShowFileBrowser(false)}
-        onSelect={(path) => setRepoPath(path)}
+        onClose={() => { setShowFileBrowser(false); }}
+        onSelect={(path) => { setRepoPath(path); }}
         initialPath={repoPath || undefined}
       />
     </div>

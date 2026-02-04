@@ -47,13 +47,13 @@ export interface SessionState {
 const initialState = {
   currentSession: null,
   stats: null,
-  activities: [],
-  metrics: [],
-  llmRequests: [],
-  activeLLMRequest: undefined,
-  sessions: [],
+  activities: [] as Activity[],
+  metrics: [] as Metrics[],
+  llmRequests: [] as LLMRequest[],
+  activeLLMRequest: undefined as LLMRequest | undefined,
+  sessions: [] as Session[],
   isLoading: false,
-  error: null,
+  error: null as string | null,
 };
 
 export const useSessionStore = create<SessionState>()(
@@ -61,10 +61,11 @@ export const useSessionStore = create<SessionState>()(
     subscribeWithSelector((set, _get) => ({
       ...initialState,
 
-      setCurrentSession: (session) =>
-        set({ currentSession: session }, false, 'setCurrentSession'),
+      setCurrentSession: (session: Session | null): void => {
+        set({ currentSession: session }, false, 'setCurrentSession');
+      },
 
-      updateCurrentSession: (updates) =>
+      updateCurrentSession: (updates: Partial<Session>): void => {
         set(
           (state) => ({
             currentSession: state.currentSession
@@ -73,31 +74,38 @@ export const useSessionStore = create<SessionState>()(
           }),
           false,
           'updateCurrentSession'
-        ),
+        );
+      },
 
-      setStats: (stats) => set({ stats }, false, 'setStats'),
+      setStats: (stats: SessionStats | null): void => {
+        set({ stats }, false, 'setStats');
+      },
 
-      updateStats: (updates) =>
+      updateStats: (updates: Partial<SessionStats>): void => {
         set(
           (state) => ({
             stats: state.stats ? { ...state.stats, ...updates } : null,
           }),
           false,
           'updateStats'
-        ),
+        );
+      },
 
-      setSessions: (sessions) => set({ sessions }, false, 'setSessions'),
+      setSessions: (sessions: Session[]): void => {
+        set({ sessions }, false, 'setSessions');
+      },
 
-      addSession: (session) =>
+      addSession: (session: Session): void => {
         set(
           (state) => ({
             sessions: [session, ...state.sessions],
           }),
           false,
           'addSession'
-        ),
+        );
+      },
 
-      updateSession: (id, updates) =>
+      updateSession: (id: string, updates: Partial<Session>): void => {
         set(
           (state) => ({
             sessions: state.sessions.map((s) =>
@@ -110,9 +118,10 @@ export const useSessionStore = create<SessionState>()(
           }),
           false,
           'updateSession'
-        ),
+        );
+      },
 
-      removeSession: (id) =>
+      removeSession: (id: string): void => {
         set(
           (state) => ({
             sessions: state.sessions.filter((s) => s.id !== id),
@@ -121,46 +130,57 @@ export const useSessionStore = create<SessionState>()(
           }),
           false,
           'removeSession'
-        ),
+        );
+      },
 
-      addActivity: (activity) =>
+      addActivity: (activity: Activity): void => {
         set(
           (state) => ({
             activities: [activity, ...state.activities].slice(0, 100), // Keep last 100
           }),
           false,
           'addActivity'
-        ),
+        );
+      },
 
-      setActivities: (activities) =>
-        set({ activities }, false, 'setActivities'),
+      setActivities: (activities: Activity[]): void => {
+        set({ activities }, false, 'setActivities');
+      },
 
-      addMetrics: (metrics) =>
+      addMetrics: (metrics: Metrics): void => {
         set(
           (state) => ({
             metrics: [...state.metrics, metrics].slice(-60), // Keep last 60 data points
           }),
           false,
           'addMetrics'
-        ),
+        );
+      },
 
-      setMetrics: (metrics) => set({ metrics }, false, 'setMetrics'),
+      setMetrics: (metrics: Metrics[]): void => {
+        set({ metrics }, false, 'setMetrics');
+      },
 
-      setLoading: (isLoading) => set({ isLoading }, false, 'setLoading'),
+      setLoading: (isLoading: boolean): void => {
+        set({ isLoading }, false, 'setLoading');
+      },
 
-      setError: (error) => set({ error }, false, 'setError'),
+      setError: (error: string | null): void => {
+        set({ error }, false, 'setError');
+      },
 
       // LLM request actions
-      addLLMRequest: (request) =>
+      addLLMRequest: (request: LLMRequest): void => {
         set(
           (state) => ({
             llmRequests: [...state.llmRequests, request],
           }),
           false,
           'addLLMRequest'
-        ),
+        );
+      },
 
-      updateLLMRequest: (id, updates) =>
+      updateLLMRequest: (id: string, updates: Partial<LLMRequest>): void => {
         set(
           (state) => ({
             llmRequests: state.llmRequests.map((r) =>
@@ -173,38 +193,43 @@ export const useSessionStore = create<SessionState>()(
           }),
           false,
           'updateLLMRequest'
-        ),
+        );
+      },
 
-      setActiveLLMRequest: (request) =>
-        set({ activeLLMRequest: request }, false, 'setActiveLLMRequest'),
+      setActiveLLMRequest: (request: LLMRequest | undefined): void => {
+        set({ activeLLMRequest: request }, false, 'setActiveLLMRequest');
+      },
 
-      clearLLMRequests: () =>
-        set({ llmRequests: [], activeLLMRequest: undefined }, false, 'clearLLMRequests'),
+      clearLLMRequests: (): void => {
+        set({ llmRequests: [], activeLLMRequest: undefined }, false, 'clearLLMRequests');
+      },
 
-      reset: () => set(initialState, false, 'reset'),
+      reset: (): void => {
+        set(initialState, false, 'reset');
+      },
     })),
     { name: 'session-store' }
   )
 );
 
 // Selectors
-export const selectCurrentSession = (state: SessionState) => state.currentSession;
-export const selectStats = (state: SessionState) => state.stats;
-export const selectSessions = (state: SessionState) => state.sessions;
-export const selectActivities = (state: SessionState) => state.activities;
-export const selectMetrics = (state: SessionState) => state.metrics;
-export const selectIsLoading = (state: SessionState) => state.isLoading;
-export const selectError = (state: SessionState) => state.error;
-export const selectLLMRequests = (state: SessionState) => state.llmRequests;
-export const selectActiveLLMRequest = (state: SessionState) => state.activeLLMRequest;
+export const selectCurrentSession = (state: SessionState): Session | null => state.currentSession;
+export const selectStats = (state: SessionState): SessionStats | null => state.stats;
+export const selectSessions = (state: SessionState): Session[] => state.sessions;
+export const selectActivities = (state: SessionState): Activity[] => state.activities;
+export const selectMetrics = (state: SessionState): Metrics[] => state.metrics;
+export const selectIsLoading = (state: SessionState): boolean => state.isLoading;
+export const selectError = (state: SessionState): string | null => state.error;
+export const selectLLMRequests = (state: SessionState): LLMRequest[] => state.llmRequests;
+export const selectActiveLLMRequest = (state: SessionState): LLMRequest | undefined => state.activeLLMRequest;
 
-export const selectActiveSession = (state: SessionState) =>
+export const selectActiveSession = (state: SessionState): Session | undefined =>
   state.sessions.find((s) => s.status === 'running');
 
-export const selectRecentSessions = (state: SessionState) =>
+export const selectRecentSessions = (state: SessionState): Session[] =>
   state.sessions.slice(0, 10);
 
-export const selectSessionById = (id: string) => (state: SessionState) =>
-  state.sessions.find((s) => s.id === id);
+export const selectSessionById = (id: string): ((state: SessionState) => Session | undefined) =>
+  (state: SessionState): Session | undefined => state.sessions.find((s) => s.id === id);
 
 export default useSessionStore;
