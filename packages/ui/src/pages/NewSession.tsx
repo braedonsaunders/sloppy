@@ -288,12 +288,12 @@ export default function NewSession(): JSX.Element {
                       </Button>
                     </div>
                   </div>
-                  {selectedGitHubRepo.description && (
+                  {selectedGitHubRepo.description !== undefined && selectedGitHubRepo.description !== '' && (
                     <p className="text-sm text-dark-400 mb-2">{selectedGitHubRepo.description}</p>
                   )}
                   <div className="flex items-center gap-4 text-xs text-dark-500">
                     <span>Branch: <code className="bg-dark-600 px-1.5 py-0.5 rounded text-dark-300">{branch}</code></span>
-                    {selectedGitHubRepo.language && (
+                    {selectedGitHubRepo.language !== undefined && selectedGitHubRepo.language !== '' && (
                       <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded-full bg-accent" />
                         {selectedGitHubRepo.language}

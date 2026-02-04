@@ -715,7 +715,7 @@ function GitHubTab(): JSX.Element {
             <>
               {/* Connected state */}
               <div className="flex items-center gap-4 p-4 rounded-lg bg-dark-700/50">
-                {user.avatarUrl && (
+                {user.avatarUrl !== undefined && user.avatarUrl !== '' && (
                   <img
                     src={user.avatarUrl}
                     alt={user.login}
@@ -725,11 +725,11 @@ function GitHubTab(): JSX.Element {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-dark-100">{user.name ?? user.login}</span>
-                    {user.name && (
+                    {user.name !== undefined && user.name !== '' && (
                       <span className="text-dark-400">@{user.login}</span>
                     )}
                   </div>
-                  {githubStatus.scopes && githubStatus.scopes.length > 0 && (
+                  {githubStatus.scopes !== undefined && githubStatus.scopes.length > 0 && (
                     <div className="flex items-center gap-2 mt-1">
                       <span className="text-xs text-dark-500">Scopes:</span>
                       <div className="flex gap-1 flex-wrap">
@@ -741,13 +741,13 @@ function GitHubTab(): JSX.Element {
                       </div>
                     </div>
                   )}
-                  {githubStatus.configuredAt && (
+                  {githubStatus.configuredAt !== null && (
                     <p className="text-xs text-dark-500 mt-1">
                       Connected on {new Date(githubStatus.configuredAt).toLocaleDateString()}
                     </p>
                   )}
                 </div>
-                {user.htmlUrl && (
+                {user.htmlUrl !== undefined && user.htmlUrl !== '' && (
                   <a
                     href={user.htmlUrl}
                     target="_blank"
@@ -775,7 +775,7 @@ function GitHubTab(): JSX.Element {
                   )}
                   <span className="text-sm">
                     {testMutation.data.success
-                      ? `Connection verified. Rate limit: ${testMutation.data.rateLimit?.remaining ?? '?'}/${testMutation.data.rateLimit?.limit ?? '?'}`
+                      ? `Connection verified. Rate limit: ${String(testMutation.data.rateLimit?.remaining ?? '?')}/${String(testMutation.data.rateLimit?.limit ?? '?')}`
                       : 'Connection test failed. Token may have been revoked.'}
                   </span>
                 </div>
