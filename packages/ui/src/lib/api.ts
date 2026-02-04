@@ -49,7 +49,14 @@ async function request<T>(
     return undefined as T;
   }
 
-  return response.json();
+  const json = await response.json();
+
+  // Unwrap server response format: { success: true, data: ... }
+  if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
+    return json.data as T;
+  }
+
+  return json as T;
 }
 
 // Session Types
@@ -156,13 +163,58 @@ export interface Metrics {
   lintErrors: number;
 }
 
+// Server response wrappers
+interface SessionsResponse {
+  sessions: Session[];
+  count: number;
+}
+
+interface SessionDetailResponse {
+  session: Session;
+  issues: Issue[];
+  commits: Commit[];
+  metrics: Metrics[];
+}
+
+interface IssuesResponse {
+  issues: Issue[];
+  summary: {
+    total: number;
+    byStatus: Record<string, number>;
+    byType: Record<string, number>;
+    bySeverity: Record<string, number>;
+  };
+}
+
+interface CommitsResponse {
+  commits: Commit[];
+  summary: {
+    total: number;
+    reverted: number;
+  };
+}
+
+interface MetricsResponse {
+  metrics: Metrics[];
+  summary: {
+    averageIssuesPerSnapshot: number;
+    totalDataPoints: number;
+  } | null;
+}
+
 // API Client
 export const api = {
   // Sessions
   sessions: {
-    list: () => request<Session[]>('/sessions'),
+    list: async () => {
+      const res = await request<SessionsResponse>('/sessions');
+      return res.sessions;
+    },
 
-    get: (id: string) => request<Session>(`/sessions/${id}`),
+    get: async (id: string) => {
+      const res = await request<SessionDetailResponse>(`/sessions/${id}`);
+      return res.session;
+    },
 
     create: (data: CreateSessionRequest) =>
       request<Session>('/sessions', {
@@ -184,10 +236,12 @@ export const api = {
 
     getStats: (id: string) => request<SessionStats>(`/sessions/${id}/stats`),
 
-    getMetrics: (id: string, since?: string) =>
-      request<Metrics[]>(
+    getMetrics: async (id: string, since?: string) => {
+      const res = await request<MetricsResponse>(
         `/sessions/${id}/metrics${since ? `?since=${since}` : ''}`
-      ),
+      );
+      return res.metrics;
+    },
 
     getActivity: (id: string, limit?: number) =>
       request<Activity[]>(
@@ -197,14 +251,15 @@ export const api = {
 
   // Issues
   issues: {
-    list: (sessionId: string, filters?: { status?: string; type?: string }) => {
+    list: async (sessionId: string, filters?: { status?: string; type?: string }) => {
       const params = new URLSearchParams();
       if (filters?.status) params.set('status', filters.status);
       if (filters?.type) params.set('type', filters.type);
       const query = params.toString();
-      return request<Issue[]>(
+      const res = await request<IssuesResponse>(
         `/sessions/${sessionId}/issues${query ? `?${query}` : ''}`
       );
+      return res.issues;
     },
 
     get: (sessionId: string, issueId: string) =>
@@ -228,16 +283,22 @@ export const api = {
 
   // Commits
   commits: {
-    list: (sessionId: string) =>
-      request<Commit[]>(`/sessions/${sessionId}/commits`),
+    list: async (sessionId: string) => {
+      const res = await request<CommitsResponse>(`/sessions/${sessionId}/commits`);
+      return res.commits;
+    },
 
-    get: (sessionId: string, commitId: string) =>
-      request<Commit>(`/sessions/${sessionId}/commits/${commitId}`),
+    get: async (sessionId: string, commitId: string) => {
+      const res = await request<{ commit: Commit; issue: Issue | null }>(`/sessions/${sessionId}/commits/${commitId}`);
+      return res.commit;
+    },
 
-    revert: (sessionId: string, commitId: string) =>
-      request<Commit>(`/sessions/${sessionId}/commits/${commitId}/revert`, {
+    revert: async (sessionId: string, commitId: string) => {
+      const res = await request<{ commit: Commit; revertHash: string }>(`/sessions/${sessionId}/commits/${commitId}/revert`, {
         method: 'POST',
-      }),
+      });
+      return res.commit;
+    },
   },
 
   // Providers
