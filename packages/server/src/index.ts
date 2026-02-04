@@ -9,7 +9,7 @@ import { createServer } from './server.js';
 // Configuration from environment variables
 const config = {
   host: process.env['SLOPPY_HOST'] ?? '0.0.0.0',
-  port: parseInt(process.env['SLOPPY_PORT'] ?? '3000', 10),
+  port: parseInt(process.env['SLOPPY_PORT'] ?? '7749', 10),
   dbPath: process.env['SLOPPY_DB_PATH'],
   staticDir: process.env['SLOPPY_STATIC_DIR'],
   corsOrigin: process.env['SLOPPY_CORS_ORIGIN'] ?? true,
