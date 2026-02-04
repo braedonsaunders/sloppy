@@ -4,14 +4,19 @@ This guide provides detailed installation instructions for all platforms.
 
 ## Prerequisites
 
-- **Node.js** >= 22.0.0
+- **Node.js v22 LTS** (v22.x only - v23/v24 are too new and lack prebuilt binaries)
 - **pnpm** 9.15.0 (will be installed by setup script)
 - **Git** (for version control operations)
+- **Build tools** (Visual Studio Build Tools on Windows, Xcode CLI on macOS, build-essential on Linux)
 - An API key for one of: Claude (Anthropic), OpenAI, or Ollama (local)
+
+> **Important:** Use Node.js v22 LTS, not v23 or v24. Native modules like `better-sqlite3` don't have prebuilt binaries for newer versions yet.
 
 ---
 
 ## Quick Setup (Recommended)
+
+The setup scripts automatically install all dependencies and handle platform-specific requirements.
 
 ### Windows (PowerShell)
 
@@ -26,35 +31,44 @@ chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
 
-The setup scripts will:
-1. Check for Node.js >= 22
-2. Install pnpm if not present
-3. Install all dependencies
-4. Create `.env` file from template
-5. Create `sloppy.config.json` from template
-6. Build the project
-7. Provide next steps
+### What the scripts do
+
+| Step | Windows | macOS | Linux |
+|------|---------|-------|-------|
+| 1. Node.js v22 | Auto-install via winget | Auto-install via Homebrew | Auto-install via package manager |
+| 2. pnpm | Auto-install via npm | Auto-install via npm | Auto-install via npm |
+| 3. Git | Auto-install via winget | Auto-install via Homebrew/Xcode | Auto-install via package manager |
+| 4. Build tools | Auto-install VS Build Tools | Auto-install Xcode CLI | Auto-install build-essential |
+| 5. Dependencies | `pnpm install` | `pnpm install` | `pnpm install` |
+| 6. Configuration | Create `.env` and config files | Create `.env` and config files | Create `.env` and config files |
+| 7. Build | `pnpm build` | `pnpm build` | `pnpm build` |
+
+The scripts will detect failures and provide helpful error messages with solutions.
 
 ---
 
 ## Windows Manual Installation (Step-by-Step)
 
-### Step 1: Install Node.js
+### Step 1: Install Node.js v22 LTS
 
-1. Download Node.js **v22 or later** from [nodejs.org](https://nodejs.org/)
-   - Choose the **LTS** version (must be 22+)
-   - Or use the direct link: https://nodejs.org/en/download/
+> **Important:** Install v22 LTS specifically, not v23 or v24. Newer versions lack prebuilt binaries for native modules.
 
-2. Run the installer:
-   - Accept the license agreement
-   - Use default installation path (or customize)
-   - **Important**: Check "Automatically install necessary tools" if prompted
+**Option A: Using winget (recommended)**
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
 
-3. Verify installation - open **PowerShell** or **Command Prompt**:
-   ```powershell
-   node --version
-   # Should output: v22.x.x or higher
-   ```
+**Option B: Manual download**
+1. Download Node.js **v22 LTS** from [nodejs.org](https://nodejs.org/)
+   - Choose the **LTS** version (v22.x)
+2. Run the installer
+3. **Important**: Check "Automatically install necessary tools" if prompted
+
+**Verify installation:**
+```powershell
+node --version
+# Should output: v22.x.x
+```
 
 ### Step 2: Install pnpm
 
