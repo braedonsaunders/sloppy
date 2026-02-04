@@ -15,7 +15,6 @@ import {
   ChevronRight,
   Zap,
 } from 'lucide-react';
-// Button and StatusBadge available for future use
 import { useSessions } from '@/hooks/useSession';
 import type { Session } from '@/lib/api';
 

@@ -23,10 +23,10 @@ interface Settings {
   defaultStrictness?: string;
   defaultMaxTime?: number;
   approvalModeDefault?: boolean;
+  [key: string]: unknown;
 }
 
 export default function Settings() {
-  useQueryClient(); // Initialize query client
   const [activeTab, setActiveTab] = useState<'providers' | 'defaults'>('providers');
 
   return (
