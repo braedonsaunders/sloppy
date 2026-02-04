@@ -21,12 +21,17 @@ import { useSession } from '@/hooks/useSession';
 import { api, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
 
 const ISSUE_TYPES = [
-  { id: 'lint', label: 'Lint Issues', description: 'ESLint, Prettier violations' },
-  { id: 'type', label: 'Type Errors', description: 'TypeScript type issues' },
-  { id: 'test', label: 'Test Failures', description: 'Failing unit/integration tests' },
-  { id: 'security', label: 'Security Issues', description: 'Vulnerabilities and risks' },
-  { id: 'performance', label: 'Performance', description: 'Optimization opportunities' },
-  { id: 'style', label: 'Code Style', description: 'Formatting and conventions' },
+  // Core static analysis
+  { id: 'lint', label: 'Lint Issues', description: 'ESLint, Prettier violations', group: 'static' },
+  { id: 'type', label: 'Type Errors', description: 'TypeScript type issues', group: 'static' },
+  { id: 'security', label: 'Security Issues', description: 'Vulnerabilities and risks', group: 'static' },
+  { id: 'test', label: 'Test Coverage', description: 'Missing or failing tests', group: 'static' },
+  // AI-powered analysis
+  { id: 'ai', label: 'AI Deep Analysis', description: 'LLM-powered: logic bugs, code smells, patterns', group: 'ai', featured: true },
+  // Code quality
+  { id: 'style', label: 'Code Style', description: 'Duplicates, dead code, formatting', group: 'quality' },
+  { id: 'performance', label: 'Bug Detection', description: 'Potential bugs and edge cases', group: 'quality' },
+  { id: 'stub', label: 'Stubs & TODOs', description: 'Incomplete implementations', group: 'quality' },
 ];
 
 export default function NewSession() {
@@ -304,29 +309,50 @@ export default function NewSession() {
                   onClick={() => toggleIssueType(type.id)}
                   className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
                     issueTypes.includes(type.id)
-                      ? 'border-accent bg-accent/10'
-                      : 'border-dark-600 hover:border-dark-500'
+                      ? type.featured
+                        ? 'border-purple-500 bg-purple-500/10 ring-1 ring-purple-500/30'
+                        : 'border-accent bg-accent/10'
+                      : type.featured
+                        ? 'border-purple-500/50 hover:border-purple-500 bg-purple-500/5'
+                        : 'border-dark-600 hover:border-dark-500'
                   }`}
                 >
                   <div
                     className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${
                       issueTypes.includes(type.id)
-                        ? 'border-accent bg-accent text-white'
-                        : 'border-dark-500'
+                        ? type.featured
+                          ? 'border-purple-500 bg-purple-500 text-white'
+                          : 'border-accent bg-accent text-white'
+                        : type.featured
+                          ? 'border-purple-500/50'
+                          : 'border-dark-500'
                     }`}
                   >
                     {issueTypes.includes(type.id) && (
                       <CheckSquare className="h-3.5 w-3.5" />
                     )}
                   </div>
-                  <div>
-                    <p
-                      className={`text-sm font-medium ${
-                        issueTypes.includes(type.id) ? 'text-accent' : 'text-dark-200'
-                      }`}
-                    >
-                      {type.label}
-                    </p>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <p
+                        className={`text-sm font-medium ${
+                          issueTypes.includes(type.id)
+                            ? type.featured
+                              ? 'text-purple-400'
+                              : 'text-accent'
+                            : type.featured
+                              ? 'text-purple-300'
+                              : 'text-dark-200'
+                        }`}
+                      >
+                        {type.label}
+                      </p>
+                      {type.featured && (
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-400 bg-purple-500/20 px-1.5 py-0.5 rounded">
+                          New
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-dark-500">{type.description}</p>
                   </div>
                 </button>

@@ -307,12 +307,16 @@ export class AnalysisRunner {
    */
   private mapIssueTypesToCategories(issueTypes: string[]): string[] {
     const mapping: Record<string, string[]> = {
+      // Static analysis
       lint: ['lint'],
       type: ['type'],
       test: ['coverage'],
       security: ['security'],
+      // Code quality
       performance: ['bug'],
       style: ['duplicate', 'dead-code'],
+      stub: ['stub'], // Stub/TODO detection
+      // AI-powered analysis
       llm: ['llm'], // LLM-powered deep analysis
       ai: ['llm'], // Alias for llm
       deep: ['llm'], // Alias for deep analysis
