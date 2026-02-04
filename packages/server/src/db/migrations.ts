@@ -55,6 +55,62 @@ export const migrations: Migration[] = [
     name: '001_initial_schema',
     sql: '', // Will be loaded from schema.sql
   },
+  {
+    id: 2,
+    name: '002_add_providers_settings',
+    sql: `
+-- Providers table: Stores AI provider configurations
+CREATE TABLE IF NOT EXISTS providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    api_key TEXT,
+    base_url TEXT,
+    models TEXT NOT NULL DEFAULT '[]',
+    configured INTEGER NOT NULL DEFAULT 0,
+    options TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Settings table: Stores application settings
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Trigger to update updated_at on providers
+CREATE TRIGGER IF NOT EXISTS update_providers_timestamp
+    AFTER UPDATE ON providers
+    FOR EACH ROW
+BEGIN
+    UPDATE providers SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+-- Trigger to update updated_at on settings
+CREATE TRIGGER IF NOT EXISTS update_settings_timestamp
+    AFTER UPDATE ON settings
+    FOR EACH ROW
+BEGIN
+    UPDATE settings SET updated_at = datetime('now') WHERE key = OLD.key;
+END;
+
+-- Insert default providers
+INSERT OR IGNORE INTO providers (id, name, models) VALUES
+    ('claude', 'Claude', '["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-haiku-20240307"]'),
+    ('openai', 'OpenAI', '["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]'),
+    ('ollama', 'Ollama', '["llama3", "codellama", "mistral", "deepseek-coder"]');
+
+-- Insert default settings
+INSERT OR IGNORE INTO settings (key, value) VALUES
+    ('defaultProvider', '"claude"'),
+    ('defaultModel', '"claude-sonnet-4-20250514"'),
+    ('defaultStrictness', '"medium"'),
+    ('defaultIssueTypes', '["lint", "type", "security"]'),
+    ('defaultApprovalMode', 'false'),
+    ('theme', '"system"');
+    `,
+  },
 ];
 
 /**

@@ -70,6 +70,26 @@ CREATE TABLE IF NOT EXISTS metrics (
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+-- Providers table: Stores AI provider configurations
+CREATE TABLE IF NOT EXISTS providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    api_key TEXT, -- Encrypted API key
+    base_url TEXT, -- Custom base URL (for Ollama or custom endpoints)
+    models TEXT NOT NULL DEFAULT '[]', -- JSON array of available models
+    configured INTEGER NOT NULL DEFAULT 0, -- Boolean: 1 if configured with API key
+    options TEXT NOT NULL DEFAULT '{}', -- JSON: additional provider options
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Settings table: Stores application settings
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_repo_path ON sessions(repo_path);
@@ -90,3 +110,34 @@ CREATE TRIGGER IF NOT EXISTS update_sessions_timestamp
 BEGIN
     UPDATE sessions SET updated_at = datetime('now') WHERE id = OLD.id;
 END;
+
+-- Trigger to update updated_at on providers
+CREATE TRIGGER IF NOT EXISTS update_providers_timestamp
+    AFTER UPDATE ON providers
+    FOR EACH ROW
+BEGIN
+    UPDATE providers SET updated_at = datetime('now') WHERE id = OLD.id;
+END;
+
+-- Trigger to update updated_at on settings
+CREATE TRIGGER IF NOT EXISTS update_settings_timestamp
+    AFTER UPDATE ON settings
+    FOR EACH ROW
+BEGIN
+    UPDATE settings SET updated_at = datetime('now') WHERE key = OLD.key;
+END;
+
+-- Insert default providers
+INSERT OR IGNORE INTO providers (id, name, models) VALUES
+    ('claude', 'Claude', '["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-haiku-20240307"]'),
+    ('openai', 'OpenAI', '["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]'),
+    ('ollama', 'Ollama', '["llama3", "codellama", "mistral", "deepseek-coder"]');
+
+-- Insert default settings
+INSERT OR IGNORE INTO settings (key, value) VALUES
+    ('defaultProvider', '"claude"'),
+    ('defaultModel', '"claude-sonnet-4-20250514"'),
+    ('defaultStrictness', '"medium"'),
+    ('defaultIssueTypes', '["lint", "type", "security"]'),
+    ('defaultApprovalMode', 'false'),
+    ('theme', '"system"');

@@ -18,6 +18,8 @@ import { registerSessionRoutes } from './routes/sessions.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerCommitRoutes } from './routes/commits.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
+import { registerProviderRoutes } from './routes/providers.js';
+import { registerSettingsRoutes } from './routes/settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -119,6 +121,8 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   await registerIssueRoutes(app);
   await registerCommitRoutes(app);
   await registerMetricsRoutes(app);
+  await registerProviderRoutes(app);
+  await registerSettingsRoutes(app);
 
   // Health check endpoint
   app.get('/health', async () => {
@@ -141,6 +145,8 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
         issues: '/api/issues/:id',
         commits: '/api/commits/:id',
         metrics: '/api/sessions/:id/metrics',
+        providers: '/api/providers',
+        settings: '/api/settings',
         websocket: '/ws',
         health: '/health',
       },
