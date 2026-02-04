@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GitManager } from '@sloppy/git';
+import { simpleGit } from 'simple-git';
 import {
   SloppyDatabase,
   type Session,
@@ -380,8 +380,8 @@ export class AnalysisRunner {
     const localPath = join(tempDir, 'repo');
 
     try {
-      const gitManager = new GitManager(localPath);
-      await gitManager.clone(repoPath, localPath);
+      // Use simpleGit directly since the target directory doesn't exist yet
+      await simpleGit().clone(repoPath, localPath);
       this.logger.info(`[analysis-runner] Cloned to: ${localPath}`);
 
       wsHandler.broadcastToSession(sessionId, {
