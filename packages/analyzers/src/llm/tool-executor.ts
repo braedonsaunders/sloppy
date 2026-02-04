@@ -160,8 +160,26 @@ export interface GrepMatch {
  */
 export const TOOL_DEFINITIONS = [
   {
+    name: 'run_lint',
+    description: 'Auto-detect and run the appropriate linter for this codebase. Supports: ESLint (JS/TS), ruff/pylint/flake8 (Python), golangci-lint (Go), cargo clippy (Rust), rubocop (Ruby), phpstan (PHP), cppcheck (C/C++), and more. Returns lint errors and warnings.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to lint (optional, defaults to all)',
+        },
+        fix: {
+          type: 'boolean',
+          description: 'Whether to auto-fix issues (default: false)',
+        },
+      },
+    },
+  },
+  {
     name: 'run_eslint',
-    description: 'Run ESLint on the codebase or specific files. Returns lint errors and warnings.',
+    description: 'Run ESLint on JavaScript/TypeScript files. Only works for JS/TS projects. Use run_lint for auto-detection.',
     parameters: {
       type: 'object',
       properties: {
@@ -179,7 +197,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'run_typecheck',
-    description: 'Run TypeScript compiler to check for type errors. Returns type errors found.',
+    description: 'Run type checking for the project. Auto-detects: TypeScript (tsc), Python (mypy/pyright), Rust (cargo check), Go (go vet). Returns type errors found.',
     parameters: {
       type: 'object',
       properties: {
@@ -193,7 +211,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'run_tests',
-    description: 'Run the test suite. Returns test results including any failures.',
+    description: 'Run the test suite. Auto-detects: Jest/Vitest (JS/TS), pytest (Python), go test (Go), cargo test (Rust), rspec (Ruby), phpunit (PHP). Returns test results including any failures.',
     parameters: {
       type: 'object',
       properties: {
@@ -210,7 +228,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'run_build',
-    description: 'Run the build process. Returns build errors if any.',
+    description: 'Run the build process. Auto-detects: npm/pnpm build (JS/TS), cargo build (Rust), go build (Go), make (C/C++), gradle/mvn (Java). Returns build errors if any.',
     parameters: {
       type: 'object',
       properties: {},
@@ -465,15 +483,44 @@ export const TOOL_DEFINITIONS = [
 ];
 
 /**
- * Allowed shell commands for bash tool
+ * Allowed shell commands for bash tool - supports ALL languages
  */
 const ALLOWED_BASH_COMMANDS = new Set([
+  // General unix tools
   'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr',
   'echo', 'printf', 'date', 'pwd', 'env', 'which', 'type',
   'ls', 'tree', 'file', 'stat', 'du', 'df',
   'grep', 'awk', 'sed', 'xargs', 'tee',
-  'npm', 'npx', 'pnpm', 'yarn', 'node', 'tsc', 'eslint',
   'git', 'jq', 'diff', 'patch',
+  // JavaScript/TypeScript
+  'npm', 'npx', 'pnpm', 'yarn', 'node', 'tsc', 'eslint', 'prettier',
+  // Python
+  'python', 'python3', 'pip', 'pip3', 'pipx',
+  'ruff', 'pylint', 'flake8', 'mypy', 'pyright', 'bandit', 'black', 'isort',
+  'pytest', 'unittest',
+  // Go
+  'go', 'golangci-lint', 'gofmt', 'govet',
+  // Rust
+  'cargo', 'rustc', 'clippy', 'rustfmt',
+  // Java/Kotlin
+  'java', 'javac', 'gradle', 'gradlew', 'mvn', 'mvnw',
+  'ktlint', 'detekt',
+  // Ruby
+  'ruby', 'bundler', 'bundle', 'rubocop', 'rake',
+  // PHP
+  'php', 'composer', 'phpstan', 'phpcs', 'psalm',
+  // C/C++
+  'gcc', 'g++', 'clang', 'clang++', 'make', 'cmake', 'cppcheck',
+  // C#/.NET
+  'dotnet', 'msbuild',
+  // Swift
+  'swift', 'swiftlint', 'xcodebuild',
+  // Dart/Flutter
+  'dart', 'flutter',
+  // Elixir
+  'mix', 'elixir',
+  // Shell linting
+  'shellcheck',
 ]);
 
 /**
@@ -521,6 +568,8 @@ export class ToolExecutor {
     params: Record<string, unknown>
   ): Promise<{ result: unknown; output: string }> {
     switch (toolName) {
+      case 'run_lint':
+        return this.runLint(params.files as string[] | undefined, params.fix as boolean);
       case 'run_eslint':
         return this.runESLint(params.files as string[] | undefined, params.fix as boolean);
       case 'run_typecheck':
@@ -576,6 +625,180 @@ export class ToolExecutor {
         return this.searchLearnings(params.query as string);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
+    }
+  }
+
+  /**
+   * Detect project language based on files present
+   */
+  private async detectProjectLanguage(): Promise<string> {
+    const checks: [string, string][] = [
+      ['package.json', 'javascript'],
+      ['tsconfig.json', 'typescript'],
+      ['pyproject.toml', 'python'],
+      ['setup.py', 'python'],
+      ['requirements.txt', 'python'],
+      ['Pipfile', 'python'],
+      ['go.mod', 'go'],
+      ['Cargo.toml', 'rust'],
+      ['pom.xml', 'java'],
+      ['build.gradle', 'java'],
+      ['build.gradle.kts', 'kotlin'],
+      ['Gemfile', 'ruby'],
+      ['composer.json', 'php'],
+      ['Makefile', 'c'],
+      ['CMakeLists.txt', 'cpp'],
+      ['Package.swift', 'swift'],
+      ['pubspec.yaml', 'dart'],
+      ['mix.exs', 'elixir'],
+      ['*.sln', 'csharp'],
+    ];
+
+    for (const [file, lang] of checks) {
+      try {
+        if (file.includes('*')) {
+          const matches = await glob(file, { cwd: this.rootDir, nodir: true });
+          if (matches.length > 0) { return lang; }
+        } else {
+          await fs.promises.access(path.join(this.rootDir, file));
+          return lang;
+        }
+      } catch {
+        // File not found, try next
+      }
+    }
+
+    // Fallback: check file extensions in root
+    try {
+      const files = await fs.promises.readdir(this.rootDir);
+      if (files.some(f => f.endsWith('.py'))) { return 'python'; }
+      if (files.some(f => f.endsWith('.go'))) { return 'go'; }
+      if (files.some(f => f.endsWith('.rs'))) { return 'rust'; }
+      if (files.some(f => f.endsWith('.java'))) { return 'java'; }
+      if (files.some(f => f.endsWith('.rb'))) { return 'ruby'; }
+      if (files.some(f => f.endsWith('.php'))) { return 'php'; }
+      if (files.some(f => f.endsWith('.html'))) { return 'html'; }
+      if (files.some(f => f.endsWith('.c') || f.endsWith('.cpp') || f.endsWith('.h'))) { return 'c'; }
+    } catch {
+      // ignore
+    }
+
+    return 'unknown';
+  }
+
+  /**
+   * Auto-detect and run the appropriate linter for the project
+   */
+  async runLint(
+    files?: string[],
+    fix?: boolean
+  ): Promise<{ result: unknown; output: string }> {
+    const lang = await this.detectProjectLanguage();
+
+    switch (lang) {
+      case 'typescript':
+      case 'javascript':
+        return this.runESLint(files, fix);
+
+      case 'python': {
+        // Try ruff first (fastest), then pylint, then flake8
+        const ruffResult = await this.runCommand('ruff', ['check', ...(fix === true ? ['--fix'] : []), ...(files ?? ['.'])]);
+        if (ruffResult.exitCode !== 127) { // 127 = command not found
+          return {
+            result: ruffResult,
+            output: ruffResult.output || ruffResult.stderr || 'No issues found',
+          };
+        }
+        const pylintResult = await this.runCommand('pylint', ['--output-format=text', ...(files ?? ['.'])]);
+        if (pylintResult.exitCode !== 127) {
+          return {
+            result: pylintResult,
+            output: pylintResult.output || pylintResult.stderr || 'No issues found',
+          };
+        }
+        const flake8Result = await this.runCommand('flake8', [...(files ?? ['.'])]);
+        return {
+          result: flake8Result,
+          output: flake8Result.output || flake8Result.stderr || 'No Python linter available (install ruff, pylint, or flake8)',
+        };
+      }
+
+      case 'go': {
+        const result = await this.runCommand('golangci-lint', ['run', ...(files ?? ['./...'])]);
+        if (result.exitCode === 127) {
+          const vetResult = await this.runCommand('go', ['vet', ...(files ?? ['./...'])]);
+          return {
+            result: vetResult,
+            output: vetResult.output || vetResult.stderr || 'No Go lint issues found',
+          };
+        }
+        return {
+          result,
+          output: result.output || result.stderr || 'No Go lint issues found',
+        };
+      }
+
+      case 'rust': {
+        const result = await this.runCommand('cargo', ['clippy', '--message-format=short', '--', '-W', 'clippy::all']);
+        return {
+          result,
+          output: result.output || result.stderr || 'No Rust lint issues found',
+        };
+      }
+
+      case 'ruby': {
+        const result = await this.runCommand('rubocop', ['--format', 'simple', ...(files ?? [])]);
+        return {
+          result,
+          output: result.output || result.stderr || 'No Ruby lint issues found',
+        };
+      }
+
+      case 'php': {
+        const phpstanResult = await this.runCommand('phpstan', ['analyse', ...(files ?? ['.']), '--no-progress']);
+        if (phpstanResult.exitCode !== 127) {
+          return {
+            result: phpstanResult,
+            output: phpstanResult.output || phpstanResult.stderr || 'No PHP issues found',
+          };
+        }
+        const phpcsResult = await this.runCommand('phpcs', [...(files ?? ['.'])]);
+        return {
+          result: phpcsResult,
+          output: phpcsResult.output || phpcsResult.stderr || 'No PHP linter available (install phpstan or phpcs)',
+        };
+      }
+
+      case 'c':
+      case 'cpp': {
+        const result = await this.runCommand('cppcheck', ['--enable=all', '--quiet', ...(files ?? ['.'])]);
+        return {
+          result,
+          output: result.output || result.stderr || 'No C/C++ issues found',
+        };
+      }
+
+      case 'java':
+      case 'kotlin': {
+        // Try gradle if available
+        const gradleResult = await this.runCommand('./gradlew', ['check']);
+        if (gradleResult.exitCode !== 127) {
+          return {
+            result: gradleResult,
+            output: gradleResult.output || gradleResult.stderr || 'No issues found',
+          };
+        }
+        return {
+          result: { success: false, output: '' },
+          output: `No linter auto-detected for ${lang}. Use bash tool to run your project's linter directly.`,
+        };
+      }
+
+      default:
+        return {
+          result: { success: false, output: '' },
+          output: `No linter auto-detected for language: ${lang}. Use the bash tool to run linting commands directly.`,
+        };
     }
   }
 
@@ -637,9 +860,44 @@ export class ToolExecutor {
   }
 
   /**
-   * Run TypeScript type checking
+   * Run type checking - language-aware
    */
   async runTypeCheck(files?: string[]): Promise<{ result: TypeScriptError[]; output: string }> {
+    const lang = await this.detectProjectLanguage();
+
+    if (lang === 'python') {
+      // Try mypy first, then pyright
+      const mypyResult = await this.runCommand('mypy', [...(files ?? ['.'])]);
+      if (mypyResult.exitCode !== 127) {
+        return {
+          result: [],
+          output: mypyResult.output || mypyResult.stderr || 'No Python type errors found',
+        };
+      }
+      const pyrightResult = await this.runCommand('pyright', [...(files ?? ['.'])]);
+      return {
+        result: [],
+        output: pyrightResult.output || pyrightResult.stderr || 'No Python type checker available (install mypy or pyright)',
+      };
+    }
+
+    if (lang === 'go') {
+      const result = await this.runCommand('go', ['vet', ...(files ?? ['./...'])]);
+      return {
+        result: [],
+        output: result.output || result.stderr || 'No Go type errors found',
+      };
+    }
+
+    if (lang === 'rust') {
+      const result = await this.runCommand('cargo', ['check', '--message-format=short']);
+      return {
+        result: [],
+        output: result.output || result.stderr || 'No Rust type errors found',
+      };
+    }
+
+    // Default: TypeScript
     const args = ['tsc', '--noEmit', '--pretty', 'false'];
 
     if (files && files.length > 0) {
@@ -674,28 +932,53 @@ export class ToolExecutor {
   }
 
   /**
-   * Run tests
+   * Run tests - language-aware
    */
   async runTests(
     pattern?: string,
     testName?: string
   ): Promise<{ result: TestResult; output: string }> {
-    // Try to detect test runner
-    const packageJson = await this.readPackageJson();
+    const lang = await this.detectProjectLanguage();
+
     let command = 'npm';
     let args = ['test'];
 
-    if (packageJson?.scripts?.test !== undefined && packageJson.scripts.test !== '') {
-      if (packageJson.scripts.test.includes('vitest')) {
-        command = 'npx';
-        args = ['vitest', 'run', '--reporter=json'];
-        if (pattern !== undefined && pattern !== '') {args.push(pattern);}
-        if (testName !== undefined && testName !== '') {args.push('-t', testName);}
-      } else if (packageJson.scripts.test.includes('jest')) {
-        command = 'npx';
-        args = ['jest', '--json'];
-        if (pattern !== undefined && pattern !== '') {args.push(pattern);}
-        if (testName !== undefined && testName !== '') {args.push('-t', testName);}
+    if (lang === 'python') {
+      command = 'pytest';
+      args = ['-v'];
+      if (pattern !== undefined && pattern !== '') { args.push(pattern); }
+      if (testName !== undefined && testName !== '') { args.push('-k', testName); }
+    } else if (lang === 'go') {
+      command = 'go';
+      args = ['test', '-v', ...(pattern !== undefined && pattern !== '' ? [pattern] : ['./...'])];
+      if (testName !== undefined && testName !== '') { args.push('-run', testName); }
+    } else if (lang === 'rust') {
+      command = 'cargo';
+      args = ['test'];
+      if (testName !== undefined && testName !== '') { args.push(testName); }
+    } else if (lang === 'ruby') {
+      command = 'bundle';
+      args = ['exec', 'rspec'];
+      if (pattern !== undefined && pattern !== '') { args.push(pattern); }
+    } else if (lang === 'php') {
+      command = 'vendor/bin/phpunit';
+      args = [];
+      if (pattern !== undefined && pattern !== '') { args.push(pattern); }
+    } else {
+      // JS/TS - detect test runner
+      const packageJson = await this.readPackageJson();
+      if (packageJson?.scripts?.test !== undefined && packageJson.scripts.test !== '') {
+        if (packageJson.scripts.test.includes('vitest')) {
+          command = 'npx';
+          args = ['vitest', 'run', '--reporter=json'];
+          if (pattern !== undefined && pattern !== '') {args.push(pattern);}
+          if (testName !== undefined && testName !== '') {args.push('-t', testName);}
+        } else if (packageJson.scripts.test.includes('jest')) {
+          command = 'npx';
+          args = ['jest', '--json'];
+          if (pattern !== undefined && pattern !== '') {args.push(pattern);}
+          if (testName !== undefined && testName !== '') {args.push('-t', testName);}
+        }
       }
     }
 
@@ -760,10 +1043,51 @@ export class ToolExecutor {
   }
 
   /**
-   * Run build
+   * Run build - language-aware
    */
   async runBuild(): Promise<{ result: { success: boolean; errors: string[] }; output: string }> {
-    const result = await this.runCommand('npm', ['run', 'build']);
+    const lang = await this.detectProjectLanguage();
+
+    let command: string;
+    let args: string[];
+
+    switch (lang) {
+      case 'rust':
+        command = 'cargo';
+        args = ['build'];
+        break;
+      case 'go':
+        command = 'go';
+        args = ['build', './...'];
+        break;
+      case 'java':
+        // Try gradle first, then maven
+        try {
+          await fs.promises.access(path.join(this.rootDir, 'gradlew'));
+          command = './gradlew';
+          args = ['build'];
+        } catch {
+          command = 'mvn';
+          args = ['compile'];
+        }
+        break;
+      case 'c':
+      case 'cpp':
+        command = 'make';
+        args = [];
+        break;
+      case 'csharp':
+        command = 'dotnet';
+        args = ['build'];
+        break;
+      default:
+        // JS/TS default
+        command = 'npm';
+        args = ['run', 'build'];
+        break;
+    }
+
+    const result = await this.runCommand(command, args);
     const errors: string[] = [];
 
     if (result.exitCode !== 0) {

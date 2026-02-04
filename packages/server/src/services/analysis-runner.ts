@@ -158,26 +158,6 @@ export class AnalysisRunner {
     });
 
     try {
-      // Get issue types from config
-      const config = session.config as { issueTypes?: string[] } | null;
-      const issueTypes = config?.issueTypes ?? ['lint', 'type'];
-
-      // Map issue types to analyzer categories
-      const analyzerCategories = this.mapIssueTypesToCategories(issueTypes);
-
-      this.logger.info(`[analysis-runner] Running analyzers: ${analyzerCategories.join(', ')}`);
-
-      // Broadcast analyzer info
-      wsHandler.broadcastToSession(session.id, {
-        type: 'activity:log',
-        data: {
-          sessionId: session.id,
-          type: 'info',
-          message: `Running analyzers: ${analyzerCategories.join(', ')}`,
-          timestamp: new Date().toISOString(),
-        },
-      });
-
       // Dynamically import @sloppy/analyzers
       // Use createRequire.resolve to find the package, then dynamic import
       let analyze: AnalyzeFn;
@@ -205,12 +185,35 @@ export class AnalysisRunner {
       const { localPath, tempDir } = await this.resolveRepoPath(session.repo_path, session.id, wsHandler);
 
       this.logger.info(`[analysis-runner] Analysis path: ${localPath}`);
+
+      // Detect project language for smart analyzer selection
+      let detectedLanguage = 'unknown';
+      let isJsTs = false;
+      try {
+        const repoFiles = await readdir(localPath, { recursive: true }) as string[];
+        const langResult = this.detectLanguage(repoFiles);
+        detectedLanguage = langResult.primary;
+        isJsTs = langResult.isJsTs;
+        this.logger.info(`[analysis-runner] Detected language: ${detectedLanguage} (isJsTs: ${String(isJsTs)}, all: ${langResult.languages.join(', ')})`);
+      } catch (langErr) {
+        this.logger.warn(`[analysis-runner] Language detection failed: ${langErr}`);
+      }
+
+      // Get issue types from config
+      const config = session.config as { issueTypes?: string[] } | null;
+      const issueTypes = config?.issueTypes ?? ['lint', 'type'];
+
+      // Map issue types to analyzer categories (language-aware)
+      const analyzerCategories = this.mapIssueTypesToCategories(issueTypes, isJsTs);
+
+      this.logger.info(`[analysis-runner] Running analyzers: ${analyzerCategories.join(', ')}`);
+
       wsHandler.broadcastToSession(session.id, {
         type: 'activity:log',
         data: {
           sessionId: session.id,
           type: 'info',
-          message: `Analyzing path: ${localPath}`,
+          message: `Detected language: ${detectedLanguage}. Running analyzers: ${analyzerCategories.join(', ')}`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -580,29 +583,93 @@ export class AnalysisRunner {
   }
 
   /**
+   * Detect the primary language of a codebase based on file extensions
+   */
+  private detectLanguage(files: string[]): { primary: string; isJsTs: boolean; languages: string[] } {
+    const extCounts: Record<string, number> = {};
+    const langMap: Record<string, string> = {
+      '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript',
+      '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+      '.py': 'python', '.pyw': 'python', '.pyi': 'python',
+      '.go': 'go',
+      '.rs': 'rust',
+      '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.scala': 'scala',
+      '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.h': 'c', '.hpp': 'cpp',
+      '.cs': 'csharp',
+      '.rb': 'ruby', '.erb': 'ruby',
+      '.php': 'php',
+      '.swift': 'swift',
+      '.html': 'html', '.htm': 'html',
+      '.css': 'css', '.scss': 'css', '.sass': 'css', '.less': 'css',
+      '.vue': 'vue', '.svelte': 'svelte',
+      '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell',
+      '.sql': 'sql',
+      '.dart': 'dart',
+      '.ex': 'elixir', '.exs': 'elixir',
+      '.lua': 'lua',
+      '.r': 'r', '.R': 'r',
+    };
+
+    for (const file of files) {
+      const ext = file.substring(file.lastIndexOf('.'));
+      const lang = langMap[ext];
+      if (lang) {
+        extCounts[lang] = (extCounts[lang] ?? 0) + 1;
+      }
+    }
+
+    const sorted = Object.entries(extCounts).sort((a, b) => b[1] - a[1]);
+    const primary = sorted.length > 0 ? sorted[0][0] : 'unknown';
+    const languages = sorted.map(([lang]) => lang);
+    const jsTsLangs = new Set(['typescript', 'javascript', 'vue', 'svelte']);
+    const isJsTs = jsTsLangs.has(primary);
+
+    return { primary, isJsTs, languages };
+  }
+
+  /**
    * Map UI focus areas to analyzer categories
    * LLM is ALWAYS included - it orchestrates the entire analysis
    * Focus areas tell the LLM what to prioritize
+   * Language-aware: only includes static analyzers that support the detected language
    */
-  private mapIssueTypesToCategories(focusAreas: string[]): string[] {
-    // LLM is always the primary orchestrator
+  private mapIssueTypesToCategories(focusAreas: string[], isJsTs: boolean = true): string[] {
+    // LLM is always the primary orchestrator - works on ALL languages
     const categories: Set<string> = new Set(['llm']);
 
-    // Also run fast static analyzers in parallel for quick wins
-    const staticAnalyzers: Record<string, string[]> = {
-      lint: ['lint'],
-      type: ['type'],
-      test: ['coverage'],
-      security: ['security'],
-      stubs: ['stub'],
-      maintainability: ['duplicate', 'dead-code'],
+    // Language-agnostic analyzers (work on any codebase)
+    const universalAnalyzers: Record<string, string[]> = {
+      security: ['security'],     // Regex patterns work on any language
+      stubs: ['stub'],            // Regex patterns work on any language
+      maintainability: ['duplicate'], // jscpd supports many languages
+      test: ['coverage'],         // LCOV format is universal
     };
 
+    // JS/TS-only analyzers
+    const jsTsAnalyzers: Record<string, string[]> = {
+      lint: ['lint'],              // ESLint
+      type: ['type'],              // TypeScript compiler
+      maintainability: ['dead-code'], // TypeScript AST
+    };
+
+    // Always add universal analyzers
     for (const area of focusAreas) {
-      const mapped = staticAnalyzers[area];
+      const mapped = universalAnalyzers[area];
       if (mapped) {
         for (const cat of mapped) {
           categories.add(cat);
+        }
+      }
+    }
+
+    // Only add JS/TS analyzers if the codebase is JS/TS
+    if (isJsTs) {
+      for (const area of focusAreas) {
+        const mapped = jsTsAnalyzers[area];
+        if (mapped) {
+          for (const cat of mapped) {
+            categories.add(cat);
+          }
         }
       }
     }
