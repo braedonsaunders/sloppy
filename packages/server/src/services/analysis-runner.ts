@@ -154,10 +154,12 @@ export class AnalysisRunner {
       });
 
       // Dynamically import @sloppy/analyzers
+      // Use a variable to bypass TypeScript's compile-time module resolution
       let analyze: AnalyzeFn;
       try {
+        const moduleName = '@sloppy/analyzers';
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const analyzerModule = (await import('@sloppy/analyzers')) as any;
+        const analyzerModule = (await (Function('moduleName', 'return import(moduleName)')(moduleName))) as any;
         analyze = analyzerModule.analyze as AnalyzeFn;
       } catch (importError) {
         const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
