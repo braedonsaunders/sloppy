@@ -11,6 +11,13 @@ import {
   Check,
   X,
   SkipForward,
+  Copy,
+  CheckCheck,
+  Clock,
+  GitCommit,
+  Lightbulb,
+  Code2,
+  MapPin,
 } from 'lucide-react';
 import Button from './Button';
 import { StatusBadge, SeverityBadge, TypeBadge } from './Badge';
@@ -33,6 +40,12 @@ const severityIcons = {
   info: Info,
 };
 
+const severityColors = {
+  error: 'border-error/30 bg-error/5',
+  warning: 'border-warning/30 bg-warning/5',
+  info: 'border-accent/30 bg-accent/5',
+};
+
 export default function IssueCard({
   issue,
   onApprove,
@@ -44,6 +57,7 @@ export default function IssueCard({
   className,
 }: IssueCardProps) {
   const [internalExpanded, setInternalExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const isExpanded = controlledExpanded ?? internalExpanded;
 
   const handleToggle = () => {
@@ -54,11 +68,22 @@ export default function IssueCard({
     }
   };
 
+  const handleCopyContext = async () => {
+    if (issue.context) {
+      await navigator.clipboard.writeText(issue.context);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   const SeverityIcon = severityIcons[issue.severity];
   const isPending = issue.status === 'pending';
   const canApprove = isPending && onApprove;
   const canReject = isPending && onReject;
   const canSkip = isPending && onSkip;
+
+  // Parse context if it has suggestion
+  const contextData = issue.context ? tryParseContext(issue.context) : null;
 
   return (
     <div
@@ -69,6 +94,8 @@ export default function IssueCard({
             ? 'border-success/30 bg-success/5'
             : issue.status === 'rejected'
             ? 'border-error/30 bg-error/5'
+            : issue.status === 'in_progress'
+            ? severityColors[issue.severity]
             : 'border-dark-700 hover:border-dark-600'
         ),
         className
@@ -82,48 +109,61 @@ export default function IssueCard({
         {/* Severity Icon */}
         <div
           className={clsx(
-            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg',
+            'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg',
             issue.severity === 'error' && 'bg-error/10 text-error',
             issue.severity === 'warning' && 'bg-warning/10 text-warning',
             issue.severity === 'info' && 'bg-accent/10 text-accent'
           )}
         >
-          <SeverityIcon className="h-4 w-4" />
+          <SeverityIcon className="h-5 w-5" />
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
             <TypeBadge type={issue.type} size="sm" />
             <SeverityBadge severity={issue.severity} size="sm" />
             <StatusBadge status={issue.status} size="sm" />
+            {issue.code && (
+              <span className="text-xs font-mono text-dark-500 bg-dark-700 px-1.5 py-0.5 rounded">
+                {issue.code}
+              </span>
+            )}
           </div>
 
-          <p className="mt-2 text-sm text-dark-200 line-clamp-2">
+          <p className="text-sm text-dark-200 leading-relaxed">
             {issue.message}
           </p>
 
-          <div className="mt-2 flex items-center gap-2 text-xs text-dark-400">
-            <FileCode className="h-3.5 w-3.5" />
-            <span className="font-mono truncate">{issue.file}</span>
-            {issue.line && (
-              <>
-                <span>:</span>
-                <span className="font-mono">{issue.line}</span>
-              </>
-            )}
-            {issue.column && (
-              <>
-                <span>:</span>
-                <span className="font-mono">{issue.column}</span>
-              </>
-            )}
+          {/* File Location */}
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex items-center gap-2 text-xs text-dark-400 bg-dark-900/50 rounded px-2 py-1">
+              <FileCode className="h-3.5 w-3.5" />
+              <span className="font-mono truncate max-w-[300px]">{issue.file}</span>
+              {issue.line && (
+                <>
+                  <span className="text-dark-600">:</span>
+                  <span className="font-mono text-accent">{issue.line}</span>
+                </>
+              )}
+              {issue.column && (
+                <>
+                  <span className="text-dark-600">:</span>
+                  <span className="font-mono text-dark-500">{issue.column}</span>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Expand Button */}
         <button
-          className="flex-shrink-0 p-1 text-dark-500 hover:text-dark-300 transition-colors"
+          className={clsx(
+            'flex-shrink-0 p-2 rounded-lg transition-colors',
+            isExpanded
+              ? 'bg-accent/10 text-accent'
+              : 'text-dark-500 hover:text-dark-300 hover:bg-dark-700'
+          )}
           aria-expanded={isExpanded}
         >
           {isExpanded ? (
@@ -136,42 +176,107 @@ export default function IssueCard({
 
       {/* Expanded Content */}
       {isExpanded && (
-        <div className="border-t border-dark-700 px-4 py-3 space-y-4">
+        <div className="border-t border-dark-700 px-4 py-4 space-y-4">
           {/* Code Context */}
-          {issue.context && (
+          {(issue.context || contextData?.context) && (
             <div>
-              <h4 className="text-xs font-medium text-dark-400 mb-2">
-                Code Context
-              </h4>
-              <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-dark-200 overflow-x-auto">
-                {issue.context}
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-medium text-dark-400 flex items-center gap-1.5">
+                  <Code2 className="h-3.5 w-3.5" />
+                  Code Context
+                </h4>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCopyContext();
+                  }}
+                  className="flex items-center gap-1 text-xs text-dark-500 hover:text-dark-300 transition-colors"
+                >
+                  {copied ? (
+                    <>
+                      <CheckCheck className="h-3.5 w-3.5 text-success" />
+                      <span className="text-success">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-dark-200 overflow-x-auto border border-dark-700">
+                {contextData?.context || issue.context}
               </pre>
             </div>
           )}
 
-          {/* Issue Code/Rule */}
-          {issue.code && (
-            <div>
-              <h4 className="text-xs font-medium text-dark-400 mb-1">
-                Rule/Code
+          {/* Suggested Fix */}
+          {contextData?.suggestion && (
+            <div className="rounded-lg border border-success/30 bg-success/5 p-3">
+              <h4 className="text-xs font-medium text-success flex items-center gap-1.5 mb-2">
+                <Lightbulb className="h-3.5 w-3.5" />
+                Suggested Fix
               </h4>
-              <code className="text-xs font-mono text-accent">{issue.code}</code>
+              <p className="text-sm text-dark-200">{contextData.suggestion}</p>
             </div>
           )}
 
-          {/* Timestamps */}
-          <div className="flex items-center gap-4 text-xs text-dark-500">
-            <span>Created: {new Date(issue.createdAt).toLocaleString()}</span>
-            {issue.resolvedAt && (
-              <span>
-                Resolved: {new Date(issue.resolvedAt).toLocaleString()}
+          {/* Metadata Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+            {/* Location */}
+            <div className="space-y-1">
+              <span className="text-xs text-dark-500 flex items-center gap-1">
+                <MapPin className="h-3 w-3" />
+                Location
               </span>
+              <p className="text-sm font-mono text-dark-300">
+                Line {issue.line || '?'}
+                {issue.column && `, Col ${issue.column}`}
+              </p>
+            </div>
+
+            {/* Created */}
+            <div className="space-y-1">
+              <span className="text-xs text-dark-500 flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                Created
+              </span>
+              <p className="text-sm text-dark-300">
+                {formatTimestamp(issue.createdAt)}
+              </p>
+            </div>
+
+            {/* Resolved */}
+            {issue.resolvedAt && (
+              <div className="space-y-1">
+                <span className="text-xs text-dark-500 flex items-center gap-1">
+                  <Check className="h-3 w-3" />
+                  Resolved
+                </span>
+                <p className="text-sm text-dark-300">
+                  {formatTimestamp(issue.resolvedAt)}
+                </p>
+              </div>
+            )}
+
+            {/* Commit */}
+            {issue.commitId && (
+              <div className="space-y-1">
+                <span className="text-xs text-dark-500 flex items-center gap-1">
+                  <GitCommit className="h-3 w-3" />
+                  Fixed In
+                </span>
+                <p className="text-sm font-mono text-accent">
+                  {issue.commitId.substring(0, 7)}
+                </p>
+              </div>
             )}
           </div>
 
           {/* Actions */}
           {showActions && (canApprove || canReject || canSkip) && (
-            <div className="flex items-center gap-2 pt-2 border-t border-dark-700">
+            <div className="flex items-center gap-2 pt-3 border-t border-dark-700">
               {canApprove && (
                 <Button
                   variant="primary"
@@ -208,7 +313,7 @@ export default function IssueCard({
                   }}
                   leftIcon={<SkipForward className="h-3.5 w-3.5" />}
                 >
-                  Skip
+                  Skip for Now
                 </Button>
               )}
             </div>
@@ -217,6 +322,37 @@ export default function IssueCard({
       )}
     </div>
   );
+}
+
+// Helper to format timestamps
+function formatTimestamp(isoString: string): string {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// Try to parse context if it's JSON with suggestion
+function tryParseContext(context: string): { context?: string; suggestion?: string } | null {
+  try {
+    const parsed = JSON.parse(context);
+    if (typeof parsed === 'object') {
+      return {
+        context: parsed.context,
+        suggestion: parsed.suggestion,
+      };
+    }
+  } catch {
+    // Not JSON, return as plain context
+  }
+  return null;
 }
 
 // Compact issue row for lists
@@ -267,5 +403,173 @@ export function IssueRow({
 
       <StatusBadge status={issue.status} size="sm" />
     </button>
+  );
+}
+
+// Detailed issue view for split-panel layouts
+export interface IssueDetailViewProps {
+  issue: Issue;
+  onApprove?: (id: string) => void;
+  onReject?: (id: string) => void;
+  onSkip?: (id: string) => void;
+  showActions?: boolean;
+  className?: string;
+}
+
+export function IssueDetailView({
+  issue,
+  onApprove,
+  onReject,
+  onSkip,
+  showActions = true,
+  className,
+}: IssueDetailViewProps) {
+  const [copied, setCopied] = useState(false);
+  const SeverityIcon = severityIcons[issue.severity];
+  const isPending = issue.status === 'pending';
+  const contextData = issue.context ? tryParseContext(issue.context) : null;
+
+  const handleCopy = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className={twMerge('space-y-6', className)}>
+      {/* Header */}
+      <div className="flex items-start gap-4">
+        <div
+          className={clsx(
+            'flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl',
+            issue.severity === 'error' && 'bg-error/10 text-error',
+            issue.severity === 'warning' && 'bg-warning/10 text-warning',
+            issue.severity === 'info' && 'bg-accent/10 text-accent'
+          )}
+        >
+          <SeverityIcon className="h-6 w-6" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <TypeBadge type={issue.type} />
+            <SeverityBadge severity={issue.severity} />
+            <StatusBadge status={issue.status} />
+          </div>
+          <h2 className="text-lg font-medium text-dark-100 leading-snug">
+            {issue.message}
+          </h2>
+        </div>
+      </div>
+
+      {/* File Location */}
+      <div className="flex items-center gap-3 p-3 rounded-lg bg-dark-900 border border-dark-700">
+        <FileCode className="h-5 w-5 text-dark-500 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-mono text-dark-200 truncate">{issue.file}</p>
+          <p className="text-xs text-dark-500">
+            Line {issue.line || '?'}
+            {issue.column && `, Column ${issue.column}`}
+          </p>
+        </div>
+        <button
+          onClick={() => handleCopy(`${issue.file}:${issue.line || 1}`)}
+          className="p-2 rounded hover:bg-dark-700 text-dark-500 hover:text-dark-300 transition-colors"
+          title="Copy file path"
+        >
+          {copied ? <CheckCheck className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
+        </button>
+      </div>
+
+      {/* Code Context */}
+      {(issue.context || contextData?.context) && (
+        <div>
+          <h3 className="text-sm font-medium text-dark-300 mb-2 flex items-center gap-2">
+            <Code2 className="h-4 w-4" />
+            Code Context
+          </h3>
+          <pre className="rounded-lg bg-dark-900 p-4 text-sm font-mono text-dark-200 overflow-x-auto border border-dark-700 leading-relaxed">
+            {contextData?.context || issue.context}
+          </pre>
+        </div>
+      )}
+
+      {/* Suggested Fix */}
+      {contextData?.suggestion && (
+        <div className="rounded-lg border border-success/30 bg-success/5 p-4">
+          <h3 className="text-sm font-medium text-success flex items-center gap-2 mb-2">
+            <Lightbulb className="h-4 w-4" />
+            Suggested Fix
+          </h3>
+          <p className="text-sm text-dark-200 leading-relaxed">{contextData.suggestion}</p>
+        </div>
+      )}
+
+      {/* Rule/Code Info */}
+      {issue.code && (
+        <div className="p-3 rounded-lg bg-dark-900 border border-dark-700">
+          <span className="text-xs text-dark-500">Rule / Error Code</span>
+          <p className="text-sm font-mono text-accent mt-1">{issue.code}</p>
+        </div>
+      )}
+
+      {/* Timeline */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-dark-300">Timeline</h3>
+        <div className="space-y-2">
+          <div className="flex items-center gap-3 text-sm">
+            <Clock className="h-4 w-4 text-dark-500" />
+            <span className="text-dark-400">Created</span>
+            <span className="text-dark-200">{new Date(issue.createdAt).toLocaleString()}</span>
+          </div>
+          {issue.resolvedAt && (
+            <div className="flex items-center gap-3 text-sm">
+              <Check className="h-4 w-4 text-success" />
+              <span className="text-dark-400">Resolved</span>
+              <span className="text-dark-200">{new Date(issue.resolvedAt).toLocaleString()}</span>
+            </div>
+          )}
+          {issue.commitId && (
+            <div className="flex items-center gap-3 text-sm">
+              <GitCommit className="h-4 w-4 text-accent" />
+              <span className="text-dark-400">Commit</span>
+              <span className="font-mono text-accent">{issue.commitId}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Actions */}
+      {showActions && isPending && (
+        <div className="flex items-center gap-3 pt-4 border-t border-dark-700">
+          {onApprove && (
+            <Button
+              variant="primary"
+              onClick={() => onApprove(issue.id)}
+              leftIcon={<Check className="h-4 w-4" />}
+            >
+              Approve Fix
+            </Button>
+          )}
+          {onReject && (
+            <Button
+              variant="danger"
+              onClick={() => onReject(issue.id)}
+              leftIcon={<X className="h-4 w-4" />}
+            >
+              Reject
+            </Button>
+          )}
+          {onSkip && (
+            <Button
+              variant="ghost"
+              onClick={() => onSkip(issue.id)}
+              leftIcon={<SkipForward className="h-4 w-4" />}
+            >
+              Skip
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

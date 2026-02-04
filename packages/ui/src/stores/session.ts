@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import type { Session, SessionStats, Activity, Metrics } from '@/lib/api';
+import type { LLMRequest } from '@/components/LLMRequestPanel';
 
 export interface SessionState {
   // Current session
@@ -8,6 +9,10 @@ export interface SessionState {
   stats: SessionStats | null;
   activities: Activity[];
   metrics: Metrics[];
+
+  // LLM requests tracking
+  llmRequests: LLMRequest[];
+  activeLLMRequest: LLMRequest | undefined;
 
   // Session list
   sessions: Session[];
@@ -29,6 +34,13 @@ export interface SessionState {
   setMetrics: (metrics: Metrics[]) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
+
+  // LLM request actions
+  addLLMRequest: (request: LLMRequest) => void;
+  updateLLMRequest: (id: string, updates: Partial<LLMRequest>) => void;
+  setActiveLLMRequest: (request: LLMRequest | undefined) => void;
+  clearLLMRequests: () => void;
+
   reset: () => void;
 }
 
@@ -37,6 +49,8 @@ const initialState = {
   stats: null,
   activities: [],
   metrics: [],
+  llmRequests: [],
+  activeLLMRequest: undefined,
   sessions: [],
   isLoading: false,
   error: null,
@@ -136,6 +150,37 @@ export const useSessionStore = create<SessionState>()(
 
       setError: (error) => set({ error }, false, 'setError'),
 
+      // LLM request actions
+      addLLMRequest: (request) =>
+        set(
+          (state) => ({
+            llmRequests: [...state.llmRequests, request],
+          }),
+          false,
+          'addLLMRequest'
+        ),
+
+      updateLLMRequest: (id, updates) =>
+        set(
+          (state) => ({
+            llmRequests: state.llmRequests.map((r) =>
+              r.id === id ? { ...r, ...updates } : r
+            ),
+            activeLLMRequest:
+              state.activeLLMRequest?.id === id
+                ? { ...state.activeLLMRequest, ...updates }
+                : state.activeLLMRequest,
+          }),
+          false,
+          'updateLLMRequest'
+        ),
+
+      setActiveLLMRequest: (request) =>
+        set({ activeLLMRequest: request }, false, 'setActiveLLMRequest'),
+
+      clearLLMRequests: () =>
+        set({ llmRequests: [], activeLLMRequest: undefined }, false, 'clearLLMRequests'),
+
       reset: () => set(initialState, false, 'reset'),
     })),
     { name: 'session-store' }
@@ -150,6 +195,8 @@ export const selectActivities = (state: SessionState) => state.activities;
 export const selectMetrics = (state: SessionState) => state.metrics;
 export const selectIsLoading = (state: SessionState) => state.isLoading;
 export const selectError = (state: SessionState) => state.error;
+export const selectLLMRequests = (state: SessionState) => state.llmRequests;
+export const selectActiveLLMRequest = (state: SessionState) => state.activeLLMRequest;
 
 export const selectActiveSession = (state: SessionState) =>
   state.sessions.find((s) => s.status === 'running');
