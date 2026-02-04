@@ -4,13 +4,11 @@ This guide provides detailed installation instructions for all platforms.
 
 ## Prerequisites
 
-- **Node.js v22 LTS** (v22.x only - v23/v24 are too new and lack prebuilt binaries)
+- **Node.js v22 LTS or later** (v22+ required)
 - **pnpm** 9.15.0 (will be installed by setup script)
 - **Git** (for version control operations)
 - **Build tools** (Visual Studio Build Tools on Windows, Xcode CLI on macOS, build-essential on Linux)
 - An API key for one of: Claude (Anthropic), OpenAI, or Ollama (local)
-
-> **Important:** Use Node.js v22 LTS, not v23 or v24. Native modules like `better-sqlite3` don't have prebuilt binaries for newer versions yet.
 
 ---
 
@@ -49,9 +47,7 @@ The scripts will detect failures and provide helpful error messages with solutio
 
 ## Windows Manual Installation (Step-by-Step)
 
-### Step 1: Install Node.js v22 LTS
-
-> **Important:** Install v22 LTS specifically, not v23 or v24. Newer versions lack prebuilt binaries for native modules.
+### Step 1: Install Node.js LTS
 
 **Option A: Using winget (recommended)**
 ```powershell
@@ -59,15 +55,14 @@ winget install OpenJS.NodeJS.LTS
 ```
 
 **Option B: Manual download**
-1. Download Node.js **v22 LTS** from [nodejs.org](https://nodejs.org/)
-   - Choose the **LTS** version (v22.x)
+1. Download Node.js **LTS** from [nodejs.org](https://nodejs.org/)
 2. Run the installer
 3. **Important**: Check "Automatically install necessary tools" if prompted
 
 **Verify installation:**
 ```powershell
 node --version
-# Should output: v22.x.x
+# Should output: v22.x.x or later
 ```
 
 ### Step 2: Install pnpm

@@ -134,33 +134,15 @@ $nodeVersionStr = (node --version) -replace 'v', ''
 $nodeVersionParts = Get-VersionParts $nodeVersionStr
 $nodeMajor = $nodeVersionParts[0]
 
-# Check Node version - must be v22.x (v23+ and v24+ are too new, prebuild binaries don't exist)
+# Check Node version - must be v22+
 if ($nodeMajor -lt 22) {
     Write-Host ""
     Write-Host "Node.js version $nodeVersionStr is too old!" -ForegroundColor Red
-    Write-Host "Required: v22.x LTS" -ForegroundColor Yellow
+    Write-Host "Required: v22.x or later" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Please upgrade Node.js:" -ForegroundColor White
     Write-Host "  winget install OpenJS.NodeJS.LTS" -ForegroundColor Gray
     Write-Host "  Or download from: https://nodejs.org/" -ForegroundColor Gray
-    Write-Host ""
-    exit 1
-}
-
-if ($nodeMajor -gt 22) {
-    Write-Host ""
-    Write-Host "Node.js version $nodeVersionStr is too new!" -ForegroundColor Red
-    Write-Host "Native modules like better-sqlite3 don't have prebuilt binaries for v$nodeMajor yet." -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "Please install Node.js v22 LTS instead:" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  # Uninstall current version" -ForegroundColor Gray
-    Write-Host "  winget uninstall OpenJS.NodeJS" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  # Install v22 LTS" -ForegroundColor Gray
-    Write-Host "  winget install OpenJS.NodeJS.LTS" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "  # Then restart PowerShell and run this script again" -ForegroundColor Gray
     Write-Host ""
     exit 1
 }

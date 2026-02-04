@@ -171,27 +171,15 @@ fi
 NODE_VERSION=$(node --version | sed 's/v//')
 NODE_MAJOR=$(echo "$NODE_VERSION" | cut -d. -f1)
 
-# Check Node version - must be v22.x (v23+ and v24+ are too new, prebuild binaries don't exist)
+# Check Node version - must be v22+
 if [ "$NODE_MAJOR" -lt 22 ]; then
     echo ""
     echo -e "${RED}Node.js version $NODE_VERSION is too old!${NC}"
-    echo -e "${YELLOW}Required: v22.x LTS${NC}"
+    echo -e "${YELLOW}Required: v22.x or later${NC}"
     echo ""
     echo "Please upgrade Node.js:"
-    echo -e "${GRAY}  nvm install 22 && nvm use 22${NC}"
+    echo -e "${GRAY}  nvm install --lts && nvm use --lts${NC}"
     echo -e "${GRAY}  Or download from: https://nodejs.org/${NC}"
-    echo ""
-    exit 1
-fi
-
-if [ "$NODE_MAJOR" -gt 22 ]; then
-    echo ""
-    echo -e "${RED}Node.js version $NODE_VERSION is too new!${NC}"
-    echo -e "${YELLOW}Native modules like better-sqlite3 don't have prebuilt binaries for v$NODE_MAJOR yet.${NC}"
-    echo ""
-    echo "Please install Node.js v22 LTS instead:"
-    echo -e "${GRAY}  nvm install 22 && nvm use 22${NC}"
-    echo -e "${GRAY}  Or download v22 LTS from: https://nodejs.org/${NC}"
     echo ""
     exit 1
 fi
