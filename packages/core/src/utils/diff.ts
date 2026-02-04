@@ -218,8 +218,12 @@ export function parseDiff(diffText: string): ParsedDiff {
     // Count additions and removals
     for (const hunk of fileDiff.hunks) {
       for (const line of hunk.lines) {
-        if (line.type === 'add') totalAdded++;
-        if (line.type === 'remove') totalRemoved++;
+        if (line.type === 'add') {
+          totalAdded++;
+        }
+        if (line.type === 'remove') {
+          totalRemoved++;
+        }
       }
     }
   }
@@ -252,10 +256,14 @@ function parseFileDiff(
   }
 
   // Check for mode changes
-  const oldModeMatch = content.match(/^old mode (\d+)/m);
-  const newModeMatch = content.match(/^new mode (\d+)/m);
-  if (oldModeMatch) oldMode = oldModeMatch[1];
-  if (newModeMatch) newMode = newModeMatch[1];
+  const oldModeMatch = /^old mode (\d+)/m.exec(content);
+  const newModeMatch = /^new mode (\d+)/m.exec(content);
+  if (oldModeMatch) {
+    oldMode = oldModeMatch[1];
+  }
+  if (newModeMatch) {
+    newMode = newModeMatch[1];
+  }
 
   // Determine change type
   if (content.includes('new file mode')) {
@@ -272,14 +280,14 @@ function parseFileDiff(
   let match: RegExpExecArray | null;
 
   while ((match = hunkPattern.exec(content)) !== null) {
-    const oldStart = parseInt(match[1] ?? '1', 10);
-    const oldLines = parseInt(match[2] ?? '1', 10);
-    const newStart = parseInt(match[3] ?? '1', 10);
-    const newLines = parseInt(match[4] ?? '1', 10);
-    const header = match[5]?.trim();
+    const oldStart = parseInt(match[1], 10);
+    const oldLines = parseInt(match[2] || '1', 10);
+    const newStart = parseInt(match[3], 10);
+    const newLines = parseInt(match[4] || '1', 10);
+    const header = match[5].trim();
 
     // Find the hunk content (until next hunk or end)
-    const hunkStart = (match.index ?? 0) + match[0].length;
+    const hunkStart = match.index + match[0].length;
     const nextHunk = content.indexOf('\n@@', hunkStart);
     const hunkContent =
       nextHunk > -1
@@ -311,11 +319,11 @@ function parseFileDiff(
     isBinary,
   };
 
-  if (oldMode) {
+  if (oldMode !== undefined && oldMode !== '') {
     fileDiff.oldMode = oldMode;
   }
 
-  if (newMode) {
+  if (newMode !== undefined && newMode !== '') {
     fileDiff.newMode = newMode;
   }
 
@@ -417,9 +425,7 @@ export function applyDiff(
     (a, b) => b.oldStart - a.oldStart
   );
 
-  for (let i = 0; i < sortedHunks.length; i++) {
-    const hunk = sortedHunks[i];
-    if (!hunk) continue;
+  for (const hunk of sortedHunks) {
     const result = applyHunk(resultLines, hunk);
 
     if (result.success && result.lines) {
@@ -432,7 +438,7 @@ export function applyDiff(
   if (failedHunks.length > 0) {
     return {
       success: false,
-      error: `Failed to apply ${failedHunks.length} hunk(s)`,
+      error: `Failed to apply ${String(failedHunks.length)} hunk(s)`,
       failedHunks,
       content: resultLines.join('\n'),
     };
@@ -567,8 +573,8 @@ export function formatDiff(
     }
 
     for (const hunk of file.hunks) {
-      const header = hunk.header ? ` ${hunk.header}` : '';
-      const hunkLine = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@${header}`;
+      const header = hunk.header !== undefined && hunk.header !== '' ? ` ${hunk.header}` : '';
+      const hunkLine = `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@${header}`;
 
       if (colorize) {
         lines.push(`${COLORS.cyan}${hunkLine}${COLORS.reset}`);
@@ -633,7 +639,7 @@ export function createDiff(
 
   for (const hunk of hunks) {
     lines.push(
-      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`
+      `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(hunk.newStart)},${String(hunk.newLines)} @@`
     );
 
     for (const line of hunk.lines) {
@@ -660,7 +666,7 @@ function computeHunks(
   context: number
 ): DiffHunk[] {
   // Find changes using simple comparison
-  const changes: Array<{ type: 'same' | 'remove' | 'add'; oldIdx?: number; newIdx?: number; content: string }> = [];
+  const changes: { type: 'same' | 'remove' | 'add'; oldIdx?: number; newIdx?: number; content: string }[] = [];
 
   let oldIdx = 0;
   let newIdx = 0;
@@ -738,7 +744,6 @@ function computeHunks(
 
   for (let i = 0; i < changes.length; i++) {
     const change = changes[i];
-    if (!change) continue;
 
     if (change.type !== 'same') {
       // Start new hunk or extend current
@@ -760,7 +765,7 @@ function computeHunks(
         // Add leading context
         for (let j = contextStart; j < i; j++) {
           const ctx = changes[j];
-          if (ctx && ctx.type === 'same') {
+          if (ctx.type === 'same') {
             currentHunk.lines.push({ type: 'context', content: ctx.content });
             currentHunk.oldLines++;
             currentHunk.newLines++;
@@ -811,8 +816,8 @@ export function getAffectedLineRange(diff: FileDiff): {
   const lastHunk = diff.hunks[diff.hunks.length - 1];
 
   return {
-    start: firstHunk?.newStart ?? 1,
-    end: (lastHunk?.newStart ?? 1) + (lastHunk?.newLines ?? 1) - 1,
+    start: firstHunk.newStart,
+    end: lastHunk.newStart + lastHunk.newLines - 1,
   };
 }
 
@@ -831,10 +836,6 @@ export function diffsEqual(diff1: ParsedDiff, diff2: ParsedDiff): boolean {
   for (let i = 0; i < diff1.files.length; i++) {
     const file1 = diff1.files[i];
     const file2 = diff2.files[i];
-
-    if (!file1 || !file2) {
-      return false;
-    }
 
     if (file1.newPath !== file2.newPath) {
       return false;

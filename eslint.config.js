@@ -37,6 +37,9 @@ export default tseslint.config(
       '**/coverage/**',
       '**/*.js',
       '**/*.mjs',
+      '**/__tests__/**',
+      '**/*.test.ts',
+      '**/*.spec.ts',
     ],
   }
 );

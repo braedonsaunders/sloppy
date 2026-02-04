@@ -326,7 +326,6 @@ export function formatCommitMessage(
 export function parseDiffToFileChanges(diffOutput: string): CommitFileChange[] {
   const changes: CommitFileChange[] = [];
   const fileRegex = /^diff --git a\/(.+) b\/(.+)$/gm;
-  const statsRegex = /^(\d+) insertions?\(\+\), (\d+) deletions?\(-\)$/gm;
 
   let match: RegExpExecArray | null;
   while ((match = fileRegex.exec(diffOutput)) !== null) {
@@ -341,7 +340,7 @@ export function parseDiffToFileChanges(diffOutput: string): CommitFileChange[] {
     // This is a simplified parser - real implementation would need
     // to parse the actual diff hunks to count lines
     const fileChange: CommitFileChange = {
-      filePath: newPath ?? oldPath ?? '',
+      filePath: newPath,
       changeType,
       linesAdded: 0,
       linesRemoved: 0,

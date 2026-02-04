@@ -28,7 +28,7 @@ export interface SloppyConfig {
   /**
    * Provider configurations.
    */
-  providers?: Array<Partial<ProviderConfig>>;
+  providers?: Partial<ProviderConfig>[];
 
   /**
    * Default provider ID to use.
@@ -53,10 +53,10 @@ export interface SloppyConfig {
   /**
    * Plugin configurations.
    */
-  plugins?: Array<{
+  plugins?: {
     name: string;
     options?: Record<string, unknown>;
-  }>;
+  }[];
 
   /**
    * Project-specific settings.
@@ -203,8 +203,8 @@ async function loadJsonConfig(filePath: string): Promise<SloppyConfig> {
  */
 async function loadJsConfig(filePath: string): Promise<SloppyConfig> {
   try {
-    const module = await import(filePath);
-    return (module.default ?? module) as SloppyConfig;
+    const module = (await import(filePath)) as { default?: SloppyConfig } & SloppyConfig;
+    return module.default ?? module;
   } catch (error) {
     throw new Error(
       `Failed to load configuration file ${filePath}: ${
@@ -260,18 +260,18 @@ export function validateConfig(config: SloppyConfig): string[] {
       errors.push('providers must be an array');
     } else {
       config.providers.forEach((provider, index) => {
-        if (!provider.type) {
-          errors.push(`providers[${index}].type is required`);
+        if (provider.type === undefined) {
+          errors.push(`providers[${String(index)}].type is required`);
         }
-        if (!provider.model) {
-          errors.push(`providers[${index}].model is required`);
+        if (provider.model === undefined || provider.model === '') {
+          errors.push(`providers[${String(index)}].model is required`);
         }
         if (
           provider.temperature !== undefined &&
           (provider.temperature < 0 || provider.temperature > 1)
         ) {
           errors.push(
-            `providers[${index}].temperature must be between 0 and 1`
+            `providers[${String(index)}].temperature must be between 0 and 1`
           );
         }
       });
@@ -285,7 +285,7 @@ export function validateConfig(config: SloppyConfig): string[] {
     } else {
       config.ignorePatterns.forEach((pattern, index) => {
         if (typeof pattern !== 'string') {
-          errors.push(`ignorePatterns[${index}] must be a string`);
+          errors.push(`ignorePatterns[${String(index)}] must be a string`);
         }
       });
     }
@@ -338,7 +338,7 @@ export async function loadConfig(repoPath: string): Promise<ConfigLoadResult> {
   // Find config file
   const configPath = await findConfigFile(repoPath);
 
-  if (!configPath) {
+  if (configPath === undefined || configPath === '') {
     // Return default configuration if no file found
     warnings.push(
       'No configuration file found, using defaults. ' +
@@ -458,9 +458,7 @@ export function getProvider(
   let provider = config.providers.find((p) => p.id === idOrType);
 
   // If not found, try by type
-  if (!provider) {
-    provider = config.providers.find((p) => p.type === idOrType);
-  }
+  provider ??= config.providers.find((p) => p.type === (idOrType as ProviderType));
 
   return provider;
 }
@@ -479,7 +477,7 @@ export function getDefaultProvider(
   }
 
   // If defaultProvider is specified, use that
-  if (config.defaultProvider) {
+  if (config.defaultProvider !== undefined && config.defaultProvider !== '') {
     return getProvider(config, config.defaultProvider);
   }
 

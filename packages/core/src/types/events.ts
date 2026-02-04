@@ -484,7 +484,7 @@ export function isEventType<T extends SloppyEvent>(
  * @returns JSON string
  */
 export function serializeEvent(event: SloppyEvent): string {
-  return JSON.stringify(event, (key, value) => {
+  return JSON.stringify(event, (_key, value: unknown) => {
     if (value instanceof Date) {
       return value.toISOString();
     }
@@ -499,10 +499,10 @@ export function serializeEvent(event: SloppyEvent): string {
  * @returns Parsed event
  */
 export function deserializeEvent(json: string): SloppyEvent {
-  return JSON.parse(json, (key, value) => {
+  return JSON.parse(json, (key, value: unknown) => {
     if (key === 'timestamp' || key.endsWith('At')) {
-      return new Date(value);
+      return new Date(value as string | number | Date);
     }
     return value;
-  });
+  }) as SloppyEvent;
 }
