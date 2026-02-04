@@ -314,8 +314,14 @@ export const api = {
       }),
 
     test: (providerId: string) =>
-      request<{ success: boolean; message?: string }>(
+      request<{ success: boolean; message?: string; models?: string[] }>(
         `/providers/${providerId}/test`,
+        { method: 'POST' }
+      ),
+
+    refreshModels: (providerId: string) =>
+      request<{ provider: Provider; modelsFound: number }>(
+        `/providers/${providerId}/refresh-models`,
         { method: 'POST' }
       ),
   },
