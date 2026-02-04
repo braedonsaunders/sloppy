@@ -45,6 +45,7 @@ export default function NewSession() {
 
   // Form state
   const [repoPath, setRepoPath] = useState('');
+  const [branch, setBranch] = useState('main');
   const [repoType, setRepoType] = useState<'local' | 'git'>('local');
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
@@ -113,6 +114,7 @@ export default function NewSession() {
 
       const request: CreateSessionRequest = {
         repoPath: repoType === 'git' ? repoPath : repoPath,
+        branch: branch || undefined,
         provider,
         model: model || undefined,
         config,
