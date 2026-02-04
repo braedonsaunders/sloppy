@@ -4,7 +4,7 @@
   "private": true,
   "description": "Transform AI-generated slop into production-ready code",
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "pnpm run kill-ports && turbo run dev",
     "build": "turbo run build",
     "test": "turbo run test",
     "lint": "turbo run lint",
@@ -12,7 +12,8 @@
     "typecheck": "turbo run typecheck",
     "dev:server": "pnpm --filter @sloppy/server dev",
     "dev:ui": "pnpm --filter @sloppy/ui dev",
-    "start": "pnpm --filter @sloppy/server start"
+    "start": "pnpm --filter @sloppy/server start",
+    "kill-ports": "node scripts/kill-ports.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
