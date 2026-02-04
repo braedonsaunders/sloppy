@@ -119,6 +119,9 @@ importers:
       '@fastify/websocket':
         specifier: ^10.0.1
         version: 10.0.1
+      '@sloppy/analyzers':
+        specifier: workspace:*
+        version: link:../analyzers
       '@sloppy/core':
         specifier: workspace:*
         version: link:../core

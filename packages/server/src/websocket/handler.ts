@@ -46,6 +46,7 @@ export type OutgoingEventType =
   | 'commit:created'
   | 'commit:reverted'
   | 'metrics:updated'
+  | 'activity:log'
   | 'error'
   | 'subscribed'
   | 'unsubscribed'
