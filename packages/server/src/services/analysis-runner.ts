@@ -216,12 +216,81 @@ export class AnalysisRunner {
       });
 
       try {
-        // Run analysis
+        // Run analysis with comprehensive file patterns for ALL languages
         const result = await analyze(
           localPath,
         {
-          include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**'],
+          include: [
+            // JavaScript/TypeScript ecosystem
+            '**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs',
+            // Web files (HTML can contain JS!)
+            '**/*.html', '**/*.htm', '**/*.vue', '**/*.svelte', '**/*.astro',
+            // Stylesheets
+            '**/*.css', '**/*.scss', '**/*.sass', '**/*.less',
+            // Python
+            '**/*.py', '**/*.pyw', '**/*.pyi',
+            // Go
+            '**/*.go',
+            // Rust
+            '**/*.rs',
+            // Java/Kotlin/Scala
+            '**/*.java', '**/*.kt', '**/*.kts', '**/*.scala',
+            // C/C++/C#
+            '**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.cs',
+            // Ruby
+            '**/*.rb', '**/*.erb',
+            // PHP
+            '**/*.php',
+            // Swift/Objective-C
+            '**/*.swift', '**/*.m', '**/*.mm',
+            // Shell scripts
+            '**/*.sh', '**/*.bash', '**/*.zsh',
+            // Config/Data files (often contain logic or security issues)
+            '**/*.json', '**/*.yaml', '**/*.yml', '**/*.toml', '**/*.xml',
+            // SQL
+            '**/*.sql',
+            // Markdown (docs can reveal architecture)
+            '**/*.md',
+            // Docker/Infrastructure
+            '**/Dockerfile', '**/docker-compose.yml', '**/docker-compose.yaml',
+            '**/*.tf', '**/*.hcl',
+            // Other languages
+            '**/*.lua', '**/*.pl', '**/*.pm', '**/*.r', '**/*.R',
+            '**/*.dart', '**/*.ex', '**/*.exs', '**/*.erl', '**/*.hrl',
+            '**/*.zig', '**/*.nim', '**/*.v', '**/*.d',
+            '**/*.clj', '**/*.cljs', '**/*.cljc', '**/*.edn',
+            '**/*.fs', '**/*.fsx', '**/*.fsi',
+            '**/*.hs', '**/*.lhs',
+            '**/*.ml', '**/*.mli',
+            '**/*.jl',
+          ],
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/build/**',
+            '**/.git/**',
+            '**/coverage/**',
+            '**/__pycache__/**',
+            '**/*.pyc',
+            '**/venv/**',
+            '**/.venv/**',
+            '**/target/**',        // Rust/Java build output
+            '**/vendor/**',        // Go/PHP dependencies
+            '**/.next/**',
+            '**/.nuxt/**',
+            '**/out/**',
+            '**/*.min.js',
+            '**/*.min.css',
+            '**/*.map',
+            '**/*.lock',           // Lock files
+            '**/package-lock.json',
+            '**/yarn.lock',
+            '**/pnpm-lock.yaml',
+            '**/Cargo.lock',
+            '**/poetry.lock',
+            '**/Gemfile.lock',
+            '**/go.sum',
+          ],
         },
         {
           analyzers: analyzerCategories as any[],
