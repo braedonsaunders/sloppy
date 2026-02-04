@@ -92,6 +92,17 @@ function ProvidersTab() {
 
   const testMutation = useMutation({
     mutationFn: (providerId: string) => api.providers.test(providerId),
+    onSuccess: () => {
+      // Refresh providers to get updated models
+      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    },
+  });
+
+  const refreshModelsMutation = useMutation({
+    mutationFn: (providerId: string) => api.providers.refreshModels(providerId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    },
   });
 
   // Set default selected provider when providers load
@@ -172,8 +183,10 @@ function ProvidersTab() {
           provider={selectedProvider}
           onConfigure={(config) => configureMutation.mutate(config)}
           onTest={() => testMutation.mutate(selectedProvider.id)}
+          onRefreshModels={() => refreshModelsMutation.mutate(selectedProvider.id)}
           isConfiguring={configureMutation.isPending}
           isTesting={testMutation.isPending}
+          isRefreshing={refreshModelsMutation.isPending}
           testResult={
             testMutation.data && testMutation.variables === selectedProvider.id
               ? testMutation.data
@@ -227,8 +240,10 @@ interface ProviderCardProps {
   provider: Provider;
   onConfigure: (config: ProviderConfig) => void;
   onTest: () => void;
+  onRefreshModels: () => void;
   isConfiguring: boolean;
   isTesting: boolean;
+  isRefreshing: boolean;
   testResult: { success: boolean; message?: string } | null;
 }
 
@@ -236,8 +251,10 @@ function ProviderCard({
   provider,
   onConfigure,
   onTest,
+  onRefreshModels,
   isConfiguring,
   isTesting,
+  isRefreshing,
   testResult,
 }: ProviderCardProps) {
   const [apiKey, setApiKey] = useState('');
@@ -351,16 +368,40 @@ function ProviderCard({
 
         {/* Available Models */}
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-dark-200">
-            Available Models
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {provider.models.map((model) => (
-              <Badge key={model} variant="neutral" size="md">
-                {model}
-              </Badge>
-            ))}
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="block text-sm font-medium text-dark-200">
+              Available Models ({provider.models.length})
+            </label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRefreshModels}
+              isLoading={isRefreshing}
+              disabled={!provider.configured}
+              leftIcon={<RefreshCw className="h-3 w-3" />}
+            >
+              Refresh
+            </Button>
           </div>
+          {provider.models.length > 0 ? (
+            <div className="max-h-32 overflow-y-auto rounded-lg border border-dark-700 bg-dark-850 p-2">
+              <div className="flex flex-wrap gap-1.5">
+                {provider.models.map((model) => (
+                  <Badge key={model} variant="neutral" size="sm">
+                    {model}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dark-700 bg-dark-850 p-3 text-center">
+              <p className="text-sm text-dark-500">
+                {provider.configured
+                  ? 'No models found. Click Refresh to fetch available models.'
+                  : 'Configure the provider to see available models.'}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Test Result */}
@@ -399,9 +440,9 @@ function ProviderCard({
             onClick={onTest}
             isLoading={isTesting}
             disabled={!provider.configured}
-            leftIcon={<RefreshCw className="h-4 w-4" />}
+            leftIcon={<Zap className="h-4 w-4" />}
           >
-            Test Connection
+            Test & Sync Models
           </Button>
         </div>
       </div>

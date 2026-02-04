@@ -95,11 +95,11 @@ BEGIN
     UPDATE settings SET updated_at = datetime('now') WHERE key = OLD.key;
 END;
 
--- Insert default providers
+-- Insert default providers (models will be fetched dynamically from provider APIs)
 INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('claude', 'Claude', '["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-3-haiku-20240307"]'),
-    ('openai', 'OpenAI', '["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]'),
-    ('ollama', 'Ollama', '["llama3", "codellama", "mistral", "deepseek-coder"]');
+    ('claude', 'Claude', '[]'),
+    ('openai', 'OpenAI', '[]'),
+    ('ollama', 'Ollama', '[]');
 
 -- Insert default settings
 INSERT OR IGNORE INTO settings (key, value) VALUES
@@ -115,33 +115,15 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
     id: 3,
     name: '003_add_more_providers',
     sql: `
--- Add Google Gemini provider
+-- Add more providers (models will be fetched dynamically from provider APIs)
 INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('gemini', 'Google Gemini', '["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"]');
-
--- Add OpenRouter provider (aggregator with access to many models)
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('openrouter', 'OpenRouter', '["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "google/gemini-pro-1.5", "meta-llama/llama-3.1-70b-instruct", "mistralai/mistral-large"]');
-
--- Add DeepSeek provider
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('deepseek', 'DeepSeek', '["deepseek-chat", "deepseek-coder", "deepseek-reasoner"]');
-
--- Add Mistral AI provider
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('mistral', 'Mistral AI', '["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"]');
-
--- Add Groq provider (fast inference)
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('groq', 'Groq', '["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"]');
-
--- Add Together AI provider
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('together', 'Together AI', '["meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "mistralai/Mixtral-8x22B-Instruct-v0.1", "Qwen/Qwen2.5-72B-Instruct-Turbo", "deepseek-ai/DeepSeek-V3"]');
-
--- Add Cohere provider
-INSERT OR IGNORE INTO providers (id, name, models) VALUES
-    ('cohere', 'Cohere', '["command-r-plus", "command-r", "command-light"]');
+    ('gemini', 'Google Gemini', '[]'),
+    ('openrouter', 'OpenRouter', '[]'),
+    ('deepseek', 'DeepSeek', '[]'),
+    ('mistral', 'Mistral AI', '[]'),
+    ('groq', 'Groq', '[]'),
+    ('together', 'Together AI', '[]'),
+    ('cohere', 'Cohere', '[]');
     `,
   },
 ];
