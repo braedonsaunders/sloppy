@@ -15,7 +15,7 @@ function parseCliArgs(): CliOptions {
       port: {
         type: 'string',
         short: 'p',
-        default: process.env['PORT'] ?? '3000',
+        default: process.env['PORT'] ?? '7749',
       },
       host: {
         type: 'string',
@@ -71,7 +71,7 @@ Sloppy - Transform AI-generated code into production-ready quality
 Usage: sloppy [options]
 
 Options:
-  -p, --port <port>        Server port (default: 3000)
+  -p, --port <port>        Server port (default: 7749)
   -h, --host <host>        Server host (default: 0.0.0.0)
   -d, --db-path <path>     SQLite database path (default: ./data/sloppy.db)
   -l, --log-level <level>  Log level: debug, info, warn, error (default: info)
@@ -89,7 +89,7 @@ Environment variables:
 
 Examples:
   sloppy                          Start with defaults
-  sloppy -p 8080                  Start on port 8080
+  sloppy -p 3000                  Start on port 3000
   sloppy --db-path /var/sloppy.db Use custom database path
 
 Documentation: https://github.com/sloppy/sloppy
