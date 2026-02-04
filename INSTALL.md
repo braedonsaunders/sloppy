@@ -16,14 +16,12 @@ This guide provides detailed installation instructions for all platforms.
 ### Windows (PowerShell)
 
 ```powershell
-# Run the setup script
 .\scripts\setup.ps1
 ```
 
 ### macOS / Linux
 
 ```bash
-# Make the script executable and run it
 chmod +x scripts/setup.sh
 ./scripts/setup.sh
 ```
@@ -109,27 +107,16 @@ pnpm install
 
 This installs all packages across the monorepo workspaces.
 
-### Step 6: Configure Environment Variables
+### Step 6: Configure Environment (Optional)
 
 1. Copy the example environment file:
    ```powershell
    Copy-Item .env.example .env
    ```
 
-2. Edit `.env` with your preferred editor:
+2. Edit `.env` if you need to change defaults (port, database path, etc.):
    ```powershell
    notepad .env
-   # Or use VS Code: code .env
-   ```
-
-3. Add your API key(s):
-   ```env
-   # Choose one (or multiple) AI providers:
-   ANTHROPIC_API_KEY=sk-ant-...your-key-here...
-   OPENAI_API_KEY=sk-...your-key-here...
-
-   # Or for local Ollama:
-   OLLAMA_HOST=http://localhost:11434
    ```
 
 ### Step 7: Configure Sloppy (Optional)
@@ -157,9 +144,13 @@ pnpm start
 pnpm dev
 ```
 
-### Step 10: Open the UI
+### Step 10: Configure AI Provider
 
-Open your browser to: **http://localhost:3000**
+1. Open your browser to: **http://localhost:3000**
+2. Go to **Settings** (gear icon)
+3. Select your AI provider (Claude, OpenAI, etc.)
+4. Enter your API key
+5. Click **Test Connection** to verify
 
 ---
 
@@ -198,16 +189,17 @@ cp .env.example .env
 cp sloppy.config.example.json sloppy.config.json
 ```
 
-### Step 4: Configure and Run
+### Step 4: Build and Run
 
 ```bash
-# Edit .env with your API keys
-nano .env  # or: code .env
-
-# Build and start
 pnpm build
 pnpm start
 ```
+
+### Step 5: Configure AI Provider
+
+1. Open **http://localhost:3000**
+2. Go to **Settings** and configure your AI provider with your API key
 
 ---
 
@@ -255,16 +247,17 @@ cp .env.example .env
 cp sloppy.config.example.json sloppy.config.json
 ```
 
-### Step 4: Configure and Run
+### Step 4: Build and Run
 
 ```bash
-# Edit .env with your API keys
-nano .env
-
-# Build and start
 pnpm build
 pnpm start
 ```
+
+### Step 5: Configure AI Provider
+
+1. Open **http://localhost:3000**
+2. Go to **Settings** and configure your AI provider with your API key
 
 ---
 
@@ -353,22 +346,23 @@ pnpm lint       # Run ESLint
 
 ## Getting API Keys
 
+API keys are configured through the Sloppy UI (Settings page), not in environment variables.
+
 ### Anthropic (Claude)
 1. Go to [console.anthropic.com](https://console.anthropic.com/)
 2. Sign up or log in
 3. Navigate to API Keys
 4. Create a new key
-5. Add to `.env` as `ANTHROPIC_API_KEY`
+5. Paste it in Sloppy's Settings page
 
 ### OpenAI
 1. Go to [platform.openai.com](https://platform.openai.com/)
 2. Sign up or log in
 3. Navigate to API Keys
 4. Create a new secret key
-5. Add to `.env` as `OPENAI_API_KEY`
+5. Paste it in Sloppy's Settings page
 
 ### Ollama (Local/Free)
 1. Install Ollama from [ollama.ai](https://ollama.ai/)
 2. Pull a model: `ollama pull codellama`
-3. Set in `.env`: `OLLAMA_HOST=http://localhost:11434`
-4. Set `DEFAULT_PROVIDER=ollama` in `.env`
+3. In Sloppy's Settings, select Ollama and set the host (default: `http://localhost:11434`)

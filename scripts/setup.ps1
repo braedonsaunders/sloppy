@@ -150,13 +150,6 @@ PORT=7749
 HOST=0.0.0.0
 NODE_ENV=development
 DATABASE_PATH=./data/sloppy.db
-
-# Add your API key (at least one required):
-# ANTHROPIC_API_KEY=sk-ant-...
-# OPENAI_API_KEY=sk-...
-# OLLAMA_HOST=http://localhost:11434
-
-DEFAULT_PROVIDER=claude
 LOG_LEVEL=info
 "@ | Out-File -FilePath ".env" -Encoding utf8
         Write-Host "  Created .env file" -ForegroundColor Green
@@ -196,19 +189,14 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host ""
-Write-Host "  1. Add your API key to .env:" -ForegroundColor Yellow
-Write-Host "     notepad .env" -ForegroundColor Gray
-Write-Host ""
-Write-Host "     Add one of these:" -ForegroundColor Gray
-Write-Host "       ANTHROPIC_API_KEY=sk-ant-..." -ForegroundColor Gray
-Write-Host "       OPENAI_API_KEY=sk-..." -ForegroundColor Gray
-Write-Host "       OLLAMA_HOST=http://localhost:11434" -ForegroundColor Gray
-Write-Host ""
-Write-Host "  2. Start Sloppy:" -ForegroundColor Yellow
+Write-Host "  1. Start Sloppy:" -ForegroundColor Yellow
 Write-Host "     pnpm start" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  3. Open in browser:" -ForegroundColor Yellow
+Write-Host "  2. Open in browser:" -ForegroundColor Yellow
 Write-Host "     http://localhost:3000" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  3. Configure your AI provider:" -ForegroundColor Yellow
+Write-Host "     Go to Settings and add your API key" -ForegroundColor Gray
 Write-Host ""
 Write-Host "For development with hot-reload:" -ForegroundColor White
 Write-Host "     pnpm dev" -ForegroundColor Cyan

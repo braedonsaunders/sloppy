@@ -91,9 +91,6 @@ chmod +x scripts/setup.sh && ./scripts/setup.sh
 # Install
 pnpm install
 
-# Configure your AI provider
-export ANTHROPIC_API_KEY=sk-...  # or OPENAI_API_KEY
-
 # Build
 pnpm build
 
@@ -101,7 +98,7 @@ pnpm build
 pnpm start
 ```
 
-Open `http://localhost:3000` and point it at your repo.
+Open `http://localhost:3000`, then go to **Settings** to configure your AI provider.
 
 **See [INSTALL.md](INSTALL.md) for detailed platform-specific instructions.**
 

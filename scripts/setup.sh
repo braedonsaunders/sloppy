@@ -151,13 +151,6 @@ PORT=7749
 HOST=0.0.0.0
 NODE_ENV=development
 DATABASE_PATH=./data/sloppy.db
-
-# Add your API key (at least one required):
-# ANTHROPIC_API_KEY=sk-ant-...
-# OPENAI_API_KEY=sk-...
-# OLLAMA_HOST=http://localhost:11434
-
-DEFAULT_PROVIDER=claude
 LOG_LEVEL=info
 EOF
         echo -e "  ${GREEN}Created .env file${NC}"
@@ -195,19 +188,14 @@ echo -e "========================================${NC}"
 echo ""
 echo "Next steps:"
 echo ""
-echo -e "${YELLOW}  1. Add your API key to .env:${NC}"
-echo -e "${GRAY}     nano .env  ${NC}# or: code .env"
-echo ""
-echo -e "${GRAY}     Add one of these:${NC}"
-echo -e "${GRAY}       ANTHROPIC_API_KEY=sk-ant-...${NC}"
-echo -e "${GRAY}       OPENAI_API_KEY=sk-...${NC}"
-echo -e "${GRAY}       OLLAMA_HOST=http://localhost:11434${NC}"
-echo ""
-echo -e "${YELLOW}  2. Start Sloppy:${NC}"
+echo -e "${YELLOW}  1. Start Sloppy:${NC}"
 echo -e "${CYAN}     pnpm start${NC}"
 echo ""
-echo -e "${YELLOW}  3. Open in browser:${NC}"
+echo -e "${YELLOW}  2. Open in browser:${NC}"
 echo -e "${CYAN}     http://localhost:3000${NC}"
+echo ""
+echo -e "${YELLOW}  3. Configure your AI provider:${NC}"
+echo -e "${GRAY}     Go to Settings and add your API key${NC}"
 echo ""
 echo "For development with hot-reload:"
 echo -e "${CYAN}     pnpm dev${NC}"
