@@ -223,17 +223,17 @@ export async function registerMetricsRoutes(app: FastifyInstance): Promise<void>
             : null,
         },
         issues: {
-          total: stats.totalIssues,
-          resolved: stats.resolvedIssues,
-          pending: stats.totalIssues - stats.resolvedIssues,
+          total: stats.issuesFound,
+          resolved: stats.issuesResolved,
+          pending: stats.issuesFound - stats.issuesResolved,
           resolutionRate:
-            stats.totalIssues > 0
-              ? Math.round((stats.resolvedIssues / stats.totalIssues) * 100)
+            stats.issuesFound > 0
+              ? Math.round((stats.issuesResolved / stats.issuesFound) * 100)
               : 0,
         },
         commits: {
-          total: stats.totalCommits,
-          active: stats.totalCommits - stats.revertedCommits,
+          total: stats.commitsCreated,
+          active: stats.commitsCreated - stats.revertedCommits,
           reverted: stats.revertedCommits,
         },
         codeQuality: latest

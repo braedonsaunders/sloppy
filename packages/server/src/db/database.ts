@@ -616,10 +616,11 @@ export class SloppyDatabase {
    * Get session statistics
    */
   getSessionStats(sessionId: string): {
-    totalIssues: number;
-    resolvedIssues: number;
-    totalCommits: number;
+    issuesFound: number;
+    issuesResolved: number;
+    commitsCreated: number;
     revertedCommits: number;
+    elapsedTime: number;
   } {
     const issueStats = this.db.prepare(`
       SELECT
@@ -635,11 +636,21 @@ export class SloppyDatabase {
       FROM commits WHERE session_id = ?
     `).get(sessionId) as { total: number; reverted: number };
 
+    // Calculate elapsed time from session start
+    const session = this.getSession(sessionId);
+    let elapsedTime = 0;
+    if (session?.started_at) {
+      const startTime = new Date(session.started_at).getTime();
+      const endTime = session.ended_at ? new Date(session.ended_at).getTime() : Date.now();
+      elapsedTime = Math.floor((endTime - startTime) / 1000); // in seconds
+    }
+
     return {
-      totalIssues: issueStats.total,
-      resolvedIssues: issueStats.resolved,
-      totalCommits: commitStats.total,
+      issuesFound: issueStats.total,
+      issuesResolved: issueStats.resolved,
+      commitsCreated: commitStats.total,
       revertedCommits: commitStats.reverted,
+      elapsedTime,
     };
   }
 

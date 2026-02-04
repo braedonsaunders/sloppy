@@ -249,14 +249,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         return;
       }
 
-      // Return session stats
+      // Return session stats (stats already has the right field names)
       sendSuccess(reply, {
-        issuesFound: session.stats.totalIssues,
-        issuesResolved: session.stats.resolvedIssues,
-        commitsCreated: session.stats.totalCommits,
-        elapsedTime: session.started_at
-          ? Math.round((Date.now() - new Date(session.started_at).getTime()) / 1000)
-          : 0,
+        issuesFound: session.stats.issuesFound,
+        issuesResolved: session.stats.issuesResolved,
+        commitsCreated: session.stats.commitsCreated,
+        elapsedTime: session.stats.elapsedTime,
         estimatedTimeRemaining: null,
       });
     } catch (error) {

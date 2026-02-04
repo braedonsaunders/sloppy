@@ -38,10 +38,11 @@ export type CreateSessionRequest = z.infer<typeof CreateSessionSchema>;
 
 export interface SessionWithStats extends Session {
   stats: {
-    totalIssues: number;
-    resolvedIssues: number;
-    totalCommits: number;
+    issuesFound: number;
+    issuesResolved: number;
+    commitsCreated: number;
     revertedCommits: number;
+    elapsedTime: number;
   };
 }
 
