@@ -3,6 +3,7 @@
  * Uses @sloppy/analyzers to detect issues and stores them in the database
  */
 
+import { createRequire } from 'node:module';
 import {
   SloppyDatabase,
   type Session,
@@ -154,12 +155,12 @@ export class AnalysisRunner {
       });
 
       // Dynamically import @sloppy/analyzers
-      // Use a variable to bypass TypeScript's compile-time module resolution
+      // Use createRequire to handle workspace package resolution properly
       let analyze: AnalyzeFn;
       try {
-        const moduleName = '@sloppy/analyzers';
+        const require = createRequire(import.meta.url);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const analyzerModule = (await (Function('moduleName', 'return import(moduleName)')(moduleName))) as any;
+        const analyzerModule = require('@sloppy/analyzers') as any;
         analyze = analyzerModule.analyze as AnalyzeFn;
       } catch (importError) {
         const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
