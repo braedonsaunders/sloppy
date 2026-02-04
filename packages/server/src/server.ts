@@ -61,6 +61,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
         process.env['NODE_ENV'] !== 'production'
           ? {
               target: 'pino-pretty',
+              level: logLevel, // Must specify level for transport worker thread filtering
               options: {
                 colorize: true,
                 translateTime: 'HH:MM:ss Z',
