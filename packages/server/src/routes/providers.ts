@@ -86,7 +86,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
   app.get('/api/providers', async (_request: FastifyRequest, reply: FastifyReply) => {
     try {
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
         FROM providers
         ORDER BY name
       `);
@@ -107,7 +107,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
     try {
       const params = ProviderIdParamsSchema.parse(request.params);
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
@@ -196,7 +196,7 @@ export async function registerProviderRoutes(app: FastifyInstance): Promise<void
 
       // Fetch updated provider
       const stmt = db.getRawDb().prepare(`
-        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at, selected_model, created_at, updated_at
+        SELECT id, name, api_key, base_url, models, configured, options, selected_model, created_at, updated_at
         FROM providers
         WHERE id = ?
       `);
