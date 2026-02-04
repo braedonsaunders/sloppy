@@ -66,28 +66,61 @@ const DEFAULT_CONFIG: Required<FileBrowserConfig> = {
   batchSize: 10,
   maxFiles: 100,
   priorityPatterns: [
-    '**/index.{ts,tsx,js,jsx}',
-    '**/main.{ts,tsx,js,jsx}',
-    '**/app.{ts,tsx,js,jsx}',
-    '**/server.{ts,tsx,js,jsx}',
-    '**/api/**/*.{ts,tsx,js,jsx}',
-    '**/routes/**/*.{ts,tsx,js,jsx}',
-    '**/services/**/*.{ts,tsx,js,jsx}',
-    '**/controllers/**/*.{ts,tsx,js,jsx}',
-    '**/handlers/**/*.{ts,tsx,js,jsx}',
-    '**/middleware/**/*.{ts,tsx,js,jsx}',
-    '**/auth/**/*.{ts,tsx,js,jsx}',
-    '**/security/**/*.{ts,tsx,js,jsx}',
+    // Entry points (any language)
+    '**/index.*',
+    '**/main.*',
+    '**/app.*',
+    '**/server.*',
+    '**/Application.*',
+    '**/Program.*',
+    // API/Web routes
+    '**/api/**/*',
+    '**/routes/**/*',
+    '**/controllers/**/*',
+    '**/handlers/**/*',
+    '**/views/**/*',
+    '**/endpoints/**/*',
+    // Business logic
+    '**/services/**/*',
+    '**/models/**/*',
+    '**/domain/**/*',
+    '**/core/**/*',
+    // Security-sensitive
+    '**/auth/**/*',
+    '**/security/**/*',
+    '**/middleware/**/*',
+    '**/permissions/**/*',
+    // Config files
+    '**/config/**/*',
+    '**/*.config.*',
+    // HTML files (can contain embedded code)
+    '**/*.html',
+    '**/*.htm',
   ],
   lowPriorityPatterns: [
-    '**/*.test.{ts,tsx,js,jsx}',
-    '**/*.spec.{ts,tsx,js,jsx}',
+    // Tests
+    '**/*.test.*',
+    '**/*.spec.*',
+    '**/*_test.*',
+    '**/*_spec.*',
+    '**/test_*',
     '**/__tests__/**',
     '**/__mocks__/**',
+    '**/tests/**',
+    '**/test/**',
+    // Fixtures/Examples
     '**/fixtures/**',
     '**/examples/**',
+    '**/samples/**',
+    // Documentation
     '**/docs/**',
-    '**/*.stories.{ts,tsx,js,jsx}',
+    '**/documentation/**',
+    // Stories (Storybook)
+    '**/*.stories.*',
+    // Generated files
+    '**/*.generated.*',
+    '**/*.g.*',
+    '**/generated/**',
   ],
   contextLines: 3,
 };
@@ -290,10 +323,14 @@ export class FileBrowser {
       score += 10;
       reasons.push('business logic');
     }
+    // Entry points (language-agnostic)
     if (
-      fileName === 'index.ts' ||
-      fileName === 'index.tsx' ||
-      fileName === 'index.js'
+      fileName.startsWith('index.') ||
+      fileName.startsWith('main.') ||
+      fileName.startsWith('app.') ||
+      fileName === '__init__.py' ||
+      fileName === 'mod.rs' ||
+      fileName === 'lib.rs'
     ) {
       score += 10;
       reasons.push('entry point');

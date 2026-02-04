@@ -177,14 +177,46 @@ export class AnalysisOrchestrator {
   }
 
   /**
-   * Find files to analyze
+   * Find files to analyze - supports ALL programming languages
    */
   private async findFiles(options: AnalyzerOptions): Promise<string[]> {
     const include = options.include ?? [
-      '**/*.ts',
-      '**/*.tsx',
-      '**/*.js',
-      '**/*.jsx',
+      // JavaScript/TypeScript
+      '**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs',
+      // Web (HTML can contain code!)
+      '**/*.html', '**/*.htm', '**/*.vue', '**/*.svelte', '**/*.astro',
+      // Stylesheets
+      '**/*.css', '**/*.scss', '**/*.sass', '**/*.less',
+      // Python
+      '**/*.py', '**/*.pyw', '**/*.pyi',
+      // Go
+      '**/*.go',
+      // Rust
+      '**/*.rs',
+      // Java/Kotlin/Scala
+      '**/*.java', '**/*.kt', '**/*.kts', '**/*.scala',
+      // C/C++/C#
+      '**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.cs',
+      // Ruby
+      '**/*.rb', '**/*.erb',
+      // PHP
+      '**/*.php',
+      // Swift/Objective-C
+      '**/*.swift', '**/*.m', '**/*.mm',
+      // Shell
+      '**/*.sh', '**/*.bash', '**/*.zsh',
+      // Config (often contain logic/secrets)
+      '**/*.json', '**/*.yaml', '**/*.yml', '**/*.toml', '**/*.xml',
+      // SQL
+      '**/*.sql',
+      // Markdown
+      '**/*.md',
+      // Other languages
+      '**/*.lua', '**/*.pl', '**/*.pm', '**/*.r', '**/*.R',
+      '**/*.dart', '**/*.ex', '**/*.exs',
+      '**/*.clj', '**/*.cljs',
+      '**/*.hs', '**/*.ml',
+      '**/*.jl', '**/*.zig', '**/*.nim',
     ];
 
     const exclude = options.exclude ?? [
@@ -193,8 +225,19 @@ export class AnalysisOrchestrator {
       '**/build/**',
       '**/.git/**',
       '**/coverage/**',
+      '**/__pycache__/**',
+      '**/venv/**',
+      '**/.venv/**',
+      '**/target/**',
+      '**/vendor/**',
       '**/*.d.ts',
       '**/*.min.js',
+      '**/*.min.css',
+      '**/*.map',
+      '**/*.lock',
+      '**/package-lock.json',
+      '**/yarn.lock',
+      '**/pnpm-lock.yaml',
     ];
 
     const files: string[] = [];
