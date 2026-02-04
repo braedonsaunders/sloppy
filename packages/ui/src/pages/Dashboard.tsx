@@ -24,15 +24,15 @@ export default function Dashboard() {
       (s) => s.status === 'running' || s.status === 'paused'
     ).length,
     totalIssuesResolved: sessions.reduce(
-      (sum, s) => sum + s.stats.issuesResolved,
+      (sum, s) => sum + (s.stats?.issuesResolved ?? 0),
       0
     ),
     totalIssuesFound: sessions.reduce(
-      (sum, s) => sum + s.stats.issuesFound,
+      (sum, s) => sum + (s.stats?.issuesFound ?? 0),
       0
     ),
     totalCommits: sessions.reduce(
-      (sum, s) => sum + s.stats.commitsCreated,
+      (sum, s) => sum + (s.stats?.commitsCreated ?? 0),
       0
     ),
   };
@@ -180,13 +180,12 @@ interface ActiveSessionCardProps {
 }
 
 function ActiveSessionCard({ session }: ActiveSessionCardProps) {
-  const repoName = session.repoPath.split('/').pop() || session.repoPath;
-  const progress =
-    session.stats.issuesFound > 0
-      ? (session.stats.issuesResolved / session.stats.issuesFound) * 100
-      : 0;
-
-  const elapsedMinutes = Math.floor(session.stats.elapsedTime / 60);
+  const repoPath = session.repoPath || '';
+  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
+  const issuesFound = session.stats?.issuesFound ?? 0;
+  const issuesResolved = session.stats?.issuesResolved ?? 0;
+  const progress = issuesFound > 0 ? (issuesResolved / issuesFound) * 100 : 0;
+  const elapsedMinutes = Math.floor((session.stats?.elapsedTime ?? 0) / 60);
 
   return (
     <Link
@@ -213,7 +212,7 @@ function ActiveSessionCard({ session }: ActiveSessionCardProps) {
         <div className="flex items-center justify-between text-sm mb-2">
           <span className="text-dark-400">Progress</span>
           <span className="text-dark-200">
-            {session.stats.issuesResolved}/{session.stats.issuesFound} issues
+            {issuesResolved}/{issuesFound} issues
           </span>
         </div>
         <ProgressBar
@@ -231,8 +230,13 @@ interface SessionCardProps {
 }
 
 function SessionCard({ session }: SessionCardProps) {
-  const repoName = session.repoPath.split('/').pop() || session.repoPath;
-  const date = new Date(session.startedAt).toLocaleDateString();
+  const repoPath = session.repoPath || '';
+  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
+  const date = session.startedAt
+    ? new Date(session.startedAt).toLocaleDateString()
+    : 'N/A';
+  const issuesResolved = session.stats?.issuesResolved ?? 0;
+  const issuesFound = session.stats?.issuesFound ?? 0;
 
   return (
     <Link
@@ -263,8 +267,7 @@ function SessionCard({ session }: SessionCardProps) {
           <StatusBadge status={session.status} size="sm" />
         </div>
         <p className="text-sm text-dark-500">
-          {date} • {session.stats.issuesResolved}/{session.stats.issuesFound}{' '}
-          resolved
+          {date} • {issuesResolved}/{issuesFound} resolved
         </p>
       </div>
 
