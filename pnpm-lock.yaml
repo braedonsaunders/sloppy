@@ -132,6 +132,9 @@ importers:
       '@sloppy/core':
         specifier: workspace:*
         version: link:../core
+      '@sloppy/git':
+        specifier: workspace:*
+        version: link:../git
       better-sqlite3:
         specifier: ^12.1.0
         version: 12.6.2
