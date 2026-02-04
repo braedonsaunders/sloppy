@@ -23,12 +23,18 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
+
+  // Only set Content-Type: application/json if there's a body
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string>),
+  };
+  if (options.body) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const config: RequestInit = {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
   };
 
   const response = await fetch(url, config);
