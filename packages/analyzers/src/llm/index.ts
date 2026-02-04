@@ -260,10 +260,10 @@ export class LLMAnalyzer extends BaseAnalyzer {
     const runtimeConfig = options.config as Partial<LLMAnalyzerConfig> | undefined;
     const effectiveConfig = {
       ...this.config,
-      ...(runtimeConfig?.apiKey && { apiKey: runtimeConfig.apiKey }),
-      ...(runtimeConfig?.provider && { provider: runtimeConfig.provider as LLMProviderType }),
-      ...(runtimeConfig?.model && { model: runtimeConfig.model }),
-      ...(runtimeConfig?.baseUrl && { baseUrl: runtimeConfig.baseUrl }),
+      ...(runtimeConfig?.apiKey !== undefined && runtimeConfig.apiKey !== '' && { apiKey: runtimeConfig.apiKey }),
+      ...(runtimeConfig?.provider !== undefined && { provider: runtimeConfig.provider }),
+      ...(runtimeConfig?.model !== undefined && runtimeConfig.model !== '' && { model: runtimeConfig.model }),
+      ...(runtimeConfig?.baseUrl !== undefined && runtimeConfig.baseUrl !== '' && { baseUrl: runtimeConfig.baseUrl }),
     };
 
     if (!effectiveConfig.apiKey) {
