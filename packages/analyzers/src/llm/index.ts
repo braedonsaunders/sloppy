@@ -205,6 +205,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
   readonly category: IssueCategory = 'llm';
 
   private readonly config: Required<LLMAnalyzerConfig>;
+  private activeConfig: Required<LLMAnalyzerConfig> | null = null; // Config used during current analysis run
   private fileBrowser: FileBrowser | null = null;
   private toolExecutor: ToolExecutor | null = null;
 
@@ -244,19 +245,41 @@ export class LLMAnalyzer extends BaseAnalyzer {
   }
 
   /**
+   * Get the active config (runtime config during analysis, or default config)
+   */
+  private getConfig(): Required<LLMAnalyzerConfig> {
+    return this.activeConfig ?? this.config;
+  }
+
+  /**
    * Analyze files using LLM-powered agentic analysis
    */
   async analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
-    if (!this.config.apiKey) {
-      this.log(options, 'No API key configured, skipping LLM analysis');
+    // Merge runtime config from options.config with constructor config
+    // This allows the orchestrator to pass provider config at analysis time
+    const runtimeConfig = options.config as Partial<LLMAnalyzerConfig> | undefined;
+    const effectiveConfig = {
+      ...this.config,
+      ...(runtimeConfig?.apiKey && { apiKey: runtimeConfig.apiKey }),
+      ...(runtimeConfig?.provider && { provider: runtimeConfig.provider as LLMProviderType }),
+      ...(runtimeConfig?.model && { model: runtimeConfig.model }),
+      ...(runtimeConfig?.baseUrl && { baseUrl: runtimeConfig.baseUrl }),
+    };
+
+    if (!effectiveConfig.apiKey) {
+      // Always log this warning regardless of verbose flag - it's a significant issue
+      console.warn(`[${this.name}] WARNING: No API key configured for provider '${effectiveConfig.provider}'. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or the appropriate key for your provider. Skipping LLM analysis.`);
       return [];
     }
+
+    // Store effective config for use throughout this analysis run
+    this.activeConfig = effectiveConfig as Required<LLMAnalyzerConfig>;
 
     const issues: Issue[] = [];
 
     // Initialize tools
-    this.fileBrowser = new FileBrowser(options.rootDir, this.config.fileBrowserConfig);
-    this.toolExecutor = new ToolExecutor(options.rootDir, this.config.toolTimeout);
+    this.fileBrowser = new FileBrowser(options.rootDir, this.getConfig().fileBrowserConfig);
+    this.toolExecutor = new ToolExecutor(options.rootDir, this.getConfig().toolTimeout);
 
     try {
       this.log(options, `Starting LLM analysis of ${String(files.length)} files`);
@@ -292,6 +315,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       this.logError('LLM analysis failed', error);
     } finally {
       this.fileBrowser.clearCache();
+      this.activeConfig = null; // Clear runtime config after analysis
     }
 
     return this.deduplicateIssues(issues);
@@ -303,7 +327,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
   private async runInitialTools(options: AnalyzerOptions): Promise<string> {
     const contextParts: string[] = [];
 
-    if (this.config.runLint && this.toolExecutor !== null) {
+    if (this.getConfig().runLint && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running ESLint...');
         const lintResult = await this.toolExecutor.runESLint();
@@ -316,7 +340,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       }
     }
 
-    if (this.config.runTypeCheck && this.toolExecutor !== null) {
+    if (this.getConfig().runTypeCheck && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running TypeScript check...');
         const typeResult = await this.toolExecutor.runTypeCheck();
@@ -326,7 +350,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       }
     }
 
-    if (this.config.runTests && this.toolExecutor !== null) {
+    if (this.getConfig().runTests && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running tests...');
         const testResult = await this.toolExecutor.runTests();
@@ -336,7 +360,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       }
     }
 
-    if (this.config.runBuild && this.toolExecutor !== null) {
+    if (this.getConfig().runBuild && this.toolExecutor !== null) {
       try {
         this.log(options, 'Running build...');
         const buildResult = await this.toolExecutor.runBuild();
@@ -361,7 +385,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
     const messages: Message[] = [];
 
     // Build system prompt
-    const systemPrompt = this.config.systemPrompt || this.buildSystemPrompt();
+    const systemPrompt = this.getConfig().systemPrompt || this.buildSystemPrompt();
 
     // Build initial user message
     const userMessage = this.buildInitialPrompt(files, toolContext, options);
@@ -370,8 +394,8 @@ export class LLMAnalyzer extends BaseAnalyzer {
     messages.push({ role: 'user', content: userMessage });
 
     // Run agentic loop
-    for (let iteration = 0; iteration < this.config.maxIterations; iteration++) {
-      this.log(options, `Agentic iteration ${String(iteration + 1)}/${String(this.config.maxIterations)}`);
+    for (let iteration = 0; iteration < this.getConfig().maxIterations; iteration++) {
+      this.log(options, `Agentic iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)}`);
 
       try {
         const response = await this.callLLM(messages);
@@ -401,7 +425,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
           // Check if LLM wants to continue or is done
           if (response.content.includes('[ANALYSIS_COMPLETE]') ||
               !response.content.includes('create_issue') ||
-              iteration >= this.config.maxIterations - 1) {
+              iteration >= this.getConfig().maxIterations - 1) {
             break;
           }
 
@@ -430,7 +454,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
     if (this.fileBrowser === null) {
       return issues;
     }
-    const fileContents = await this.fileBrowser.readFiles(files.slice(0, this.config.batchSize));
+    const fileContents = await this.fileBrowser.readFiles(files.slice(0, this.getConfig().batchSize));
     if (fileContents.length === 0) {return issues;}
 
     // Build analysis prompt
@@ -442,8 +466,8 @@ export class LLMAnalyzer extends BaseAnalyzer {
     const analysisPrompt = generateAnalysisPrompt(
       filesForPrompt,
       `Analyzing ${groupName}: ${String(files.length)} related files.${
-        this.config.focusAreas.length > 0
-          ? `\nFocus areas: ${this.config.focusAreas.join(', ')}`
+        this.getConfig().focusAreas.length > 0
+          ? `\nFocus areas: ${this.getConfig().focusAreas.join(', ')}`
           : ''
       }`
     );
@@ -506,7 +530,7 @@ ${files.length > 50 ? `\n... and ${String(files.length - 50)} more files` : ''}
 
 ${toolContext ? `## Initial Tool Results\n${toolContext}` : ''}
 
-${this.config.focusAreas.length > 0 ? `## Focus Areas\nPay special attention to: ${this.config.focusAreas.join(', ')}` : ''}
+${this.getConfig().focusAreas.length > 0 ? `## Focus Areas\nPay special attention to: ${this.getConfig().focusAreas.join(', ')}` : ''}
 
 Start by examining the most important files and look for:
 1. Logic bugs and edge cases
@@ -527,7 +551,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
     toolCalls?: ToolCall[];
   }> {
     // Claude uses native Anthropic API
-    if (this.config.provider === 'claude') {
+    if (this.getConfig().provider === 'claude') {
       return this.callAnthropic(messages);
     }
     // All other providers use OpenAI-compatible API
@@ -543,8 +567,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
   }> {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({
-      apiKey: this.config.apiKey,
-      baseURL: this.config.baseUrl || undefined,
+      apiKey: this.getConfig().apiKey,
+      baseURL: this.getConfig().baseUrl || undefined,
     });
 
     // Convert messages to Anthropic format
@@ -590,8 +614,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
     }));
 
     const response = await client.messages.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens,
+      model: this.getConfig().model,
+      max_tokens: this.getConfig().maxTokens,
       system: systemMessage?.content ?? '',
       messages: conversationMessages,
       tools,
@@ -625,8 +649,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
   }> {
     const { default: OpenAI } = await import('openai');
     const client = new OpenAI({
-      apiKey: this.config.apiKey || 'ollama', // Ollama doesn't require a key
-      baseURL: this.config.baseUrl,
+      apiKey: this.getConfig().apiKey || 'ollama', // Ollama doesn't require a key
+      baseURL: this.getConfig().baseUrl,
     });
 
     // Convert messages to OpenAI format
@@ -669,8 +693,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
     }));
 
     const response = await client.chat.completions.create({
-      model: this.config.model,
-      max_tokens: this.config.maxTokens,
+      model: this.getConfig().model,
+      max_tokens: this.getConfig().maxTokens,
       messages: openaiMessages,
       tools,
     });

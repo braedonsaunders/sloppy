@@ -6,6 +6,24 @@
 
 import { createServer } from './server.js';
 
+// Valid pino log levels
+const VALID_LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
+type LogLevel = (typeof VALID_LOG_LEVELS)[number];
+
+/**
+ * Parse and validate log level from environment variable
+ * Returns 'info' if invalid or not set
+ */
+function parseLogLevel(envValue: string | undefined): LogLevel {
+  if (!envValue) return 'info';
+  const normalized = envValue.toLowerCase().trim();
+  if (VALID_LOG_LEVELS.includes(normalized as LogLevel)) {
+    return normalized as LogLevel;
+  }
+  console.warn(`Invalid LOG_LEVEL '${envValue}'. Valid values: ${VALID_LOG_LEVELS.join(', ')}. Using 'info'.`);
+  return 'info';
+}
+
 // Configuration from environment variables
 // Supports both SLOPPY_ prefixed and non-prefixed env vars
 const config = {
@@ -14,14 +32,7 @@ const config = {
   dbPath: process.env['SLOPPY_DB_PATH'] ?? process.env['DATABASE_PATH'],
   staticDir: process.env['SLOPPY_STATIC_DIR'],
   corsOrigin: process.env['SLOPPY_CORS_ORIGIN'] ?? true,
-  logLevel: (process.env['SLOPPY_LOG_LEVEL'] ?? process.env['LOG_LEVEL'] ?? 'info') as
-    | 'fatal'
-    | 'error'
-    | 'warn'
-    | 'info'
-    | 'debug'
-    | 'trace'
-    | 'silent',
+  logLevel: parseLogLevel(process.env['SLOPPY_LOG_LEVEL'] ?? process.env['LOG_LEVEL']),
 };
 
 // Start server
