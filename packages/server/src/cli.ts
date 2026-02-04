@@ -99,15 +99,14 @@ Documentation: https://github.com/sloppy/sloppy
 async function main(): Promise<void> {
   const options = parseCliArgs();
 
-  // Set environment variables for the server
-  process.env['PORT'] = options.port.toString();
-  process.env['HOST'] = options.host;
-  process.env['DATABASE_PATH'] = options.dbPath;
-  process.env['LOG_LEVEL'] = options.logLevel;
-
   // Dynamic import to allow env vars to be set first
   const { startServer } = await import('./server.js');
-  await startServer();
+  await startServer({
+    port: options.port,
+    host: options.host,
+    dbPath: options.dbPath,
+    logLevel: options.logLevel as 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent',
+  });
 }
 
 main().catch((error: unknown) => {

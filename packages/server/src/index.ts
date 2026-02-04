@@ -7,13 +7,14 @@
 import { createServer } from './server.js';
 
 // Configuration from environment variables
+// Supports both SLOPPY_ prefixed and non-prefixed env vars
 const config = {
-  host: process.env['SLOPPY_HOST'] ?? '0.0.0.0',
-  port: parseInt(process.env['SLOPPY_PORT'] ?? '7749', 10),
-  dbPath: process.env['SLOPPY_DB_PATH'],
+  host: process.env['SLOPPY_HOST'] ?? process.env['HOST'] ?? '0.0.0.0',
+  port: parseInt(process.env['SLOPPY_PORT'] ?? process.env['PORT'] ?? '7749', 10),
+  dbPath: process.env['SLOPPY_DB_PATH'] ?? process.env['DATABASE_PATH'],
   staticDir: process.env['SLOPPY_STATIC_DIR'],
   corsOrigin: process.env['SLOPPY_CORS_ORIGIN'] ?? true,
-  logLevel: (process.env['SLOPPY_LOG_LEVEL'] ?? 'info') as
+  logLevel: (process.env['SLOPPY_LOG_LEVEL'] ?? process.env['LOG_LEVEL'] ?? 'info') as
     | 'fatal'
     | 'error'
     | 'warn'
