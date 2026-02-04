@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { getDatabase, closeDatabase, type DatabaseOptions } from './db/database.js';
 import { getWebSocketHandler, closeWebSocketHandler, registerWebSocketRoute } from './websocket/handler.js';
 import { getSessionManager, closeSessionManager } from './services/session-manager.js';
+import { getAnalysisRunner, closeAnalysisRunner } from './services/analysis-runner.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerIssueRoutes } from './routes/issues.js';
 import { registerCommitRoutes } from './routes/commits.js';
@@ -83,6 +84,12 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
 
   // Initialize session manager
   getSessionManager({
+    db,
+    logger: app.log as unknown as Console,
+  });
+
+  // Initialize analysis runner
+  getAnalysisRunner({
     db,
     logger: app.log as unknown as Console,
   });
@@ -206,7 +213,10 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
     }, SHUTDOWN_TIMEOUT_MS);
 
     try {
-      // Close session manager first (stops active sessions)
+      // Close analysis runner first (stops any running analyses)
+      await closeAnalysisRunner();
+
+      // Close session manager (stops active sessions)
       await closeSessionManager();
 
       // Close WebSocket connections
@@ -273,6 +283,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
     app.log.info('[server] Stopping server...');
 
     try {
+      await closeAnalysisRunner();
       await closeSessionManager();
       closeWebSocketHandler();
       await app.close();

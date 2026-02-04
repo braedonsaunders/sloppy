@@ -156,7 +156,17 @@ export function useSession(sessionId?: string) {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: CreateSessionRequest) => api.sessions.create(data),
+    mutationFn: async (data: CreateSessionRequest) => {
+      // Create the session
+      const session = await api.sessions.create(data);
+      // Auto-start the session after creation
+      try {
+        return await api.sessions.start(session.id);
+      } catch {
+        // If start fails, return the created session anyway
+        return session;
+      }
+    },
     onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
       navigate(`/session/${session.id}`);

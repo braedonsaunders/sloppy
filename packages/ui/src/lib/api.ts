@@ -256,6 +256,9 @@ export const api = {
         body: JSON.stringify(data),
       }),
 
+    start: (id: string) =>
+      request<Session>(`/sessions/${id}/start`, { method: 'POST' }),
+
     pause: (id: string) =>
       request<Session>(`/sessions/${id}/pause`, { method: 'POST' }),
 

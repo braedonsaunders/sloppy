@@ -1,6 +1,5 @@
-import { detectClones } from 'jscpd';
-
 // Define interfaces locally since jscpd doesn't export them properly
+// Note: jscpd is imported dynamically in analyze() to avoid ESM compatibility issues
 interface IClone {
   format: string;
   duplicationA: {
@@ -121,6 +120,9 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
       };
 
       this.log(options, `Running duplicate detection with minLines=${config.minLines}, minTokens=${config.minTokens}`);
+
+      // Dynamically import jscpd to avoid ESM compatibility issues at module load time
+      const { detectClones } = await import('jscpd');
 
       // Run jscpd detection
       const clones = await detectClones(jscpdOptions);

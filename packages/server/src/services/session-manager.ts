@@ -14,6 +14,7 @@ import {
   type Metric,
 } from '../db/database.js';
 import { getWebSocketHandler } from '../websocket/handler.js';
+import { getAnalysisRunner } from './analysis-runner.js';
 
 // Validation schemas
 export const CreateSessionSchema = z.object({
@@ -152,6 +153,12 @@ export class SessionManager {
       data: { session: updated },
     });
 
+    // Start analysis in background
+    const analysisRunner = getAnalysisRunner();
+    analysisRunner.startAnalysis(updated).catch((error) => {
+      this.logger.error(`[session-manager] Analysis failed for session ${id}:`, error);
+    });
+
     return this.enrichSession(updated);
   }
 
@@ -247,6 +254,10 @@ export class SessionManager {
     if (session.status === 'completed' || session.status === 'failed' || session.status === 'stopped') {
       throw new Error(`Session already ended with status: ${session.status}`);
     }
+
+    // Stop any running analysis
+    const analysisRunner = getAnalysisRunner();
+    analysisRunner.stopAnalysis(id);
 
     // Update session status
     const updated = this.db.updateSession(id, {
