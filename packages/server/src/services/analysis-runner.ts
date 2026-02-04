@@ -38,6 +38,14 @@ interface AnalysisResult {
   analyzersRun: string[];
 }
 
+// Type for the analyze function from @sloppy/analyzers
+type AnalyzeFn = (
+  rootDir: string,
+  options?: { include?: string[]; exclude?: string[] },
+  config?: { analyzers?: string[]; concurrency?: number; deduplicate?: boolean; sortBySeverity?: boolean },
+  onProgress?: (progress: { analyzer: string; status: string; issueCount?: number }) => void
+) => Promise<AnalysisResult>;
+
 export interface AnalysisRunnerOptions {
   db: SloppyDatabase;
   logger?: Console;
@@ -146,9 +154,11 @@ export class AnalysisRunner {
       });
 
       // Dynamically import @sloppy/analyzers
-      let analyzerModule: { analyze: typeof import('@sloppy/analyzers')['analyze'] };
+      let analyze: AnalyzeFn;
       try {
-        analyzerModule = await import('@sloppy/analyzers');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const analyzerModule = (await import('@sloppy/analyzers')) as any;
+        analyze = analyzerModule.analyze as AnalyzeFn;
       } catch (importError) {
         const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
         this.logger.error(`[analysis-runner] Failed to load analyzers: ${importErrorMsg}`);
@@ -156,7 +166,6 @@ export class AnalysisRunner {
           'Analyzers package not available. Run "pnpm build" to build all packages, then restart the server.'
         );
       }
-      const { analyze } = analyzerModule;
 
       // Run analysis
       const result = await analyze(
