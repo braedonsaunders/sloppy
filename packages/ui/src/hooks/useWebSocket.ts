@@ -35,14 +35,21 @@ export function useWebSocket() {
 
     // Session updates
     unsubscribes.push(
-      wsClient.subscribe<Session>('session:updated', (message) => {
-        updateSession(message.payload.id, message.payload);
+      wsClient.subscribe<{ session?: Session } | Session>('session:updated', (message) => {
+        // Handle both nested { session } and direct session payload
+        const session = (message.payload as { session?: Session })?.session ?? message.payload as Session;
+        if (session?.id) {
+          updateSession(session.id, session);
+        }
       })
     );
 
     unsubscribes.push(
-      wsClient.subscribe<Session>('session:completed', (message) => {
-        updateSession(message.payload.id, message.payload);
+      wsClient.subscribe<{ session?: Session } | Session>('session:completed', (message) => {
+        const session = (message.payload as { session?: Session })?.session ?? message.payload as Session;
+        if (session?.id) {
+          updateSession(session.id, session);
+        }
       })
     );
 

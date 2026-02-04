@@ -1,5 +1,27 @@
 const API_BASE = '/api';
 
+// Helper to convert snake_case keys to camelCase
+function snakeToCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+function normalizeKeys<T>(obj: unknown): T {
+  if (obj === null || obj === undefined) {
+    return obj as T;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeKeys) as T;
+  }
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      result[snakeToCamel(key)] = normalizeKeys(value);
+    }
+    return result as T;
+  }
+  return obj as T;
+}
+
 export interface ApiError {
   message: string;
   code?: string;
@@ -58,11 +80,15 @@ async function request<T>(
   const json = await response.json();
 
   // Unwrap server response format: { success: true, data: ... }
+  let data: unknown;
   if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
-    return json.data as T;
+    data = json.data;
+  } else {
+    data = json;
   }
 
-  return json as T;
+  // Normalize snake_case keys to camelCase
+  return normalizeKeys<T>(data);
 }
 
 // Session Types

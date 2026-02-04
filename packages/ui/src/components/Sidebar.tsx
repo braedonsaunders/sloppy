@@ -199,9 +199,11 @@ function SessionItem({ session, isActive, onClick }: SessionItemProps) {
     stopped: XCircle,
   };
 
-  const StatusIcon = statusIcons[session.status];
+  const StatusIcon = statusIcons[session.status] || Clock;
 
-  const repoName = session.repoPath.split('/').pop() || session.repoPath;
+  // Handle both camelCase (repoPath) and snake_case (repo_path) field names
+  const repoPath = session.repoPath || (session as unknown as { repo_path?: string }).repo_path || '';
+  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
 
   return (
     <button
@@ -226,7 +228,7 @@ function SessionItem({ session, isActive, onClick }: SessionItemProps) {
       <div className="flex-1 min-w-0">
         <p className="truncate font-medium">{repoName}</p>
         <p className="text-xs text-dark-500 truncate">
-          {session.stats.issuesResolved}/{session.stats.issuesFound} resolved
+          {session.stats?.issuesResolved ?? 0}/{session.stats?.issuesFound ?? 0} resolved
         </p>
       </div>
     </button>
