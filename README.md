@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/braedonsaunders/sloppy/main/sloppy-logo.png" alt="Sloppy - AI Code Janitor" width="400" />
+  <img src="./sloppy-logo.png" alt="Sloppy - AI Code Janitor" width="400" />
 </p>
 
 <p align="center">
