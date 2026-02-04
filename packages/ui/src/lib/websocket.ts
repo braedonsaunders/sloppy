@@ -1,3 +1,25 @@
+// Helper to convert snake_case keys to camelCase
+function snakeToCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+function normalizeKeys<T>(obj: unknown): T {
+  if (obj === null || obj === undefined) {
+    return obj as T;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(normalizeKeys) as T;
+  }
+  if (typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      result[snakeToCamel(key)] = normalizeKeys(value);
+    }
+    return result as T;
+  }
+  return obj as T;
+}
+
 export type WebSocketMessageType =
   | 'session:updated'
   | 'session:completed'
@@ -147,7 +169,16 @@ export class WebSocketClient {
 
     this.ws.onmessage = (event) => {
       try {
-        const message: WebSocketMessage = JSON.parse(event.data);
+        const raw = JSON.parse(event.data);
+        // Normalize message format: server sends 'data', client expects 'payload'
+        // Also normalize snake_case keys to camelCase
+        const payload = normalizeKeys(raw.payload ?? raw.data);
+        const message: WebSocketMessage = {
+          type: raw.type,
+          sessionId: raw.sessionId ?? raw.session_id,
+          payload,
+          timestamp: raw.timestamp,
+        };
         this.handleMessage(message);
       } catch (error) {
         console.error('Failed to parse WebSocket message:', error);
