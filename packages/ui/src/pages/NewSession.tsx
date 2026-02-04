@@ -20,13 +20,17 @@ import FileBrowser from '@/components/FileBrowser';
 import { useSession } from '@/hooks/useSession';
 import { api, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
 
-const ISSUE_TYPES = [
-  { id: 'lint', label: 'Lint Issues', description: 'ESLint, Prettier violations' },
-  { id: 'type', label: 'Type Errors', description: 'TypeScript type issues' },
-  { id: 'test', label: 'Test Failures', description: 'Failing unit/integration tests' },
-  { id: 'security', label: 'Security Issues', description: 'Vulnerabilities and risks' },
-  { id: 'performance', label: 'Performance', description: 'Optimization opportunities' },
-  { id: 'style', label: 'Code Style', description: 'Formatting and conventions' },
+// Focus areas for LLM-orchestrated analysis
+// The LLM always orchestrates - these tell it what to prioritize
+const FOCUS_AREAS = [
+  { id: 'lint', label: 'Lint & Formatting', description: 'ESLint, Prettier, code style' },
+  { id: 'type', label: 'Type Safety', description: 'TypeScript errors and type issues' },
+  { id: 'security', label: 'Security', description: 'Vulnerabilities, injection risks, auth issues' },
+  { id: 'test', label: 'Testing', description: 'Test coverage, failing tests, test quality' },
+  { id: 'bugs', label: 'Bug Detection', description: 'Logic errors, edge cases, race conditions' },
+  { id: 'performance', label: 'Performance', description: 'Memory leaks, slow operations, optimization' },
+  { id: 'maintainability', label: 'Maintainability', description: 'Code smells, complexity, duplication' },
+  { id: 'stubs', label: 'Completeness', description: 'TODOs, stubs, incomplete implementations' },
 ];
 
 export default function NewSession() {
@@ -51,7 +55,7 @@ export default function NewSession() {
   const [model, setModel] = useState('');
   const [maxTime, setMaxTime] = useState<string>('');
   const [strictness, setStrictness] = useState<'low' | 'medium' | 'high'>('medium');
-  const [issueTypes, setIssueTypes] = useState<string[]>(['lint', 'type', 'test']);
+  const [focusAreas, setFocusAreas] = useState<string[]>(['lint', 'type', 'security', 'bugs']);
   const [approvalMode, setApprovalMode] = useState(false);
   const [testCommand, setTestCommand] = useState('');
   const [lintCommand, setLintCommand] = useState('');
@@ -76,9 +80,9 @@ export default function NewSession() {
     }
   });
 
-  const toggleIssueType = (type: string) => {
-    setIssueTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+  const toggleFocusArea = (area: string) => {
+    setFocusAreas((prev) =>
+      prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
     );
   };
 
@@ -96,8 +100,8 @@ export default function NewSession() {
       return;
     }
 
-    if (issueTypes.length === 0) {
-      setError('Please select at least one issue type');
+    if (focusAreas.length === 0) {
+      setError('Please select at least one focus area');
       return;
     }
 
@@ -105,7 +109,7 @@ export default function NewSession() {
       const config: Partial<SessionConfig> = {
         maxTime: maxTime ? parseInt(maxTime) * 60 : undefined, // Convert to seconds
         strictness,
-        issueTypes,
+        issueTypes: focusAreas, // Focus areas are passed as issueTypes to the backend
         approvalMode,
         testCommand: testCommand || undefined,
         lintCommand: lintCommand || undefined,
@@ -291,43 +295,48 @@ export default function NewSession() {
             />
           </div>
 
-          {/* Issue Types */}
+          {/* Focus Areas */}
           <div className="mt-6">
-            <label className="mb-3 block text-sm font-medium text-dark-200">
-              Issue Types to Fix
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {ISSUE_TYPES.map((type) => (
+            <div className="mb-3">
+              <label className="block text-sm font-medium text-dark-200">
+                Focus Areas
+              </label>
+              <p className="text-xs text-dark-500 mt-1">
+                The AI will orchestrate analysis using lint, tests, and deep code inspection based on these priorities
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {FOCUS_AREAS.map((area) => (
                 <button
-                  key={type.id}
+                  key={area.id}
                   type="button"
-                  onClick={() => toggleIssueType(type.id)}
+                  onClick={() => toggleFocusArea(area.id)}
                   className={`flex items-start gap-3 rounded-lg border p-3 text-left transition-colors ${
-                    issueTypes.includes(type.id)
+                    focusAreas.includes(area.id)
                       ? 'border-accent bg-accent/10'
                       : 'border-dark-600 hover:border-dark-500'
                   }`}
                 >
                   <div
                     className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${
-                      issueTypes.includes(type.id)
+                      focusAreas.includes(area.id)
                         ? 'border-accent bg-accent text-white'
                         : 'border-dark-500'
                     }`}
                   >
-                    {issueTypes.includes(type.id) && (
+                    {focusAreas.includes(area.id) && (
                       <CheckSquare className="h-3.5 w-3.5" />
                     )}
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p
                       className={`text-sm font-medium ${
-                        issueTypes.includes(type.id) ? 'text-accent' : 'text-dark-200'
+                        focusAreas.includes(area.id) ? 'text-accent' : 'text-dark-200'
                       }`}
                     >
-                      {type.label}
+                      {area.label}
                     </p>
-                    <p className="text-xs text-dark-500">{type.description}</p>
+                    <p className="text-xs text-dark-500">{area.description}</p>
                   </div>
                 </button>
               ))}
@@ -419,7 +428,7 @@ export default function NewSession() {
             type="submit"
             variant="primary"
             isLoading={isCreating}
-            disabled={!repoPath || !provider || configuredProviders.length === 0}
+            disabled={!repoPath || !provider || configuredProviders.length === 0 || focusAreas.length === 0}
             leftIcon={<Play className="h-4 w-4" />}
           >
             Start Session

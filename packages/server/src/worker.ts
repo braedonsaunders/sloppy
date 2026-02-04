@@ -638,19 +638,22 @@ class WorkerRunner {
 
   private createLogger(): Logger {
     const sessionId = this.session?.id ?? 'unknown';
+    const logLevel = process.env['LOG_LEVEL'] ?? process.env['SLOPPY_LOG_LEVEL'] ?? 'info';
+    const levels: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3, silent: 4 };
+    const currentLevel = levels[logLevel] ?? 1;
 
     return {
       debug(message: string, meta?: Record<string, unknown>) {
-        console.debug(`[DEBUG] [${sessionId}] ${message}`, meta ?? '');
+        if (currentLevel <= 0) console.debug(`[DEBUG] [${sessionId}] ${message}`, meta ?? '');
       },
       info(message: string, meta?: Record<string, unknown>) {
-        console.info(`[INFO] [${sessionId}] ${message}`, meta ?? '');
+        if (currentLevel <= 1) console.info(`[INFO] [${sessionId}] ${message}`, meta ?? '');
       },
       warn(message: string, meta?: Record<string, unknown>) {
-        console.warn(`[WARN] [${sessionId}] ${message}`, meta ?? '');
+        if (currentLevel <= 2) console.warn(`[WARN] [${sessionId}] ${message}`, meta ?? '');
       },
       error(message: string, meta?: Record<string, unknown>) {
-        console.error(`[ERROR] [${sessionId}] ${message}`, meta ?? '');
+        if (currentLevel <= 3) console.error(`[ERROR] [${sessionId}] ${message}`, meta ?? '');
       },
     };
   }
