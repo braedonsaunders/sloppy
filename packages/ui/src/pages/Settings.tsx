@@ -76,6 +76,7 @@ export default function Settings() {
 
 function ProvidersTab() {
   const queryClient = useQueryClient();
+  const [selectedProviderId, setSelectedProviderId] = useState<string>('');
 
   const { data: providers, isLoading } = useQuery({
     queryKey: ['providers'],
@@ -93,6 +94,15 @@ function ProvidersTab() {
     mutationFn: (providerId: string) => api.providers.test(providerId),
   });
 
+  // Set default selected provider when providers load
+  useEffect(() => {
+    if (providers && providers.length > 0 && !selectedProviderId) {
+      // Prefer to select a configured provider first, otherwise pick the first one
+      const configured = providers.find((p) => p.configured);
+      setSelectedProviderId(configured?.id || providers[0]!.id);
+    }
+  }, [providers, selectedProviderId]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -101,23 +111,81 @@ function ProvidersTab() {
     );
   }
 
+  const selectedProvider = providers?.find((p) => p.id === selectedProviderId);
+
+  // Group providers by category for better organization
+  const providerCategories = {
+    'Cloud APIs': ['claude', 'openai', 'gemini', 'openrouter', 'deepseek', 'mistral', 'groq', 'together', 'cohere'],
+    'Local': ['ollama'],
+    'CLI Tools': ['claude-cli', 'codex-cli'],
+  };
+
+  const getProviderCategory = (id: string): string => {
+    for (const [category, ids] of Object.entries(providerCategories)) {
+      if (ids.includes(id)) return category;
+    }
+    return 'Other';
+  };
+
+  // Group providers for display
+  const groupedProviders = providers?.reduce((acc, provider) => {
+    const category = getProviderCategory(provider.id);
+    if (!acc[category]) acc[category] = [];
+    acc[category].push(provider);
+    return acc;
+  }, {} as Record<string, Provider[]>) || {};
+
   return (
     <div className="space-y-6">
-      {providers?.map((provider) => (
+      {/* Provider Selector */}
+      <div className="rounded-xl border border-dark-700 bg-dark-800 p-6">
+        <label className="mb-3 block text-sm font-medium text-dark-200">
+          Select Provider
+        </label>
+        <Select
+          options={[
+            { value: '', label: 'Select a provider...', disabled: true },
+            ...Object.entries(groupedProviders).flatMap(([category, categoryProviders]) => [
+              { value: `__category_${category}`, label: `── ${category} ──`, disabled: true },
+              ...categoryProviders.map((p) => ({
+                value: p.id,
+                label: `${p.name}${p.configured ? ' ✓' : ''}`,
+              })),
+            ]),
+          ]}
+          value={selectedProviderId}
+          onChange={(e) => {
+            setSelectedProviderId(e.target.value);
+            // Reset test results when switching providers
+            testMutation.reset();
+          }}
+        />
+        <p className="mt-2 text-xs text-dark-500">
+          Configure API keys and settings for your AI providers. Providers marked with ✓ are already configured.
+        </p>
+      </div>
+
+      {/* Selected Provider Card */}
+      {selectedProvider ? (
         <ProviderCard
-          key={provider.id}
-          provider={provider}
+          key={selectedProvider.id}
+          provider={selectedProvider}
           onConfigure={(config) => configureMutation.mutate(config)}
-          onTest={() => testMutation.mutate(provider.id)}
+          onTest={() => testMutation.mutate(selectedProvider.id)}
           isConfiguring={configureMutation.isPending}
           isTesting={testMutation.isPending}
           testResult={
-            testMutation.data && testMutation.variables === provider.id
+            testMutation.data && testMutation.variables === selectedProvider.id
               ? testMutation.data
               : null
           }
         />
-      ))}
+      ) : (
+        <div className="text-center py-12">
+          <AlertCircle className="h-12 w-12 text-dark-600 mx-auto" />
+          <p className="mt-4 text-dark-400">Select a provider to configure</p>
+        </div>
+      )}
 
       {(!providers || providers.length === 0) && (
         <div className="text-center py-12">
@@ -127,6 +195,32 @@ function ProvidersTab() {
       )}
     </div>
   );
+}
+
+// Helper functions for provider configuration
+function supportsBaseUrl(providerId: string): boolean {
+  return ['openai', 'ollama', 'openrouter', 'deepseek', 'mistral', 'groq', 'together', 'cohere', 'gemini', 'claude'].includes(providerId);
+}
+
+function getDefaultBaseUrl(providerId: string): string {
+  const defaults: Record<string, string> = {
+    ollama: 'http://localhost:11434',
+    openai: 'https://api.openai.com/v1',
+    claude: 'https://api.anthropic.com',
+    gemini: 'https://generativelanguage.googleapis.com',
+    openrouter: 'https://openrouter.ai/api/v1',
+    deepseek: 'https://api.deepseek.com/v1',
+    mistral: 'https://api.mistral.ai/v1',
+    groq: 'https://api.groq.com/openai/v1',
+    together: 'https://api.together.xyz/v1',
+    cohere: 'https://api.cohere.ai/v1',
+  };
+  return defaults[providerId] || '';
+}
+
+function requiresApiKey(providerId: string): boolean {
+  // CLI providers and Ollama don't require API keys
+  return !['ollama', 'claude-cli', 'codex-cli'].includes(providerId);
 }
 
 interface ProviderCardProps {
@@ -162,10 +256,18 @@ function ProviderCard({
   };
 
   const providerIcons: Record<string, string> = {
+    claude: 'A',
     openai: 'O',
-    anthropic: 'A',
-    google: 'G',
+    gemini: 'G',
     ollama: 'L',
+    openrouter: 'R',
+    deepseek: 'D',
+    mistral: 'M',
+    groq: 'Q',
+    together: 'T',
+    cohere: 'C',
+    'claude-cli': 'A',
+    'codex-cli': 'X',
   };
 
   return (
@@ -193,45 +295,51 @@ function ProviderCard({
 
       {/* Body */}
       <div className="p-6 space-y-4">
-        {/* API Key */}
-        <div className="relative">
-          <Input
-            label="API Key"
-            type={showApiKey ? 'text' : 'password'}
-            placeholder={provider.configured ? '••••••••••••••••' : 'Enter your API key'}
-            value={apiKey}
-            onChange={(e) => {
-              setApiKey(e.target.value);
-              setIsDirty(true);
-            }}
-            rightIcon={
-              <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="text-dark-400 hover:text-dark-200"
-              >
-                {showApiKey ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            }
-          />
-          <p className="mt-1.5 text-xs text-dark-500">
-            Your API key is encrypted and stored securely.
-          </p>
-        </div>
+        {/* API Key - only shown for providers that require it */}
+        {requiresApiKey(provider.id) ? (
+          <div className="relative">
+            <Input
+              label="API Key"
+              type={showApiKey ? 'text' : 'password'}
+              placeholder={provider.configured ? '••••••••••••••••' : 'Enter your API key'}
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setIsDirty(true);
+              }}
+              rightIcon={
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="text-dark-400 hover:text-dark-200"
+                >
+                  {showApiKey ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              }
+            />
+            <p className="mt-1.5 text-xs text-dark-500">
+              Your API key is encrypted and stored securely.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-lg bg-dark-700/50 p-3">
+            <p className="text-sm text-dark-400">
+              {provider.id === 'ollama'
+                ? 'Ollama runs locally and does not require an API key. Just ensure Ollama is running.'
+                : 'This provider uses local CLI tools and does not require an API key.'}
+            </p>
+          </div>
+        )}
 
         {/* Base URL (optional) */}
-        {(provider.id === 'openai' || provider.id === 'ollama') && (
+        {supportsBaseUrl(provider.id) && (
           <Input
             label="Base URL (optional)"
-            placeholder={
-              provider.id === 'ollama'
-                ? 'http://localhost:11434'
-                : 'https://api.openai.com/v1'
-            }
+            placeholder={getDefaultBaseUrl(provider.id)}
             value={baseUrl}
             onChange={(e) => {
               setBaseUrl(e.target.value);
@@ -281,7 +389,7 @@ function ProviderCard({
             variant="primary"
             onClick={handleSave}
             isLoading={isConfiguring}
-            disabled={!isDirty || !apiKey}
+            disabled={!isDirty || (requiresApiKey(provider.id) && !apiKey)}
             leftIcon={<Save className="h-4 w-4" />}
           >
             Save
