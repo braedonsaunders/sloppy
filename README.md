@@ -73,6 +73,20 @@ Each fix = one atomic git commit. Don't like a fix? `git revert`. Simple.
 
 ## Quickstart
 
+### Automatic Setup (Recommended)
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup.ps1
+```
+
+**macOS / Linux:**
+```bash
+chmod +x scripts/setup.sh && ./scripts/setup.sh
+```
+
+### Manual Setup
+
 ```bash
 # Install
 pnpm install
@@ -88,6 +102,8 @@ pnpm start
 ```
 
 Open `http://localhost:3000` and point it at your repo.
+
+**See [INSTALL.md](INSTALL.md) for detailed platform-specific instructions.**
 
 ---
 
