@@ -2,12 +2,12 @@ import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import type { Issue, Commit } from '@/lib/api';
 
-export type IssueFilter = {
+export interface IssueFilter {
   status?: Issue['status'];
   type?: Issue['type'];
   severity?: Issue['severity'];
   search?: string;
-};
+}
 
 export interface IssuesState {
   // Issues
@@ -37,13 +37,13 @@ export interface IssuesState {
 }
 
 const initialState = {
-  issues: [],
-  commits: [],
-  filters: {},
-  selectedIssueId: null,
-  selectedCommitId: null,
+  issues: [] as Issue[],
+  commits: [] as Commit[],
+  filters: {} as IssueFilter,
+  selectedIssueId: null as string | null,
+  selectedCommitId: null as string | null,
   isLoading: false,
-  error: null,
+  error: null as string | null,
 };
 
 export const useIssuesStore = create<IssuesState>()(
@@ -51,18 +51,21 @@ export const useIssuesStore = create<IssuesState>()(
     subscribeWithSelector((set) => ({
       ...initialState,
 
-      setIssues: (issues) => set({ issues }, false, 'setIssues'),
+      setIssues: (issues: Issue[]): void => {
+        set({ issues }, false, 'setIssues');
+      },
 
-      addIssue: (issue) =>
+      addIssue: (issue: Issue): void => {
         set(
           (state) => ({
             issues: [issue, ...state.issues],
           }),
           false,
           'addIssue'
-        ),
+        );
+      },
 
-      updateIssue: (id, updates) =>
+      updateIssue: (id: string, updates: Partial<Issue>): void => {
         set(
           (state) => ({
             issues: state.issues.map((issue) =>
@@ -71,9 +74,10 @@ export const useIssuesStore = create<IssuesState>()(
           }),
           false,
           'updateIssue'
-        ),
+        );
+      },
 
-      removeIssue: (id) =>
+      removeIssue: (id: string): void => {
         set(
           (state) => ({
             issues: state.issues.filter((issue) => issue.id !== id),
@@ -82,20 +86,24 @@ export const useIssuesStore = create<IssuesState>()(
           }),
           false,
           'removeIssue'
-        ),
+        );
+      },
 
-      setCommits: (commits) => set({ commits }, false, 'setCommits'),
+      setCommits: (commits: Commit[]): void => {
+        set({ commits }, false, 'setCommits');
+      },
 
-      addCommit: (commit) =>
+      addCommit: (commit: Commit): void => {
         set(
           (state) => ({
             commits: [commit, ...state.commits],
           }),
           false,
           'addCommit'
-        ),
+        );
+      },
 
-      updateCommit: (id, updates) =>
+      updateCommit: (id: string, updates: Partial<Commit>): void => {
         set(
           (state) => ({
             commits: state.commits.map((commit) =>
@@ -104,62 +112,74 @@ export const useIssuesStore = create<IssuesState>()(
           }),
           false,
           'updateCommit'
-        ),
+        );
+      },
 
-      setFilters: (filters) =>
+      setFilters: (filters: IssueFilter): void => {
         set(
           (state) => ({
             filters: { ...state.filters, ...filters },
           }),
           false,
           'setFilters'
-        ),
+        );
+      },
 
-      clearFilters: () => set({ filters: {} }, false, 'clearFilters'),
+      clearFilters: (): void => {
+        set({ filters: {} }, false, 'clearFilters');
+      },
 
-      setSelectedIssue: (id) =>
-        set({ selectedIssueId: id }, false, 'setSelectedIssue'),
+      setSelectedIssue: (id: string | null): void => {
+        set({ selectedIssueId: id }, false, 'setSelectedIssue');
+      },
 
-      setSelectedCommit: (id) =>
-        set({ selectedCommitId: id }, false, 'setSelectedCommit'),
+      setSelectedCommit: (id: string | null): void => {
+        set({ selectedCommitId: id }, false, 'setSelectedCommit');
+      },
 
-      setLoading: (isLoading) => set({ isLoading }, false, 'setLoading'),
+      setLoading: (isLoading: boolean): void => {
+        set({ isLoading }, false, 'setLoading');
+      },
 
-      setError: (error) => set({ error }, false, 'setError'),
+      setError: (error: string | null): void => {
+        set({ error }, false, 'setError');
+      },
 
-      reset: () => set(initialState, false, 'reset'),
+      reset: (): void => {
+        set(initialState, false, 'reset');
+      },
     })),
     { name: 'issues-store' }
   )
 );
 
 // Selectors
-export const selectIssues = (state: IssuesState) => state.issues;
-export const selectCommits = (state: IssuesState) => state.commits;
-export const selectFilters = (state: IssuesState) => state.filters;
-export const selectSelectedIssueId = (state: IssuesState) => state.selectedIssueId;
-export const selectSelectedCommitId = (state: IssuesState) => state.selectedCommitId;
-export const selectIsLoading = (state: IssuesState) => state.isLoading;
-export const selectError = (state: IssuesState) => state.error;
+export const selectIssues = (state: IssuesState): Issue[] => state.issues;
+export const selectCommits = (state: IssuesState): Commit[] => state.commits;
+export const selectFilters = (state: IssuesState): IssueFilter => state.filters;
+export const selectSelectedIssueId = (state: IssuesState): string | null => state.selectedIssueId;
+export const selectSelectedCommitId = (state: IssuesState): string | null => state.selectedCommitId;
+export const selectIsLoading = (state: IssuesState): boolean => state.isLoading;
+export const selectError = (state: IssuesState): string | null => state.error;
 
 // Filtered selectors
-export const selectFilteredIssues = (state: IssuesState) => {
+export const selectFilteredIssues = (state: IssuesState): Issue[] => {
   let filtered = state.issues;
   const { status, type, severity, search } = state.filters;
 
-  if (status) {
+  if (status !== undefined) {
     filtered = filtered.filter((issue) => issue.status === status);
   }
 
-  if (type) {
+  if (type !== undefined) {
     filtered = filtered.filter((issue) => issue.type === type);
   }
 
-  if (severity) {
+  if (severity !== undefined) {
     filtered = filtered.filter((issue) => issue.severity === severity);
   }
 
-  if (search) {
+  if (search !== undefined && search !== '') {
     const searchLower = search.toLowerCase();
     filtered = filtered.filter(
       (issue) =>
@@ -171,32 +191,41 @@ export const selectFilteredIssues = (state: IssuesState) => {
   return filtered;
 };
 
-export const selectIssueById = (id: string) => (state: IssuesState) =>
-  state.issues.find((issue) => issue.id === id);
+export const selectIssueById = (id: string): ((state: IssuesState) => Issue | undefined) =>
+  (state: IssuesState): Issue | undefined => state.issues.find((issue) => issue.id === id);
 
-export const selectCommitById = (id: string) => (state: IssuesState) =>
-  state.commits.find((commit) => commit.id === id);
+export const selectCommitById = (id: string): ((state: IssuesState) => Commit | undefined) =>
+  (state: IssuesState): Commit | undefined => state.commits.find((commit) => commit.id === id);
 
-export const selectSelectedIssue = (state: IssuesState) =>
-  state.selectedIssueId
+export const selectSelectedIssue = (state: IssuesState): Issue | undefined =>
+  state.selectedIssueId !== null
     ? state.issues.find((issue) => issue.id === state.selectedIssueId)
-    : null;
+    : undefined;
 
-export const selectSelectedCommit = (state: IssuesState) =>
-  state.selectedCommitId
+export const selectSelectedCommit = (state: IssuesState): Commit | undefined =>
+  state.selectedCommitId !== null
     ? state.commits.find((commit) => commit.id === state.selectedCommitId)
-    : null;
+    : undefined;
 
-export const selectIssuesByStatus = (status: Issue['status']) => (state: IssuesState) =>
-  state.issues.filter((issue) => issue.status === status);
+export const selectIssuesByStatus = (status: Issue['status']): ((state: IssuesState) => Issue[]) =>
+  (state: IssuesState): Issue[] => state.issues.filter((issue) => issue.status === status);
 
-export const selectPendingIssues = (state: IssuesState) =>
+export const selectPendingIssues = (state: IssuesState): Issue[] =>
   state.issues.filter((issue) => issue.status === 'pending');
 
-export const selectResolvedIssues = (state: IssuesState) =>
+export const selectResolvedIssues = (state: IssuesState): Issue[] =>
   state.issues.filter((issue) => issue.status === 'resolved');
 
-export const selectIssueStats = (state: IssuesState) => {
+interface IssueStats {
+  total: number;
+  resolved: number;
+  pending: number;
+  inProgress: number;
+  skipped: number;
+  resolvedPercentage: number;
+}
+
+export const selectIssueStats = (state: IssuesState): IssueStats => {
   const total = state.issues.length;
   const resolved = state.issues.filter((i) => i.status === 'resolved').length;
   const pending = state.issues.filter((i) => i.status === 'pending').length;

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect, useRef } from 'react';
 import Header from './components/Header';
@@ -8,7 +9,7 @@ import Settings from './pages/Settings';
 import NewSession from './pages/NewSession';
 import { wsClient } from './lib/websocket';
 
-export default function App() {
+export default function App(): JSX.Element {
   const connectedRef = useRef(false);
 
   useEffect(() => {

@@ -65,11 +65,11 @@ export class ClaudeProvider extends BaseProvider {
       rateLimitTpm: config.rateLimitTpm ?? 80000,
     });
 
-    this.model = (config.model ?? 'claude-sonnet-4-20250514') as ClaudeModel;
+    this.model = (config.model ?? 'claude-sonnet-4-20250514');
     this.analysisType = config.analysisType ?? 'full';
 
-    const apiKey = config.apiKey ?? process.env['ANTHROPIC_API_KEY'];
-    if (!apiKey) {
+    const apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY;
+    if (apiKey === undefined || apiKey === '') {
       throw new AuthenticationError('Anthropic API key is required. Set ANTHROPIC_API_KEY environment variable or pass apiKey in config.');
     }
 
@@ -122,7 +122,7 @@ export class ClaudeProvider extends BaseProvider {
    * Analyze code with explicit file contents (for when caller has already read files)
    */
   async analyzeCodeWithContents(
-    files: Array<{ path: string; content: string }>,
+    files: { path: string; content: string }[],
     context: string,
     callbacks?: StreamCallbacks,
   ): Promise<AnalysisResult> {
@@ -234,13 +234,13 @@ export class ClaudeProvider extends BaseProvider {
 
       // Extract text content from response
       const textContent = response.content.find(block => block.type === 'text');
-      if (!textContent || textContent.type !== 'text') {
+      if (textContent?.type !== 'text') {
         throw new InvalidResponseError('No text content in response', response);
       }
 
       return textContent.text;
     } catch (error) {
-      throw this.handleApiError(error);
+      this.handleApiError(error);
     }
   }
 
@@ -335,7 +335,7 @@ export class ClaudeProvider extends BaseProvider {
   private extractRetryAfter(error: InstanceType<typeof Anthropic.APIError>): number | undefined {
     // Anthropic SDK may include retry-after in error details
     const headers = (error as unknown as { headers?: Record<string, string> }).headers;
-    if (headers?.['retry-after']) {
+    if (headers?.['retry-after'] !== undefined && headers['retry-after'] !== '') {
       const retryAfter = parseInt(headers['retry-after'], 10);
       if (!isNaN(retryAfter)) {
         return retryAfter;
@@ -384,7 +384,7 @@ export class ClaudeProvider extends BaseProvider {
     let offset = 0;
 
     while ((match = hunkRegex.exec(diff)) !== null) {
-      const originalStart = parseInt(match[1] ?? '1', 10) - 1;
+      const originalStart = parseInt(match[1], 10) - 1;
       const hunkStart = match.index;
       const nextHunk = diff.indexOf('@@', hunkStart + match[0].length);
       const hunkContent = nextHunk === -1

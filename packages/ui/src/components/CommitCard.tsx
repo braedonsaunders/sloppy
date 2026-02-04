@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -33,12 +34,12 @@ export default function CommitCard({
   onToggleExpand,
   showDiff = true,
   className,
-}: CommitCardProps) {
+}: CommitCardProps): JSX.Element {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const isExpanded = controlledExpanded ?? internalExpanded;
 
-  const handleToggle = () => {
-    if (onToggleExpand) {
+  const handleToggle = (): void => {
+    if (onToggleExpand !== undefined) {
       onToggleExpand();
     } else {
       setInternalExpanded(!internalExpanded);
@@ -155,7 +156,7 @@ export default function CommitCard({
           )}
 
           {/* Diff Viewer */}
-          {showDiff && commit.diff && (
+          {showDiff && commit.diff !== '' && (
             <div>
               <h4 className="text-xs font-medium text-dark-400 mb-2">
                 Changes
@@ -174,7 +175,7 @@ export default function CommitCard({
           )}
 
           {/* Actions */}
-          {onRevert && !commit.reverted && (
+          {onRevert !== undefined && !commit.reverted && (
             <div className="flex items-center gap-2 pt-2 border-t border-dark-700">
               <Button
                 variant="danger"
@@ -209,7 +210,7 @@ export function CommitRow({
   onClick,
   isSelected = false,
   className,
-}: CommitRowProps) {
+}: CommitRowProps): JSX.Element {
   const shortHash = commit.hash.substring(0, 7);
 
   return (

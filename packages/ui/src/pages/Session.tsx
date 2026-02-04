@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -36,7 +37,7 @@ import { api } from '@/lib/api';
 
 type Tab = 'issues' | 'commits' | 'activity' | 'metrics';
 
-export default function Session() {
+export default function Session(): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -59,12 +60,12 @@ export default function Session() {
   } = useSession(id);
 
   // WebSocket for real-time updates
-  useSessionWebSocket(id!);
+  useSessionWebSocket(id ?? '');
 
   // Store data
   const activities = useSessionStore((s) => s.activities);
   const metrics = useSessionStore((s) => s.metrics);
-  const llmRequests = useSessionStore((s) => s.llmRequests || []);
+  const llmRequests = useSessionStore((s) => s.llmRequests);
   const activeLLMRequest = useSessionStore((s) => s.activeLLMRequest);
   const issues = useIssuesStore(selectFilteredIssues);
   const issueStats = useIssuesStore(selectIssueStats);
@@ -75,35 +76,37 @@ export default function Session() {
 
   // Mutations
   const approveIssueMutation = useMutation({
-    mutationFn: (issueId: string) => api.issues.approve(id!, issueId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }),
+    mutationFn: (issueId: string) => api.issues.approve(id ?? '', issueId),
+    onSuccess: (): void => { void queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }); },
   });
 
   const rejectIssueMutation = useMutation({
-    mutationFn: (issueId: string) => api.issues.reject(id!, issueId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }),
+    mutationFn: (issueId: string) => api.issues.reject(id ?? '', issueId),
+    onSuccess: (): void => { void queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }); },
   });
 
   const skipIssueMutation = useMutation({
-    mutationFn: (issueId: string) => api.issues.skip(id!, issueId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }),
+    mutationFn: (issueId: string) => api.issues.skip(id ?? '', issueId),
+    onSuccess: (): void => { void queryClient.invalidateQueries({ queryKey: ['session', id, 'issues'] }); },
   });
 
   const revertCommitMutation = useMutation({
-    mutationFn: (commitId: string) => api.commits.revert(id!, commitId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['session', id, 'commits'] }),
+    mutationFn: (commitId: string) => api.commits.revert(id ?? '', commitId),
+    onSuccess: (): void => { void queryClient.invalidateQueries({ queryKey: ['session', id, 'commits'] }); },
   });
 
   // Handlers
-  const handleStop = async () => {
-    await stopSession();
-    setShowStopConfirm(false);
+  const handleStop = (): void => {
+    void stopSession().then(() => {
+      setShowStopConfirm(false);
+    });
   };
 
-  const handleDelete = async () => {
-    await deleteSession();
-    setShowDeleteConfirm(false);
-    navigate('/');
+  const handleDelete = (): void => {
+    void deleteSession().then(() => {
+      setShowDeleteConfirm(false);
+      navigate('/');
+    });
   };
 
   if (isLoading || !session) {
@@ -117,7 +120,7 @@ export default function Session() {
     );
   }
 
-  const repoName = session.repoPath.split('/').pop() || session.repoPath;
+  const repoName = session.repoPath.split('/').pop() ?? session.repoPath;
   const isActive = session.status === 'running' || session.status === 'paused';
   const progress =
     session.stats.issuesFound > 0
@@ -173,7 +176,7 @@ export default function Session() {
           {session.status === 'running' && (
             <Button
               variant="secondary"
-              onClick={() => pauseSession()}
+              onClick={() => { void pauseSession(); }}
               isLoading={isPausing}
               leftIcon={<Pause className="h-4 w-4" />}
             >
@@ -183,7 +186,7 @@ export default function Session() {
           {session.status === 'paused' && (
             <Button
               variant="primary"
-              onClick={() => resumeSession()}
+              onClick={() => { void resumeSession(); }}
               isLoading={isResuming}
               leftIcon={<Play className="h-4 w-4" />}
             >
@@ -193,7 +196,7 @@ export default function Session() {
           {isActive && (
             <Button
               variant="danger"
-              onClick={() => setShowStopConfirm(true)}
+              onClick={() => { setShowStopConfirm(true); }}
               leftIcon={<Square className="h-4 w-4" />}
             >
               Stop
@@ -202,7 +205,7 @@ export default function Session() {
           {!isActive && (
             <Button
               variant="ghost"
-              onClick={() => setShowDeleteConfirm(true)}
+              onClick={() => { setShowDeleteConfirm(true); }}
               leftIcon={<Trash2 className="h-4 w-4" />}
             >
               Delete
@@ -242,7 +245,7 @@ export default function Session() {
           <p className="text-2xl font-semibold text-success">{session.stats.issuesResolved}</p>
           <p className="text-xs text-dark-500 mt-2">
             {session.stats.issuesFound > 0
-              ? `${Math.round(progress)}% complete`
+              ? `${String(Math.round(progress))}% complete`
               : 'No issues yet'}
           </p>
         </div>
@@ -255,7 +258,7 @@ export default function Session() {
           </div>
           <p className="text-2xl font-semibold text-warning">{issueStats.pending}</p>
           <p className="text-xs text-dark-500 mt-2">
-            {issueStats.inProgress > 0 && `${issueStats.inProgress} in progress`}
+            {issueStats.inProgress > 0 ? `${String(issueStats.inProgress)} in progress` : ''}
           </p>
         </div>
 
@@ -294,7 +297,7 @@ export default function Session() {
           <p className="text-2xl font-semibold text-dark-100">
             {formatTokens(
               llmRequests.reduce(
-                (acc, r) => acc + (r.inputTokens || 0) + (r.outputTokens || 0),
+                (acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0),
                 0
               )
             )}
@@ -321,7 +324,7 @@ export default function Session() {
         />
 
         {/* Current Activity */}
-        {session.status === 'running' && activities.length > 0 && (
+        {activities.length > 0 && (
           <div className="mt-4 pt-4 border-t border-dark-700">
             <ActivityIndicator
               activity={activities[0]}
@@ -341,7 +344,7 @@ export default function Session() {
               {(['issues', 'commits', 'activity', 'metrics'] as Tab[]).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => { setActiveTab(tab); }}
                   className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                     activeTab === tab
                       ? 'border-accent text-accent'
@@ -372,9 +375,9 @@ export default function Session() {
                 filters={filters}
                 onSetFilters={setFilters}
                 onClearFilters={clearFilters}
-                onApprove={(issueId) => approveIssueMutation.mutate(issueId)}
-                onReject={(issueId) => rejectIssueMutation.mutate(issueId)}
-                onSkip={(issueId) => skipIssueMutation.mutate(issueId)}
+                onApprove={(issueId) => { approveIssueMutation.mutate(issueId); }}
+                onReject={(issueId) => { rejectIssueMutation.mutate(issueId); }}
+                onSkip={(issueId) => { skipIssueMutation.mutate(issueId); }}
                 approvalMode={session.config.approvalMode}
               />
             )}
@@ -382,7 +385,7 @@ export default function Session() {
             {activeTab === 'commits' && (
               <CommitsPanel
                 commits={commits}
-                onRevert={(commitId) => revertCommitMutation.mutate(commitId)}
+                onRevert={(commitId) => { revertCommitMutation.mutate(commitId); }}
                 isReverting={revertCommitMutation.isPending}
               />
             )}
@@ -421,7 +424,7 @@ export default function Session() {
       {/* Modals */}
       <ConfirmModal
         isOpen={showStopConfirm}
-        onClose={() => setShowStopConfirm(false)}
+        onClose={() => { setShowStopConfirm(false); }}
         onConfirm={handleStop}
         title="Stop Session"
         message="Are you sure you want to stop this session? This action cannot be undone."
@@ -432,7 +435,7 @@ export default function Session() {
 
       <ConfirmModal
         isOpen={showDeleteConfirm}
-        onClose={() => setShowDeleteConfirm(false)}
+        onClose={() => { setShowDeleteConfirm(false); }}
         onConfirm={handleDelete}
         title="Delete Session"
         message="Are you sure you want to delete this session? All data will be permanently removed."
@@ -445,8 +448,8 @@ export default function Session() {
 }
 
 function formatTokens(count: number): string {
-  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
-  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  if (count >= 1000000) {return `${(count / 1000000).toFixed(1)}M`;}
+  if (count >= 1000) {return `${(count / 1000).toFixed(1)}k`;}
   return count.toString();
 }
 
@@ -470,7 +473,7 @@ function IssuesPanel({
   onReject,
   onSkip,
   approvalMode,
-}: IssuesPanelProps) {
+}: IssuesPanelProps): JSX.Element {
   const hasFilters = Object.values(filters).some(Boolean);
 
   return (
@@ -485,8 +488,8 @@ function IssuesPanel({
             { value: 'resolved', label: 'Resolved' },
             { value: 'skipped', label: 'Skipped' },
           ]}
-          value={filters.status || ''}
-          onChange={(e) => onSetFilters({ status: (e.target.value || undefined) as IssueFilter['status'] })}
+          value={filters.status ?? ''}
+          onChange={(e) => { onSetFilters({ status: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['status'] }); }}
           className="w-40"
         />
         <Select
@@ -499,8 +502,8 @@ function IssuesPanel({
             { value: 'performance', label: 'Performance' },
             { value: 'style', label: 'Style' },
           ]}
-          value={filters.type || ''}
-          onChange={(e) => onSetFilters({ type: (e.target.value || undefined) as IssueFilter['type'] })}
+          value={filters.type ?? ''}
+          onChange={(e) => { onSetFilters({ type: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['type'] }); }}
           className="w-40"
         />
         <Select
@@ -510,14 +513,14 @@ function IssuesPanel({
             { value: 'warning', label: 'Warnings' },
             { value: 'info', label: 'Info' },
           ]}
-          value={filters.severity || ''}
-          onChange={(e) => onSetFilters({ severity: (e.target.value || undefined) as IssueFilter['severity'] })}
+          value={filters.severity ?? ''}
+          onChange={(e) => { onSetFilters({ severity: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['severity'] }); }}
           className="w-40"
         />
         <Input
           placeholder="Search issues..."
-          value={filters.search || ''}
-          onChange={(e) => onSetFilters({ search: e.target.value || undefined })}
+          value={filters.search ?? ''}
+          onChange={(e) => { onSetFilters({ search: e.target.value !== '' ? e.target.value : undefined }); }}
           className="w-60"
         />
         {hasFilters && (
@@ -554,12 +557,12 @@ function IssuesPanel({
 }
 
 interface CommitsPanelProps {
-  commits: any[];
+  commits: { id: string; hash: string; message: string; files: string[]; diff: string; issueIds: string[]; createdAt: string; reverted: boolean }[];
   onRevert: (id: string) => void;
   isReverting: boolean;
 }
 
-function CommitsPanel({ commits, onRevert, isReverting }: CommitsPanelProps) {
+function CommitsPanel({ commits, onRevert, isReverting }: CommitsPanelProps): JSX.Element {
   if (commits.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
@@ -574,7 +577,17 @@ function CommitsPanel({ commits, onRevert, isReverting }: CommitsPanelProps) {
       {commits.map((commit) => (
         <CommitCard
           key={commit.id}
-          commit={commit}
+          commit={{
+            id: commit.id,
+            sessionId: '',
+            hash: commit.hash,
+            message: commit.message,
+            files: commit.files,
+            diff: commit.diff,
+            issueIds: commit.issueIds,
+            createdAt: commit.createdAt,
+            reverted: commit.reverted,
+          }}
           onRevert={onRevert}
           isReverting={isReverting}
         />

@@ -111,7 +111,7 @@ export class ProviderError extends Error {
   constructor(
     message: string,
     code: string,
-    retryable: boolean = false,
+    retryable = false,
     statusCode?: number,
     cause?: Error,
   ) {
@@ -170,7 +170,7 @@ export class RateLimiter {
   private readonly requestsPerMinute: number;
   private readonly tokensPerMinute: number;
 
-  constructor(requestsPerMinute: number = 60, tokensPerMinute: number = 100000) {
+  constructor(requestsPerMinute = 60, tokensPerMinute = 100000) {
     this.requestsPerMinute = requestsPerMinute;
     this.tokensPerMinute = tokensPerMinute;
     this.requestBucket = { tokens: requestsPerMinute, lastRefill: Date.now() };
@@ -185,7 +185,7 @@ export class RateLimiter {
     bucket.lastRefill = now;
   }
 
-  async waitForCapacity(estimatedTokens: number = 1000): Promise<void> {
+  async waitForCapacity(estimatedTokens = 1000): Promise<void> {
     // Refill buckets
     this.refillBucket(this.requestBucket, this.requestsPerMinute, this.requestsPerMinute);
     this.refillBucket(this.tokenBucket, this.tokensPerMinute, this.tokensPerMinute);
@@ -271,7 +271,7 @@ export async function withRetry<T>(
       let delay = opts.baseDelay * Math.pow(opts.exponentialBase, attempt);
 
       // Handle rate limit retry-after
-      if (error instanceof RateLimitError && error.retryAfter) {
+      if (error instanceof RateLimitError && error.retryAfter !== undefined) {
         delay = Math.max(delay, error.retryAfter * 1000);
       }
 
@@ -378,7 +378,7 @@ export abstract class BaseProvider {
   /**
    * Format file content with line numbers for context
    */
-  protected formatFileWithLineNumbers(content: string, startLine: number = 1): string {
+  protected formatFileWithLineNumbers(content: string, startLine = 1): string {
     const lines = content.split('\n');
     const lineNumberWidth = String(startLine + lines.length - 1).length;
 
@@ -396,7 +396,7 @@ export abstract class BaseProvider {
   protected extractContext(
     content: string,
     location: IssueLocation,
-    contextLines: number = 10,
+    contextLines = 10,
   ): string {
     const lines = content.split('\n');
     const startLine = Math.max(0, location.startLine - contextLines - 1);
@@ -409,7 +409,7 @@ export abstract class BaseProvider {
   /**
    * Generate a unified diff between two strings
    */
-  protected generateDiff(original: string, modified: string, filename: string = 'file'): string {
+  protected generateDiff(original: string, modified: string, filename = 'file'): string {
     const originalLines = original.split('\n');
     const modifiedLines = modified.split('\n');
     const diff: string[] = [];
@@ -423,11 +423,11 @@ export abstract class BaseProvider {
     let hunkStart = -1;
     let hunkLines: string[] = [];
 
-    const flushHunk = () => {
+    const flushHunk = (): void => {
       if (hunkLines.length > 0 && hunkStart !== -1) {
         const originalCount = hunkLines.filter(l => !l.startsWith('+')).length;
         const modifiedCount = hunkLines.filter(l => !l.startsWith('-')).length;
-        diff.push(`@@ -${hunkStart + 1},${originalCount} +${hunkStart + 1},${modifiedCount} @@`);
+        diff.push(`@@ -${String(hunkStart + 1)},${String(originalCount)} +${String(hunkStart + 1)},${String(modifiedCount)} @@`);
         diff.push(...hunkLines);
         hunkLines = [];
         hunkStart = -1;
@@ -440,7 +440,7 @@ export abstract class BaseProvider {
 
       if (origLine === modLine) {
         if (hunkLines.length > 0) {
-          hunkLines.push(` ${origLine ?? ''}`);
+          hunkLines.push(` ${origLine}`);
           if (hunkLines.filter(l => l.startsWith('+') || l.startsWith('-')).length === 0) {
             flushHunk();
           }
@@ -452,15 +452,15 @@ export abstract class BaseProvider {
           hunkStart = Math.max(0, i - 3);
           // Add context before
           for (let k = hunkStart; k < i; k++) {
-            hunkLines.push(` ${originalLines[k] ?? ''}`);
+            hunkLines.push(` ${originalLines[k]}`);
           }
         }
 
-        if (origLine !== undefined && (modLine === undefined || origLine !== modifiedLines[j])) {
+        if (origLine !== modifiedLines[j]) {
           hunkLines.push(`-${origLine}`);
           i++;
         }
-        if (modLine !== undefined && (origLine === undefined || modLine !== originalLines[i - 1])) {
+        if (modLine !== originalLines[i - 1]) {
           hunkLines.push(`+${modLine}`);
           j++;
         }
@@ -481,7 +481,7 @@ export abstract class BaseProvider {
     let lineOffset = 0;
 
     for (const diffLine of diffLines) {
-      const hunkMatch = diffLine.match(/^@@ -(\d+),?\d* \+(\d+),?\d* @@/);
+      const hunkMatch = /^@@ -(\d+),?\d* \+(\d+),?\d* @@/.exec(diffLine);
       if (hunkMatch) {
         // Reset offset for new hunk
         continue;
@@ -509,19 +509,19 @@ export abstract class BaseProvider {
     // Try to extract JSON from markdown code blocks
     let jsonStr = response;
 
-    const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch?.[1]) {
+    const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(response);
+    if (codeBlockMatch?.[1] !== undefined && codeBlockMatch[1] !== '') {
       jsonStr = codeBlockMatch[1].trim();
     }
 
     // Try to find JSON object or array
-    const jsonMatch = jsonStr.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-    if (jsonMatch?.[1]) {
+    const jsonMatch = /(\{[\s\S]*\}|\[[\s\S]*\])/.exec(jsonStr);
+    if (jsonMatch?.[1] !== undefined && jsonMatch[1] !== '') {
       jsonStr = jsonMatch[1];
     }
 
     try {
-      const parsed = JSON.parse(jsonStr);
+      const parsed: unknown = JSON.parse(jsonStr);
       return schema.parse(parsed);
     } catch (error) {
       throw new InvalidResponseError(
@@ -546,7 +546,7 @@ export abstract class BaseProvider {
    * Generate a unique issue ID
    */
   protected generateIssueId(file: string, line: number, category: string): string {
-    const hash = this.simpleHash(`${file}:${line}:${category}`);
+    const hash = this.simpleHash(`${file}:${String(line)}:${category}`);
     return `${category.slice(0, 3).toUpperCase()}-${hash}`;
   }
 
@@ -565,7 +565,7 @@ export abstract class BaseProvider {
    */
   protected async withRateLimitAndRetry<T>(
     fn: () => Promise<T>,
-    estimatedTokens: number = 1000,
+    estimatedTokens = 1000,
   ): Promise<T> {
     await this.rateLimiter.waitForCapacity(estimatedTokens);
 

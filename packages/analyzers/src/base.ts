@@ -187,7 +187,7 @@ export abstract class BaseAnalyzer {
   protected extractContext(
     lines: string[],
     lineNumber: number,
-    contextLines: number = 2
+    contextLines = 2
   ): string {
     const start = Math.max(0, lineNumber - contextLines - 1);
     const end = Math.min(lines.length, lineNumber + contextLines);
@@ -229,8 +229,8 @@ export abstract class BaseAnalyzer {
     line: number,
     identifier?: string
   ): string {
-    const base = `${category}:${path.basename(file)}:${line}`;
-    return identifier ? `${base}:${identifier}` : base;
+    const base = `${category}:${path.basename(file)}:${String(line)}`;
+    return identifier !== undefined && identifier !== '' ? `${base}:${identifier}` : base;
   }
 
   /**
@@ -256,8 +256,8 @@ export abstract class BaseAnalyzer {
    * Log a message if verbose mode is enabled
    */
   protected log(options: AnalyzerOptions, message: string): void {
-    if (options.verbose) {
-      console.log(`[${this.name}] ${message}`);
+    if (options.verbose === true) {
+      console.warn(`[${this.name}] ${message}`);
     }
   }
 

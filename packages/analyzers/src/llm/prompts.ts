@@ -136,12 +136,12 @@ Respond with JSON:
  * User prompt template for code analysis
  */
 export function generateAnalysisPrompt(
-  files: Array<{ path: string; content: string }>,
+  files: { path: string; content: string }[],
   context?: string
 ): string {
   const parts: string[] = [];
 
-  if (context) {
+  if (context !== undefined && context !== '') {
     parts.push('## Context');
     parts.push(context);
     parts.push('');
@@ -179,7 +179,7 @@ export function generateExplorationPrompt(
   parts.push('```');
   parts.push('');
 
-  if (projectContext) {
+  if (projectContext !== undefined && projectContext !== '') {
     parts.push('## Project Context');
     parts.push(projectContext);
     parts.push('');
@@ -214,7 +214,7 @@ ${file.path}
 
 ### Original Issue
 ${previousIssue.description}
-(Lines ${previousIssue.lineStart}-${previousIssue.lineEnd})
+(Lines ${String(previousIssue.lineStart)}-${String(previousIssue.lineEnd)})
 
 ### Applied Fix
 ${appliedFix}

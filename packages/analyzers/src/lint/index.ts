@@ -126,7 +126,7 @@ export class LintAnalyzer extends BaseAnalyzer {
 
     try {
       // Create ESLint instance
-      this.eslint = await this.createESLint(options.rootDir, config);
+      this.eslint = this.createESLint(options.rootDir, config);
 
       // Filter files by extension
       const lintableFiles = this.filterLintableFiles(files, config);
@@ -136,7 +136,7 @@ export class LintAnalyzer extends BaseAnalyzer {
         return issues;
       }
 
-      this.log(options, `Linting ${lintableFiles.length} files`);
+      this.log(options, `Linting ${String(lintableFiles.length)} files`);
 
       // Run ESLint
       const results = await this.eslint.lintFiles(lintableFiles);
@@ -149,7 +149,7 @@ export class LintAnalyzer extends BaseAnalyzer {
         }
       }
 
-      this.log(options, `Found ${issues.length} lint issues`);
+      this.log(options, `Found ${String(issues.length)} lint issues`);
     } catch (error) {
       this.logError('Failed to run ESLint', error);
     }
@@ -174,10 +174,10 @@ export class LintAnalyzer extends BaseAnalyzer {
   /**
    * Create ESLint instance with configuration
    */
-  private async createESLint(
+  private createESLint(
     rootDir: string,
     config: Required<LintAnalyzerConfig>
-  ): Promise<ESLint> {
+  ): ESLint {
     // Build rules configuration
     const rules: Record<string, RuleConfig> = {};
 
@@ -231,34 +231,36 @@ export class LintAnalyzer extends BaseAnalyzer {
     const issues: Issue[] = [];
 
     for (const message of result.messages) {
+      const line = message.line;
+      const column = message.column;
+      const ruleId = message.ruleId ?? 'unknown';
       issues.push(
         this.createIssue({
           id: this.generateIssueId(
             this.category,
             result.filePath,
-            message.line ?? 1,
-            message.ruleId ?? 'unknown'
+            line,
+            ruleId
           ),
           severity: this.eslintSeverityToSeverity(message.severity),
           message: message.message,
-          description: message.ruleId
-            ? `ESLint rule: ${message.ruleId}`
+          description: ruleId !== 'unknown'
+            ? `ESLint rule: ${ruleId}`
             : undefined,
           location: {
             file: result.filePath,
-            line: message.line ?? 1,
-            column: message.column ?? 1,
+            line,
+            column,
             endLine: message.endLine,
             endColumn: message.endColumn,
           },
-          suggestion: message.fix
+          suggestion: message.fix !== undefined
             ? 'This issue can be auto-fixed with --fix'
             : undefined,
           metadata: {
             ruleId: message.ruleId,
-            nodeType: message.nodeType,
             fatal: message.fatal,
-            fix: message.fix
+            fix: message.fix !== undefined
               ? {
                   range: message.fix.range,
                   text: message.fix.text,
@@ -289,7 +291,7 @@ export class LintAnalyzer extends BaseAnalyzer {
   /**
    * Get the fix count for the last lint run
    */
-  async getFixableCount(files: string[], options: AnalyzerOptions): Promise<number> {
+  async getFixableCount(files: string[], _options: AnalyzerOptions): Promise<number> {
     if (!this.eslint) {
       return 0;
     }
@@ -311,7 +313,7 @@ export class LintAnalyzer extends BaseAnalyzer {
     const config = this.getConfig(options);
     config.fix = true;
 
-    const eslint = await this.createESLint(options.rootDir, config);
+    const eslint = this.createESLint(options.rootDir, config);
     const results = await eslint.lintFiles(files);
 
     // Write fixed files

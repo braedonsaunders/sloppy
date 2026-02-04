@@ -1,19 +1,45 @@
 import { useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type CreateSessionRequest, ApiClientError } from '@/lib/api';
+import type { Session, CreateSessionRequest, SessionStats, Issue, Commit, Activity, Metrics } from '@/lib/api';
+import { api, ApiClientError } from '@/lib/api';
 import { useSessionStore } from '@/stores/session';
 import { useIssuesStore } from '@/stores/issues';
 
 // Don't retry on 404 errors (session not found)
-const shouldRetry = (failureCount: number, error: Error) => {
+const shouldRetry = (failureCount: number, error: Error): boolean => {
   if (error instanceof ApiClientError && error.status === 404) {
     return false;
   }
   return failureCount < 3;
 };
 
-export function useSession(sessionId?: string) {
+interface UseSessionReturn {
+  session: Session | undefined;
+  stats: SessionStats | undefined;
+  issues: Issue[] | undefined;
+  commits: Commit[] | undefined;
+  activities: Activity[] | undefined;
+  metrics: Metrics[] | undefined;
+  isLoading: boolean;
+  isLoadingStats: boolean;
+  isLoadingIssues: boolean;
+  isLoadingCommits: boolean;
+  error: Error | null;
+  isCreating: boolean;
+  isPausing: boolean;
+  isResuming: boolean;
+  isStopping: boolean;
+  isDeleting: boolean;
+  createSession: (data: CreateSessionRequest) => Promise<Session>;
+  pauseSession: (id?: string) => Promise<Session | undefined>;
+  resumeSession: (id?: string) => Promise<Session | undefined>;
+  stopSession: (id?: string) => Promise<Session | undefined>;
+  deleteSession: (id?: string) => Promise<void>;
+  refreshSession: () => void;
+}
+
+export function useSession(sessionId?: string): UseSessionReturn {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
 
@@ -32,12 +58,12 @@ export function useSession(sessionId?: string) {
   // Fetch session details
   const sessionQuery = useQuery({
     queryKey: ['session', sessionId],
-    queryFn: () => api.sessions.get(sessionId!),
-    enabled: !!sessionId,
+    queryFn: (): Promise<Session> => api.sessions.get(sessionId ?? ''),
+    enabled: sessionId !== undefined && sessionId !== '',
     retry: shouldRetry,
-    refetchInterval: (query) => {
+    refetchInterval: (query): number | false => {
       // Don't refetch if there's an error (e.g., 404)
-      if (query.state.error) return false;
+      if (query.state.error !== null) { return false; }
       const session = query.state.data;
       return session?.status === 'running' ? 5000 : false;
     },
@@ -46,11 +72,11 @@ export function useSession(sessionId?: string) {
   // Fetch session stats
   const statsQuery = useQuery({
     queryKey: ['session', sessionId, 'stats'],
-    queryFn: () => api.sessions.getStats(sessionId!),
-    enabled: !!sessionId && !sessionQuery.error,
+    queryFn: (): Promise<SessionStats> => api.sessions.getStats(sessionId ?? ''),
+    enabled: sessionId !== undefined && sessionId !== '' && sessionQuery.error === null,
     retry: shouldRetry,
-    refetchInterval: (query) => {
-      if (query.state.error) return false;
+    refetchInterval: (query): number | false => {
+      if (query.state.error !== null) { return false; }
       return 3000;
     },
   });
@@ -58,11 +84,11 @@ export function useSession(sessionId?: string) {
   // Fetch session issues
   const issuesQuery = useQuery({
     queryKey: ['session', sessionId, 'issues'],
-    queryFn: () => api.issues.list(sessionId!),
-    enabled: !!sessionId && !sessionQuery.error,
+    queryFn: (): Promise<Issue[]> => api.issues.list(sessionId ?? ''),
+    enabled: sessionId !== undefined && sessionId !== '' && sessionQuery.error === null,
     retry: shouldRetry,
-    refetchInterval: (query) => {
-      if (query.state.error) return false;
+    refetchInterval: (query): number | false => {
+      if (query.state.error !== null) { return false; }
       return 5000;
     },
   });
@@ -70,11 +96,11 @@ export function useSession(sessionId?: string) {
   // Fetch session commits
   const commitsQuery = useQuery({
     queryKey: ['session', sessionId, 'commits'],
-    queryFn: () => api.commits.list(sessionId!),
-    enabled: !!sessionId && !sessionQuery.error,
+    queryFn: (): Promise<Commit[]> => api.commits.list(sessionId ?? ''),
+    enabled: sessionId !== undefined && sessionId !== '' && sessionQuery.error === null,
     retry: shouldRetry,
-    refetchInterval: (query) => {
-      if (query.state.error) return false;
+    refetchInterval: (query): number | false => {
+      if (query.state.error !== null) { return false; }
       return 10000;
     },
   });
@@ -82,11 +108,11 @@ export function useSession(sessionId?: string) {
   // Fetch session activity
   const activityQuery = useQuery({
     queryKey: ['session', sessionId, 'activity'],
-    queryFn: () => api.sessions.getActivity(sessionId!, 50),
-    enabled: !!sessionId && !sessionQuery.error,
+    queryFn: (): Promise<Activity[]> => api.sessions.getActivity(sessionId ?? '', 50),
+    enabled: sessionId !== undefined && sessionId !== '' && sessionQuery.error === null,
     retry: shouldRetry,
-    refetchInterval: (query) => {
-      if (query.state.error) return false;
+    refetchInterval: (query): number | false => {
+      if (query.state.error !== null) { return false; }
       return 2000;
     },
   });
@@ -94,11 +120,11 @@ export function useSession(sessionId?: string) {
   // Fetch session metrics
   const metricsQuery = useQuery({
     queryKey: ['session', sessionId, 'metrics'],
-    queryFn: () => api.sessions.getMetrics(sessionId!),
-    enabled: !!sessionId && !sessionQuery.error,
+    queryFn: (): Promise<Metrics[]> => api.sessions.getMetrics(sessionId ?? ''),
+    enabled: sessionId !== undefined && sessionId !== '' && sessionQuery.error === null,
     retry: shouldRetry,
-    refetchInterval: (query) => {
-      if (query.state.error) return false;
+    refetchInterval: (query): number | false => {
+      if (query.state.error !== null) { return false; }
       return 10000;
     },
   });
@@ -113,37 +139,37 @@ export function useSession(sessionId?: string) {
 
   // Update stores when data changes
   useEffect(() => {
-    if (sessionQuery.data) {
+    if (sessionQuery.data !== undefined) {
       setCurrentSession(sessionQuery.data);
     }
   }, [sessionQuery.data, setCurrentSession]);
 
   useEffect(() => {
-    if (statsQuery.data) {
+    if (statsQuery.data !== undefined) {
       setStats(statsQuery.data);
     }
   }, [statsQuery.data, setStats]);
 
   useEffect(() => {
-    if (issuesQuery.data) {
+    if (issuesQuery.data !== undefined) {
       setIssues(issuesQuery.data);
     }
   }, [issuesQuery.data, setIssues]);
 
   useEffect(() => {
-    if (commitsQuery.data) {
+    if (commitsQuery.data !== undefined) {
       setCommits(commitsQuery.data);
     }
   }, [commitsQuery.data, setCommits]);
 
   useEffect(() => {
-    if (activityQuery.data) {
+    if (activityQuery.data !== undefined) {
       setActivities(activityQuery.data);
     }
   }, [activityQuery.data, setActivities]);
 
   useEffect(() => {
-    if (metricsQuery.data) {
+    if (metricsQuery.data !== undefined) {
       setMetrics(metricsQuery.data);
     }
   }, [metricsQuery.data, setMetrics]);
@@ -151,12 +177,12 @@ export function useSession(sessionId?: string) {
   // Update loading/error state
   useEffect(() => {
     setLoading(sessionQuery.isLoading);
-    setError(sessionQuery.error?.message || null);
+    setError(sessionQuery.error?.message ?? null);
   }, [sessionQuery.isLoading, sessionQuery.error, setLoading, setError]);
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: async (data: CreateSessionRequest) => {
+    mutationFn: async (data: CreateSessionRequest): Promise<Session> => {
       // Create the session
       const session = await api.sessions.create(data);
       // Auto-start the session after creation
@@ -167,40 +193,43 @@ export function useSession(sessionId?: string) {
         return session;
       }
     },
-    onSuccess: (session) => {
-      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    onSuccess: (session: Session): void => {
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       navigate(`/session/${session.id}`);
     },
   });
 
   const pauseMutation = useMutation({
-    mutationFn: (id: string) => api.sessions.pause(id),
-    onSuccess: (session) => {
+    mutationFn: (id: string): Promise<Session> => api.sessions.pause(id),
+    onSuccess: (session: Session): void => {
       updateSession(session.id, session);
-      queryClient.invalidateQueries({ queryKey: ['session', session.id] });
+      void queryClient.invalidateQueries({ queryKey: ['session', session.id] });
     },
   });
 
   const resumeMutation = useMutation({
-    mutationFn: (id: string) => api.sessions.resume(id),
-    onSuccess: (session) => {
+    mutationFn: (id: string): Promise<Session> => api.sessions.resume(id),
+    onSuccess: (session: Session): void => {
       updateSession(session.id, session);
-      queryClient.invalidateQueries({ queryKey: ['session', session.id] });
+      void queryClient.invalidateQueries({ queryKey: ['session', session.id] });
     },
   });
 
   const stopMutation = useMutation({
-    mutationFn: (id: string) => api.sessions.stop(id),
-    onSuccess: (session) => {
+    mutationFn: (id: string): Promise<Session> => api.sessions.stop(id),
+    onSuccess: (session: Session): void => {
       updateSession(session.id, session);
-      queryClient.invalidateQueries({ queryKey: ['session', session.id] });
+      void queryClient.invalidateQueries({ queryKey: ['session', session.id] });
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.sessions.delete(id),
-    onSuccess: (_, id) => {
-      queryClient.invalidateQueries({ queryKey: ['sessions'] });
+    mutationFn: async (id: string): Promise<undefined> => {
+      await api.sessions.delete(id);
+      return undefined;
+    },
+    onSuccess: (_: undefined, id: string): void => {
+      void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       if (sessionId === id) {
         resetIssues();
         navigate('/');
@@ -210,53 +239,57 @@ export function useSession(sessionId?: string) {
 
   // Actions
   const createSession = useCallback(
-    (data: CreateSessionRequest) => createMutation.mutateAsync(data),
+    (data: CreateSessionRequest): Promise<Session> => createMutation.mutateAsync(data),
     [createMutation]
   );
 
   const pauseSession = useCallback(
-    (id?: string) => {
-      const targetId = id || sessionId;
-      if (targetId) {
+    (id?: string): Promise<Session | undefined> => {
+      const targetId = id ?? sessionId;
+      if (targetId !== undefined) {
         return pauseMutation.mutateAsync(targetId);
       }
+      return Promise.resolve(undefined);
     },
     [pauseMutation, sessionId]
   );
 
   const resumeSession = useCallback(
-    (id?: string) => {
-      const targetId = id || sessionId;
-      if (targetId) {
+    (id?: string): Promise<Session | undefined> => {
+      const targetId = id ?? sessionId;
+      if (targetId !== undefined) {
         return resumeMutation.mutateAsync(targetId);
       }
+      return Promise.resolve(undefined);
     },
     [resumeMutation, sessionId]
   );
 
   const stopSession = useCallback(
-    (id?: string) => {
-      const targetId = id || sessionId;
-      if (targetId) {
+    (id?: string): Promise<Session | undefined> => {
+      const targetId = id ?? sessionId;
+      if (targetId !== undefined) {
         return stopMutation.mutateAsync(targetId);
       }
+      return Promise.resolve(undefined);
     },
     [stopMutation, sessionId]
   );
 
   const deleteSession = useCallback(
-    (id?: string) => {
-      const targetId = id || sessionId;
-      if (targetId) {
+    (id?: string): Promise<void> => {
+      const targetId = id ?? sessionId;
+      if (targetId !== undefined) {
         return deleteMutation.mutateAsync(targetId);
       }
+      return Promise.resolve();
     },
     [deleteMutation, sessionId]
   );
 
-  const refreshSession = useCallback(() => {
-    if (sessionId) {
-      queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
+  const refreshSession = useCallback((): void => {
+    if (sessionId !== undefined) {
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] });
     }
   }, [queryClient, sessionId]);
 
@@ -296,31 +329,40 @@ export function useSession(sessionId?: string) {
 }
 
 // Hook for listing all sessions
-export function useSessions() {
+interface UseSessionsReturn {
+  sessions: Session[];
+  isLoading: boolean;
+  error: Error | null;
+  refetch: () => void;
+}
+
+export function useSessions(): UseSessionsReturn {
   const { setSessions, setLoading, setError } = useSessionStore();
 
   const query = useQuery({
     queryKey: ['sessions'],
-    queryFn: () => api.sessions.list(),
+    queryFn: (): Promise<Session[]> => api.sessions.list(),
     refetchInterval: 10000,
   });
 
   useEffect(() => {
-    if (query.data) {
+    if (query.data !== undefined) {
       setSessions(query.data);
     }
   }, [query.data, setSessions]);
 
   useEffect(() => {
     setLoading(query.isLoading);
-    setError(query.error?.message || null);
+    setError(query.error?.message ?? null);
   }, [query.isLoading, query.error, setLoading, setError]);
 
   return {
-    sessions: query.data || [],
+    sessions: query.data ?? [],
     isLoading: query.isLoading,
     error: query.error,
-    refetch: query.refetch,
+    refetch: (): void => {
+      void query.refetch();
+    },
   };
 }
 

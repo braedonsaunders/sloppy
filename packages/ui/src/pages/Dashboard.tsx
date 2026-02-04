@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Plus,
@@ -14,7 +15,7 @@ import ProgressBar from '@/components/ProgressBar';
 import { useSessions } from '@/hooks/useSession';
 import type { Session } from '@/lib/api';
 
-export default function Dashboard() {
+export default function Dashboard(): JSX.Element {
   const { sessions, isLoading } = useSessions();
 
   // Calculate stats
@@ -24,15 +25,15 @@ export default function Dashboard() {
       (s) => s.status === 'running' || s.status === 'paused'
     ).length,
     totalIssuesResolved: sessions.reduce(
-      (sum, s) => sum + (s.stats?.issuesResolved ?? 0),
+      (sum, s) => sum + s.stats.issuesResolved,
       0
     ),
     totalIssuesFound: sessions.reduce(
-      (sum, s) => sum + (s.stats?.issuesFound ?? 0),
+      (sum, s) => sum + s.stats.issuesFound,
       0
     ),
     totalCommits: sessions.reduce(
-      (sum, s) => sum + (s.stats?.commitsCreated ?? 0),
+      (sum, s) => sum + s.stats.commitsCreated,
       0
     ),
   };
@@ -126,7 +127,7 @@ export default function Dashboard() {
 
         {isLoading ? (
           <div className="grid gap-4 lg:grid-cols-2">
-            {[...Array(4)].map((_, i) => (
+            {Array.from({ length: 4 }).map((_, i) => (
               <div
                 key={i}
                 className="h-32 animate-pulse rounded-lg bg-dark-800"
@@ -154,7 +155,7 @@ interface StatCardProps {
   color: 'accent' | 'success' | 'warning' | 'info';
 }
 
-function StatCard({ icon: Icon, label, value, color }: StatCardProps) {
+function StatCard({ icon: Icon, label, value, color }: StatCardProps): JSX.Element {
   const colorStyles = {
     accent: 'bg-accent/10 text-accent',
     success: 'bg-success/10 text-success',
@@ -179,13 +180,13 @@ interface ActiveSessionCardProps {
   session: Session;
 }
 
-function ActiveSessionCard({ session }: ActiveSessionCardProps) {
-  const repoPath = session.repoPath || '';
-  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
-  const issuesFound = session.stats?.issuesFound ?? 0;
-  const issuesResolved = session.stats?.issuesResolved ?? 0;
+function ActiveSessionCard({ session }: ActiveSessionCardProps): JSX.Element {
+  const repoPath = session.repoPath;
+  const repoName = repoPath.split('/').pop() ?? repoPath;
+  const issuesFound = session.stats.issuesFound;
+  const issuesResolved = session.stats.issuesResolved;
   const progress = issuesFound > 0 ? (issuesResolved / issuesFound) * 100 : 0;
-  const elapsedMinutes = Math.floor((session.stats?.elapsedTime ?? 0) / 60);
+  const elapsedMinutes = Math.floor((session.stats.elapsedTime) / 60);
 
   return (
     <Link
@@ -229,14 +230,14 @@ interface SessionCardProps {
   session: Session;
 }
 
-function SessionCard({ session }: SessionCardProps) {
-  const repoPath = session.repoPath || '';
-  const repoName = repoPath.split('/').pop() || repoPath || 'Unknown';
+function SessionCard({ session }: SessionCardProps): JSX.Element {
+  const repoPath = session.repoPath;
+  const repoName = repoPath.split('/').pop() ?? repoPath;
   const date = session.startedAt
     ? new Date(session.startedAt).toLocaleDateString()
     : 'N/A';
-  const issuesResolved = session.stats?.issuesResolved ?? 0;
-  const issuesFound = session.stats?.issuesFound ?? 0;
+  const issuesResolved = session.stats.issuesResolved;
+  const issuesFound = session.stats.issuesFound;
 
   return (
     <Link
@@ -276,7 +277,7 @@ function SessionCard({ session }: SessionCardProps) {
   );
 }
 
-function EmptyState() {
+function EmptyState(): JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-dark-600 bg-dark-850 py-12 px-6 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-dark-700">

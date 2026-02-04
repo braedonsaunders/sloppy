@@ -32,23 +32,8 @@ import {
 // Types
 // ============================================================================
 
-export type OllamaModel =
-  | 'codellama'
-  | 'codellama:7b'
-  | 'codellama:13b'
-  | 'codellama:34b'
-  | 'deepseek-coder'
-  | 'deepseek-coder:6.7b'
-  | 'deepseek-coder:33b'
-  | 'llama3'
-  | 'llama3:8b'
-  | 'llama3:70b'
-  | 'mixtral'
-  | 'mixtral:8x7b'
-  | 'qwen2.5-coder'
-  | 'qwen2.5-coder:7b'
-  | 'qwen2.5-coder:32b'
-  | string; // Allow any model name
+// Common Ollama models - but any string is accepted
+export type OllamaModel = string;
 
 export interface OllamaProviderConfig extends ProviderConfig {
   model?: OllamaModel;
@@ -146,11 +131,11 @@ export class OllamaProvider extends BaseProvider {
         return {
           healthy: false,
           models: [],
-          error: `Ollama server returned ${response.status}`,
+          error: `Ollama server returned ${String(response.status)}`,
         };
       }
 
-      const data = await response.json() as { models?: Array<{ name: string }> };
+      const data = await response.json() as { models?: { name: string }[] };
       const models = data.models?.map(m => m.name) ?? [];
 
       return {
@@ -189,10 +174,11 @@ export class OllamaProvider extends BaseProvider {
 
     // Wait for pull to complete (streaming response)
     const reader = response.body?.getReader();
-    if (reader) {
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
+    if (reader !== undefined) {
+      let done = false;
+      while (!done) {
+        const result = await reader.read();
+        done = result.done;
       }
     }
   }
@@ -233,7 +219,7 @@ export class OllamaProvider extends BaseProvider {
    * Analyze code with explicit file contents
    */
   async analyzeCodeWithContents(
-    files: Array<{ path: string; content: string }>,
+    files: { path: string; content: string }[],
     context: string,
     callbacks?: StreamCallbacks,
   ): Promise<AnalysisResult> {
@@ -321,7 +307,7 @@ export class OllamaProvider extends BaseProvider {
     userPrompt: string,
     callbacks?: StreamCallbacks,
   ): Promise<string> {
-    const fullPrompt = `${userPrompt}`;
+    const fullPrompt = userPrompt;
 
     // Build options object, only including defined values
     const options: { temperature?: number; num_ctx?: number; num_gpu?: number } = {
@@ -349,7 +335,7 @@ export class OllamaProvider extends BaseProvider {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+      const timeoutId = setTimeout(() => { controller.abort(); }, this.config.timeout);
 
       try {
         const response = await fetch(`${this.baseUrl}/api/generate`, {
@@ -369,7 +355,7 @@ export class OllamaProvider extends BaseProvider {
         clearTimeout(timeoutId);
       }
     } catch (error) {
-      throw this.handleError(error);
+      this.handleError(error);
     }
   }
 
@@ -378,7 +364,7 @@ export class OllamaProvider extends BaseProvider {
     callbacks: StreamCallbacks,
   ): Promise<string> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+    const timeoutId = setTimeout(() => { controller.abort(); }, this.config.timeout);
 
     try {
       const response = await fetch(`${this.baseUrl}/api/generate`, {
@@ -401,11 +387,11 @@ export class OllamaProvider extends BaseProvider {
       let fullContent = '';
       let totalChunks = 0;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      for (;;) {
+        const readResult = await reader.read();
+        if (readResult.done) {break;}
 
-        const chunk = decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(readResult.value as Uint8Array, { stream: true });
         const lines = chunk.split('\n').filter(l => l.trim());
 
         for (const line of lines) {
@@ -438,11 +424,11 @@ export class OllamaProvider extends BaseProvider {
   // ============================================================================
 
   private async handleHttpError(response: Response): Promise<ProviderError> {
-    let message = `HTTP ${response.status}: ${response.statusText}`;
+    let message = `HTTP ${String(response.status)}: ${response.statusText}`;
 
     try {
       const errorData = await response.json() as { error?: string };
-      if (errorData.error) {
+      if (errorData.error !== undefined && errorData.error !== '') {
         message = errorData.error;
       }
     } catch {
@@ -477,7 +463,7 @@ export class OllamaProvider extends BaseProvider {
 
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
-        throw new TimeoutError(`Request timed out after ${this.config.timeout}ms`);
+        throw new TimeoutError(`Request timed out after ${String(this.config.timeout)}ms`);
       }
 
       if (error.message.includes('ECONNREFUSED')) {
@@ -531,7 +517,7 @@ export class OllamaProvider extends BaseProvider {
     let offset = 0;
 
     while ((match = hunkRegex.exec(diff)) !== null) {
-      const originalStart = parseInt(match[1] ?? '1', 10) - 1;
+      const originalStart = parseInt(match[1], 10) - 1;
       const hunkStart = match.index;
       const nextHunk = diff.indexOf('@@', hunkStart + match[0].length);
       const hunkContent = nextHunk === -1

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -55,35 +56,37 @@ export default function IssueCard({
   isExpanded: controlledExpanded,
   onToggleExpand,
   className,
-}: IssueCardProps) {
+}: IssueCardProps): JSX.Element {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const isExpanded = controlledExpanded ?? internalExpanded;
 
-  const handleToggle = () => {
-    if (onToggleExpand) {
+  const handleToggle = (): void => {
+    if (onToggleExpand !== undefined) {
       onToggleExpand();
     } else {
       setInternalExpanded(!internalExpanded);
     }
   };
 
-  const handleCopyContext = async () => {
-    if (issue.context) {
-      await navigator.clipboard.writeText(issue.context);
+  const handleCopyContext = (): void => {
+    if (issue.context !== undefined && issue.context !== '') {
+      void navigator.clipboard.writeText(issue.context);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => {
+        setCopied(false);
+      }, 2000);
     }
   };
 
   const SeverityIcon = severityIcons[issue.severity];
   const isPending = issue.status === 'pending';
-  const canApprove = isPending && onApprove;
-  const canReject = isPending && onReject;
-  const canSkip = isPending && onSkip;
+  const canApprove = isPending && onApprove !== undefined;
+  const canReject = isPending && onReject !== undefined;
+  const canSkip = isPending && onSkip !== undefined;
 
   // Parse context if it has suggestion
-  const contextData = issue.context ? tryParseContext(issue.context) : null;
+  const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
 
   return (
     <div
@@ -124,7 +127,7 @@ export default function IssueCard({
             <TypeBadge type={issue.type} size="sm" />
             <SeverityBadge severity={issue.severity} size="sm" />
             <StatusBadge status={issue.status} size="sm" />
-            {issue.code && (
+            {issue.code !== undefined && issue.code !== '' && (
               <span className="text-xs font-mono text-dark-500 bg-dark-700 px-1.5 py-0.5 rounded">
                 {issue.code}
               </span>
@@ -140,13 +143,13 @@ export default function IssueCard({
             <div className="flex items-center gap-2 text-xs text-dark-400 bg-dark-900/50 rounded px-2 py-1">
               <FileCode className="h-3.5 w-3.5" />
               <span className="font-mono truncate max-w-[300px]">{issue.file}</span>
-              {issue.line && (
+              {issue.line !== undefined && (
                 <>
                   <span className="text-dark-600">:</span>
                   <span className="font-mono text-accent">{issue.line}</span>
                 </>
               )}
-              {issue.column && (
+              {issue.column !== undefined && (
                 <>
                   <span className="text-dark-600">:</span>
                   <span className="font-mono text-dark-500">{issue.column}</span>
@@ -178,7 +181,7 @@ export default function IssueCard({
       {isExpanded && (
         <div className="border-t border-dark-700 px-4 py-4 space-y-4">
           {/* Code Context */}
-          {(issue.context || contextData?.context) && (
+          {(issue.context !== undefined || contextData?.context !== undefined) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-medium text-dark-400 flex items-center gap-1.5">
@@ -206,13 +209,13 @@ export default function IssueCard({
                 </button>
               </div>
               <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-dark-200 overflow-x-auto border border-dark-700">
-                {contextData?.context || issue.context}
+                {contextData?.context ?? issue.context}
               </pre>
             </div>
           )}
 
           {/* Suggested Fix */}
-          {contextData?.suggestion && (
+          {contextData?.suggestion !== undefined && (
             <div className="rounded-lg border border-success/30 bg-success/5 p-3">
               <h4 className="text-xs font-medium text-success flex items-center gap-1.5 mb-2">
                 <Lightbulb className="h-3.5 w-3.5" />
@@ -231,8 +234,8 @@ export default function IssueCard({
                 Location
               </span>
               <p className="text-sm font-mono text-dark-300">
-                Line {issue.line || '?'}
-                {issue.column && `, Col ${issue.column}`}
+                Line {issue.line ?? '?'}
+                {issue.column !== undefined && `, Col ${String(issue.column)}`}
               </p>
             </div>
 
@@ -248,7 +251,7 @@ export default function IssueCard({
             </div>
 
             {/* Resolved */}
-            {issue.resolvedAt && (
+            {issue.resolvedAt !== undefined && (
               <div className="space-y-1">
                 <span className="text-xs text-dark-500 flex items-center gap-1">
                   <Check className="h-3 w-3" />
@@ -261,7 +264,7 @@ export default function IssueCard({
             )}
 
             {/* Commit */}
-            {issue.commitId && (
+            {issue.commitId !== undefined && (
               <div className="space-y-1">
                 <span className="text-xs text-dark-500 flex items-center gap-1">
                   <GitCommit className="h-3 w-3" />
@@ -332,9 +335,15 @@ function formatTimestamp(isoString: string): string {
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMins / 60);
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffMins < 1) {
+    return 'Just now';
+  }
+  if (diffMins < 60) {
+    return `${String(diffMins)}m ago`;
+  }
+  if (diffHours < 24) {
+    return `${String(diffHours)}h ago`;
+  }
 
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
@@ -342,11 +351,12 @@ function formatTimestamp(isoString: string): string {
 // Try to parse context if it's JSON with suggestion
 function tryParseContext(context: string): { context?: string; suggestion?: string } | null {
   try {
-    const parsed = JSON.parse(context);
-    if (typeof parsed === 'object') {
+    const parsed: unknown = JSON.parse(context);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const obj = parsed as Record<string, unknown>;
       return {
-        context: parsed.context,
-        suggestion: parsed.suggestion,
+        context: typeof obj.context === 'string' ? obj.context : undefined,
+        suggestion: typeof obj.suggestion === 'string' ? obj.suggestion : undefined,
       };
     }
   } catch {
@@ -368,7 +378,7 @@ export function IssueRow({
   onClick,
   isSelected = false,
   className,
-}: IssueRowProps) {
+}: IssueRowProps): JSX.Element {
   const SeverityIcon = severityIcons[issue.severity];
 
   return (
@@ -397,7 +407,7 @@ export function IssueRow({
         <p className="text-sm text-dark-200 truncate">{issue.message}</p>
         <p className="text-xs text-dark-500 font-mono truncate">
           {issue.file}
-          {issue.line && `:${issue.line}`}
+          {issue.line !== undefined && `:${String(issue.line)}`}
         </p>
       </div>
 
@@ -423,16 +433,18 @@ export function IssueDetailView({
   onSkip,
   showActions = true,
   className,
-}: IssueDetailViewProps) {
+}: IssueDetailViewProps): JSX.Element {
   const [copied, setCopied] = useState(false);
   const SeverityIcon = severityIcons[issue.severity];
   const isPending = issue.status === 'pending';
-  const contextData = issue.context ? tryParseContext(issue.context) : null;
+  const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
 
-  const handleCopy = async (text: string) => {
-    await navigator.clipboard.writeText(text);
+  const handleCopy = (text: string): void => {
+    void navigator.clipboard.writeText(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setTimeout(() => {
+      setCopied(false);
+    }, 2000);
   };
 
   return (
@@ -467,12 +479,14 @@ export function IssueDetailView({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-mono text-dark-200 truncate">{issue.file}</p>
           <p className="text-xs text-dark-500">
-            Line {issue.line || '?'}
-            {issue.column && `, Column ${issue.column}`}
+            Line {issue.line ?? '?'}
+            {issue.column !== undefined && `, Column ${String(issue.column)}`}
           </p>
         </div>
         <button
-          onClick={() => handleCopy(`${issue.file}:${issue.line || 1}`)}
+          onClick={() => {
+            handleCopy(`${issue.file}:${String(issue.line ?? 1)}`);
+          }}
           className="p-2 rounded hover:bg-dark-700 text-dark-500 hover:text-dark-300 transition-colors"
           title="Copy file path"
         >
@@ -481,20 +495,20 @@ export function IssueDetailView({
       </div>
 
       {/* Code Context */}
-      {(issue.context || contextData?.context) && (
+      {(issue.context !== undefined || contextData?.context !== undefined) && (
         <div>
           <h3 className="text-sm font-medium text-dark-300 mb-2 flex items-center gap-2">
             <Code2 className="h-4 w-4" />
             Code Context
           </h3>
           <pre className="rounded-lg bg-dark-900 p-4 text-sm font-mono text-dark-200 overflow-x-auto border border-dark-700 leading-relaxed">
-            {contextData?.context || issue.context}
+            {contextData?.context ?? issue.context}
           </pre>
         </div>
       )}
 
       {/* Suggested Fix */}
-      {contextData?.suggestion && (
+      {contextData?.suggestion !== undefined && (
         <div className="rounded-lg border border-success/30 bg-success/5 p-4">
           <h3 className="text-sm font-medium text-success flex items-center gap-2 mb-2">
             <Lightbulb className="h-4 w-4" />
@@ -505,7 +519,7 @@ export function IssueDetailView({
       )}
 
       {/* Rule/Code Info */}
-      {issue.code && (
+      {issue.code !== undefined && issue.code !== '' && (
         <div className="p-3 rounded-lg bg-dark-900 border border-dark-700">
           <span className="text-xs text-dark-500">Rule / Error Code</span>
           <p className="text-sm font-mono text-accent mt-1">{issue.code}</p>
@@ -521,14 +535,14 @@ export function IssueDetailView({
             <span className="text-dark-400">Created</span>
             <span className="text-dark-200">{new Date(issue.createdAt).toLocaleString()}</span>
           </div>
-          {issue.resolvedAt && (
+          {issue.resolvedAt !== undefined && (
             <div className="flex items-center gap-3 text-sm">
               <Check className="h-4 w-4 text-success" />
               <span className="text-dark-400">Resolved</span>
               <span className="text-dark-200">{new Date(issue.resolvedAt).toLocaleString()}</span>
             </div>
           )}
-          {issue.commitId && (
+          {issue.commitId !== undefined && (
             <div className="flex items-center gap-3 text-sm">
               <GitCommit className="h-4 w-4 text-accent" />
               <span className="text-dark-400">Commit</span>
@@ -541,28 +555,34 @@ export function IssueDetailView({
       {/* Actions */}
       {showActions && isPending && (
         <div className="flex items-center gap-3 pt-4 border-t border-dark-700">
-          {onApprove && (
+          {onApprove !== undefined && (
             <Button
               variant="primary"
-              onClick={() => onApprove(issue.id)}
+              onClick={() => {
+                onApprove(issue.id);
+              }}
               leftIcon={<Check className="h-4 w-4" />}
             >
               Approve Fix
             </Button>
           )}
-          {onReject && (
+          {onReject !== undefined && (
             <Button
               variant="danger"
-              onClick={() => onReject(issue.id)}
+              onClick={() => {
+                onReject(issue.id);
+              }}
               leftIcon={<X className="h-4 w-4" />}
             >
               Reject
             </Button>
           )}
-          {onSkip && (
+          {onSkip !== undefined && (
             <Button
               variant="ghost"
-              onClick={() => onSkip(issue.id)}
+              onClick={() => {
+                onSkip(issue.id);
+              }}
               leftIcon={<SkipForward className="h-4 w-4" />}
             >
               Skip

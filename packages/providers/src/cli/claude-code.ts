@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { writeFile, unlink, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +7,6 @@ import {
   ProviderConfig,
   ProviderError,
   TimeoutError,
-  InvalidResponseError,
   AnalysisResult,
   FixResult,
   VerifyResult,
@@ -84,9 +83,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
     this.outputFormat = config.outputFormat ?? 'json';
   }
 
-  get name(): string {
-    return 'Claude Code CLI';
-  }
+  readonly name: string = 'Claude Code CLI';
 
   // ============================================================================
   // Health Check
@@ -144,7 +141,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
    * Analyze code with explicit file contents
    */
   async analyzeCodeWithContents(
-    files: Array<{ path: string; content: string }>,
+    files: { path: string; content: string }[],
     context: string,
     callbacks?: StreamCallbacks,
   ): Promise<AnalysisResult> {
@@ -254,7 +251,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
 
       if (result.exitCode !== 0) {
         throw new ProviderError(
-          `CLI exited with code ${result.exitCode}: ${result.stderr}`,
+          `CLI exited with code ${String(result.exitCode)}: ${result.stderr}`,
           'CLI_ERROR',
           false,
           result.exitCode,
@@ -264,14 +261,14 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
       return this.extractResponse(result.stdout);
     } finally {
       // Cleanup temp files
-      if (promptFile) {
+      if (promptFile !== undefined) {
         try {
           await unlink(promptFile);
         } catch {
           // Ignore cleanup errors
         }
       }
-      if (tempDir) {
+      if (tempDir !== undefined) {
         try {
           await unlink(tempDir);
         } catch {
@@ -341,7 +338,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
         clearTimeout(timeoutId);
 
         if (timedOut) {
-          reject(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
+          reject(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
           return;
         }
 
@@ -364,7 +361,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
       });
 
       // Write to stdin if provided
-      if (stdinInput) {
+      if (stdinInput !== undefined && stdinInput !== '') {
         child.stdin.write(stdinInput);
         child.stdin.end();
       } else {
@@ -432,14 +429,14 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
         callbacks.onProgress?.(1);
 
         if (timedOut) {
-          callbacks.onError?.(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
-          reject(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
+          callbacks.onError?.(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
+          reject(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
           return;
         }
 
         if (code !== 0) {
           const error = new ProviderError(
-            `CLI exited with code ${code}: ${stderr}`,
+            `CLI exited with code ${String(code)}: ${stderr}`,
             'CLI_ERROR',
             false,
             code ?? undefined,
@@ -525,7 +522,7 @@ export class ClaudeCodeCLIProvider extends BaseProvider {
     let offset = 0;
 
     while ((match = hunkRegex.exec(diff)) !== null) {
-      const originalStart = parseInt(match[1] ?? '1', 10) - 1;
+      const originalStart = parseInt(match[1], 10) - 1;
       const hunkStart = match.index;
       const nextHunk = diff.indexOf('@@', hunkStart + match[0].length);
       const hunkContent = nextHunk === -1

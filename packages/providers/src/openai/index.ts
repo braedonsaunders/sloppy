@@ -68,11 +68,11 @@ export class OpenAIProvider extends BaseProvider {
       rateLimitTpm: config.rateLimitTpm ?? 150000,
     });
 
-    this.model = (config.model ?? 'gpt-4o') as OpenAIModel;
+    this.model = (config.model ?? 'gpt-4o');
     this.analysisType = config.analysisType ?? 'full';
 
-    const apiKey = config.apiKey ?? process.env['OPENAI_API_KEY'];
-    if (!apiKey) {
+    const apiKey = config.apiKey ?? process.env.OPENAI_API_KEY;
+    if (apiKey === undefined || apiKey === '') {
       throw new AuthenticationError('OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass apiKey in config.');
     }
 
@@ -125,7 +125,7 @@ export class OpenAIProvider extends BaseProvider {
    * Analyze code with explicit file contents
    */
   async analyzeCodeWithContents(
-    files: Array<{ path: string; content: string }>,
+    files: { path: string; content: string }[],
     context: string,
     callbacks?: StreamCallbacks,
   ): Promise<AnalysisResult> {
@@ -238,14 +238,14 @@ export class OpenAIProvider extends BaseProvider {
         response_format: { type: 'json_object' },
       });
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
+      const content = response.choices[0]?.message?.content ?? '';
+      if (content === '') {
         throw new InvalidResponseError('No content in response', response);
       }
 
       return content;
     } catch (error) {
-      throw this.handleApiError(error);
+      this.handleApiError(error);
     }
   }
 
@@ -277,7 +277,7 @@ export class OpenAIProvider extends BaseProvider {
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
-      if (content) {
+      if (content !== undefined && content !== null && content !== '') {
         fullContent += content;
         callbacks.onToken?.(content);
 
@@ -325,13 +325,13 @@ export class OpenAIProvider extends BaseProvider {
       });
 
       const toolCall = response.choices[0]?.message?.tool_calls?.[0];
-      if (!toolCall || toolCall.function.name !== schema.name) {
+      if (toolCall?.function.name !== schema.name) {
         throw new InvalidResponseError('No valid tool call in response', response);
       }
 
       return JSON.parse(toolCall.function.arguments) as T;
     } catch (error) {
-      throw this.handleApiError(error);
+      this.handleApiError(error);
     }
   }
 
@@ -341,7 +341,7 @@ export class OpenAIProvider extends BaseProvider {
 
   private handleApiError(error: unknown): never {
     if (error instanceof OpenAI.APIError) {
-      const status = error.status;
+      const status = typeof error.status === 'number' ? error.status : undefined;
       const message = error.message;
 
       if (status === 401) {
@@ -384,9 +384,10 @@ export class OpenAIProvider extends BaseProvider {
     throw new ProviderError(String(error), 'UNKNOWN', false);
   }
 
-  private extractRetryAfter(error: InstanceType<typeof OpenAI.APIError>): number | undefined {
-    const headers = error.headers;
-    if (headers) {
+  private extractRetryAfter(error: OpenAI.APIError): number | undefined {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+    const headers = (error as any).headers as Record<string, string> | undefined;
+    if (headers !== undefined) {
       const retryAfter = headers['retry-after'];
       if (typeof retryAfter === 'string') {
         const parsed = parseInt(retryAfter, 10);
@@ -435,7 +436,7 @@ export class OpenAIProvider extends BaseProvider {
     let offset = 0;
 
     while ((match = hunkRegex.exec(diff)) !== null) {
-      const originalStart = parseInt(match[1] ?? '1', 10) - 1;
+      const originalStart = parseInt(match[1], 10) - 1;
       const hunkStart = match.index;
       const nextHunk = diff.indexOf('@@', hunkStart + match[0].length);
       const hunkContent = nextHunk === -1

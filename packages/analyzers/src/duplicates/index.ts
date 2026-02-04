@@ -119,7 +119,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
         threshold: config.threshold,
       };
 
-      this.log(options, `Running duplicate detection with minLines=${config.minLines}, minTokens=${config.minTokens}`);
+      this.log(options, `Running duplicate detection with minLines=${String(config.minLines)}, minTokens=${String(config.minTokens)}`);
 
       // Dynamically import jscpd to avoid ESM compatibility issues at module load time
       const { detectClones } = await import('jscpd');
@@ -139,7 +139,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
       // Cleanup temp directory
       await this.cleanupTempDir(tempDir);
 
-      this.log(options, `Found ${groups.length} duplicate code groups with ${issues.length} total issues`);
+      this.log(options, `Found ${String(groups.length)} duplicate code groups with ${String(issues.length)} total issues`);
     } catch (error) {
       this.logError('Failed to run duplicate detection', error);
     }
@@ -166,7 +166,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
    * Create a temporary directory for jscpd reports
    */
   private async createTempReport(): Promise<string> {
-    const tempDir = path.join(os.tmpdir(), `sloppy-jscpd-${Date.now()}`);
+    const tempDir = path.join(os.tmpdir(), `sloppy-jscpd-${String(Date.now())}`);
     await fs.promises.mkdir(tempDir, { recursive: true });
     return tempDir;
   }
@@ -190,7 +190,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
 
     for (const clone of clones) {
       // Create a unique key for this duplicate pattern
-      const key = `${clone.format}-${clone.duplicationA.sourceId}-${clone.duplicationA.start.line}`;
+      const key = `${clone.format}-${clone.duplicationA.sourceId}-${String(clone.duplicationA.start.line)}`;
 
       if (!groupMap.has(key)) {
         const group: DuplicateGroup = {
@@ -203,7 +203,8 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
         groupMap.set(key, group);
       }
 
-      const group = groupMap.get(key)!;
+      const group = groupMap.get(key);
+      if (group === undefined) {continue;}
 
       // Add both locations from this clone pair
       const locA: SourceLocation = {
@@ -255,18 +256,18 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
     const severity = this.calculateSeverity(group);
 
     // Create an issue for the first location, referencing all others
-    const primaryLocation = group.locations[0]!;
+    const primaryLocation = group.locations[0];
     const relatedLocations = group.locations.slice(1);
 
     // Create description with all duplicate locations
     const locationDescriptions = group.locations
-      .map((loc) => `  - ${this.getRelativePath(loc.file, options.rootDir)}:${loc.line}`)
+      .map((loc) => `  - ${this.getRelativePath(loc.file, options.rootDir)}:${String(loc.line)}`)
       .join('\n');
 
-    const description = `This code block (${group.lines} lines) is duplicated in ${group.locations.length} locations:\n${locationDescriptions}`;
+    const description = `This code block (${String(group.lines)} lines) is duplicated in ${String(group.locations.length)} locations:\n${locationDescriptions}`;
 
     // Create a truncated fragment preview
-    const fragmentPreview = group.fragment
+    const fragmentPreview = group.fragment !== undefined && group.fragment !== ''
       ? this.truncateFragment(group.fragment, 200)
       : undefined;
 
@@ -274,7 +275,7 @@ export class DuplicateAnalyzer extends BaseAnalyzer {
       this.createIssue({
         id: `duplicate:${group.hash}`,
         severity,
-        message: `Duplicate code found (${group.lines} lines, ${group.locations.length} occurrences)`,
+        message: `Duplicate code found (${String(group.lines)} lines, ${String(group.locations.length)} occurrences)`,
         description,
         location: primaryLocation,
         context: fragmentPreview,

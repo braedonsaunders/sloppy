@@ -68,7 +68,7 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
     'unused-type',
   ];
 
-  async analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
+  analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
     const issues: Issue[] = [];
     const config = this.getConfig(options);
 
@@ -83,7 +83,7 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
 
     if (sourceFiles.length === 0) {
       this.log(options, 'No source files to analyze');
-      return issues;
+      return Promise.resolve(issues);
     }
 
     try {
@@ -120,7 +120,7 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
         }
 
         // Skip entry point exports if checking exports
-        if (symbol.isExported && this.isEntryPoint(symbol.file, config, options)) {
+        if (symbol.isExported && this.isEntryPoint(symbol.file, config)) {
           continue;
         }
 
@@ -134,12 +134,12 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
         issues.push(...unreachableIssues);
       }
 
-      this.log(options, `Found ${issues.length} dead code issues in ${sourceFiles.length} files`);
+      this.log(options, `Found ${String(issues.length)} dead code issues in ${String(sourceFiles.length)} files`);
     } catch (error) {
       this.logError('Failed to analyze dead code', error);
     }
 
-    return issues;
+    return Promise.resolve(issues);
   }
 
   /**
@@ -195,8 +195,8 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
       skipLibCheck: true,
     };
 
-    if (tsconfigPath) {
-      const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+    if (tsconfigPath !== undefined && tsconfigPath !== '') {
+      const configFile = ts.readConfigFile(tsconfigPath, (p: string) => ts.sys.readFile(p));
       if (!configFile.error) {
         const parsed = ts.parseJsonConfigFileContent(
           configFile.config,
@@ -215,12 +215,11 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
    */
   private isEntryPoint(
     file: string,
-    config: Required<DeadCodeAnalyzerConfig>,
-    options: AnalyzerOptions
+    config: Required<DeadCodeAnalyzerConfig>
   ): boolean {
-    const relativePath = path.relative(options.rootDir, file);
+    // Check by file path suffix as we don't need rootDir for this check
     return config.entryPoints.some(
-      (ep) => relativePath === ep || file.endsWith(ep)
+      (ep) => file.endsWith(ep)
     );
   }
 
@@ -229,9 +228,9 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
    */
   private collectSymbols(
     program: ts.Program,
-    checker: ts.TypeChecker,
+    _checker: ts.TypeChecker,
     config: Required<DeadCodeAnalyzerConfig>,
-    options: AnalyzerOptions
+    _options: AnalyzerOptions
   ): Map<string, SymbolInfo> {
     const symbols = new Map<string, SymbolInfo>();
     const typesToCheck = new Set(config.types);
@@ -264,11 +263,14 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
         // Variable declarations
         if (typesToCheck.has('unused-variable') && ts.isVariableDeclaration(node)) {
           if (ts.isIdentifier(node.name)) {
+            // Navigate up: VariableDeclaration -> VariableDeclarationList -> VariableStatement
+            const varDeclList = node.parent;
+            const varStmt = varDeclList.parent;
             const symbol = this.createSymbolInfo(
               node.name,
               sourceFile,
               'unused-variable',
-              this.isNodeExported(node.parent?.parent as ts.Node | undefined)
+              this.isNodeExported(varStmt)
             );
             symbols.set(symbol.name + ':' + symbol.file, symbol);
           }
@@ -370,7 +372,7 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
               false
             );
             symbols.set(
-              symbol.name + ':' + symbol.file + ':' + symbol.line,
+              symbol.name + ':' + symbol.file + ':' + String(symbol.line),
               symbol
             );
           }
@@ -413,16 +415,16 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
    * Check if a node is exported
    */
   private isNodeExported(node: ts.Node | undefined): boolean {
-    if (!node) {
+    if (node === undefined) {
       return false;
     }
 
     // Check for export keyword
-    if (
-      ts.canHaveModifiers(node) &&
-      ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
-    ) {
-      return true;
+    if (ts.canHaveModifiers(node)) {
+      const modifiers = ts.getModifiers(node);
+      if (modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) === true) {
+        return true;
+      }
     }
 
     return false;
@@ -434,7 +436,7 @@ export class DeadCodeAnalyzer extends BaseAnalyzer {
   private analyzeUsage(
     symbols: Map<string, SymbolInfo>,
     program: ts.Program,
-    checker: ts.TypeChecker
+    _checker: ts.TypeChecker
   ): void {
     // Create a map of symbol names to their info for quick lookup
     const nameToSymbols = new Map<string, SymbolInfo[]>();

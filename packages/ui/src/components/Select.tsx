@@ -33,11 +33,11 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
     },
     ref
   ) => {
-    const selectId = id || label?.toLowerCase().replace(/\s+/g, '-');
+    const selectId = id ?? label?.toLowerCase().replace(/\s+/g, '-');
 
     return (
       <div className={twMerge('w-full', wrapperClassName)}>
-        {label && (
+        {label !== undefined && label !== '' && (
           <label
             htmlFor={selectId}
             className="mb-1.5 block text-sm font-medium text-dark-200"
@@ -53,7 +53,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
               clsx(
                 'w-full appearance-none rounded-lg border bg-dark-800 px-4 py-2.5 pr-10 text-dark-100 transition-colors cursor-pointer',
                 'focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
-                error
+                error !== undefined && error !== ''
                   ? 'border-error focus:border-error focus:ring-error'
                   : 'border-dark-600',
                 className
@@ -61,7 +61,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             )}
             {...props}
           >
-            {placeholder && (
+            {placeholder !== undefined && placeholder !== '' && (
               <option value="" disabled>
                 {placeholder}
               </option>
@@ -80,10 +80,10 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             <ChevronDown className="h-4 w-4" />
           </div>
         </div>
-        {error && (
+        {error !== undefined && error !== '' && (
           <p className="mt-1.5 text-sm text-error">{error}</p>
         )}
-        {hint && !error && (
+        {hint !== undefined && hint !== '' && (error === undefined || error === '') && (
           <p className="mt-1.5 text-sm text-dark-500">{hint}</p>
         )}
       </div>

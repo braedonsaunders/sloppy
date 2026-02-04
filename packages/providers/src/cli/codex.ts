@@ -34,12 +34,7 @@ import {
 // Types
 // ============================================================================
 
-export type CodexModel =
-  | 'o4-mini'
-  | 'o3'
-  | 'gpt-4o'
-  | 'gpt-4.1'
-  | string;
+export type CodexModel = string;
 
 export interface CodexCLIConfig extends ProviderConfig {
   cliPath?: string;
@@ -147,7 +142,7 @@ export class CodexCLIProvider extends BaseProvider {
    * Analyze code with explicit file contents
    */
   async analyzeCodeWithContents(
-    files: Array<{ path: string; content: string }>,
+    files: { path: string; content: string }[],
     context: string,
     callbacks?: StreamCallbacks,
   ): Promise<AnalysisResult> {
@@ -251,7 +246,7 @@ export class CodexCLIProvider extends BaseProvider {
 
       if (result.exitCode !== 0) {
         throw new ProviderError(
-          `CLI exited with code ${result.exitCode}: ${result.stderr}`,
+          `CLI exited with code ${String(result.exitCode)}: ${result.stderr}`,
           'CLI_ERROR',
           false,
           result.exitCode,
@@ -261,14 +256,14 @@ export class CodexCLIProvider extends BaseProvider {
       return this.extractResponse(result.stdout);
     } finally {
       // Cleanup temp files
-      if (promptFile) {
+      if (promptFile !== undefined) {
         try {
           await unlink(promptFile);
         } catch {
           // Ignore cleanup errors
         }
       }
-      if (tempDir) {
+      if (tempDir !== undefined) {
         try {
           await unlink(tempDir);
         } catch {
@@ -327,7 +322,7 @@ export class CodexCLIProvider extends BaseProvider {
         clearTimeout(timeoutId);
 
         if (timedOut) {
-          reject(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
+          reject(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
           return;
         }
 
@@ -391,14 +386,14 @@ export class CodexCLIProvider extends BaseProvider {
         callbacks.onProgress?.(1);
 
         if (timedOut) {
-          callbacks.onError?.(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
-          reject(new TimeoutError(`CLI timed out after ${this.config.timeout}ms`));
+          callbacks.onError?.(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
+          reject(new TimeoutError(`CLI timed out after ${String(this.config.timeout)}ms`));
           return;
         }
 
         if (code !== 0) {
           const error = new ProviderError(
-            `CLI exited with code ${code}: ${stderr}`,
+            `CLI exited with code ${String(code)}: ${stderr}`,
             'CLI_ERROR',
             false,
             code ?? undefined,
@@ -431,17 +426,19 @@ export class CodexCLIProvider extends BaseProvider {
   private extractResponse(output: string): string {
     // Codex CLI may output in various formats
     // Try to extract JSON response if present
-    const jsonMatch = output.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch?.[1]) {
-      return jsonMatch[1].trim();
+    const jsonMatch = /```(?:json)?\s*([\s\S]*?)```/.exec(output);
+    const jsonContent = jsonMatch?.[1];
+    if (jsonContent !== undefined && jsonContent !== '') {
+      return jsonContent.trim();
     }
 
     // Look for JSON object in output
-    const objectMatch = output.match(/\{[\s\S]*\}/);
-    if (objectMatch?.[0]) {
+    const objectMatch = /\{[\s\S]*\}/.exec(output);
+    const objectContent = objectMatch?.[0];
+    if (objectContent !== undefined && objectContent !== '') {
       try {
-        JSON.parse(objectMatch[0]);
-        return objectMatch[0];
+        JSON.parse(objectContent);
+        return objectContent;
       } catch {
         // Not valid JSON
       }
@@ -487,7 +484,7 @@ export class CodexCLIProvider extends BaseProvider {
     let offset = 0;
 
     while ((match = hunkRegex.exec(diff)) !== null) {
-      const originalStart = parseInt(match[1] ?? '1', 10) - 1;
+      const originalStart = parseInt(match[1], 10) - 1;
       const hunkStart = match.index;
       const nextHunk = diff.indexOf('@@', hunkStart + match[0].length);
       const hunkContent = nextHunk === -1

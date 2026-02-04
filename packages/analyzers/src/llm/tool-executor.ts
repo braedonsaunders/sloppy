@@ -61,12 +61,12 @@ export class FileLearningsStore implements LearningsStore {
     let learnings: LearningEntry[] = [];
     try {
       const content = await fs.promises.readFile(this.filePath, 'utf-8');
-      learnings = JSON.parse(content);
+      learnings = JSON.parse(content) as LearningEntry[];
     } catch {
       // File doesn't exist yet
     }
 
-    learning.id = `file-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    learning.id = `file-${String(Date.now())}-${Math.random().toString(36).slice(2)}`;
     learnings.push(learning);
 
     await fs.promises.writeFile(this.filePath, JSON.stringify(learnings, null, 2), 'utf-8');
@@ -76,7 +76,7 @@ export class FileLearningsStore implements LearningsStore {
     try {
       const content = await fs.promises.readFile(this.filePath, 'utf-8');
       const learnings = JSON.parse(content) as LearningEntry[];
-      if (category) {
+      if (category !== undefined && category !== '') {
         return learnings.filter(l => l.category === category);
       }
       return learnings;
@@ -136,11 +136,11 @@ export interface TestResult {
   passed: number;
   failed: number;
   skipped: number;
-  failures: Array<{
+  failures: {
     testName: string;
     error: string;
     file?: string;
-  }>;
+  }[];
 }
 
 /**
@@ -500,7 +500,7 @@ export class ToolExecutor {
   private readonly timeout: number;
   private learningsStore: LearningsStore;
 
-  constructor(rootDir: string, timeout: number = 60000, learningsStore?: LearningsStore) {
+  constructor(rootDir: string, timeout = 60000, learningsStore?: LearningsStore) {
     this.rootDir = rootDir;
     this.timeout = timeout;
     this.learningsStore = learningsStore ?? new FileLearningsStore(rootDir);
@@ -587,7 +587,7 @@ export class ToolExecutor {
     fix?: boolean
   ): Promise<{ result: ESLintIssue[]; output: string }> {
     const args = ['eslint', '--format', 'json'];
-    if (fix) args.push('--fix');
+    if (fix === true) {args.push('--fix');}
 
     if (files && files.length > 0) {
       args.push(...files);
@@ -600,16 +600,16 @@ export class ToolExecutor {
 
     if (result.output) {
       try {
-        const eslintOutput = JSON.parse(result.output) as Array<{
+        const eslintOutput = JSON.parse(result.output) as {
           filePath: string;
-          messages: Array<{
+          messages: {
             line: number;
             column: number;
             message: string;
             ruleId: string;
             severity: number;
-          }>;
-        }>;
+          }[];
+        }[];
 
         for (const file of eslintOutput) {
           for (const msg of file.messages) {
@@ -631,7 +631,7 @@ export class ToolExecutor {
     return {
       result: issues,
       output: issues.length > 0
-        ? `Found ${issues.length} ESLint issues:\n${issues.map(i => `  ${i.filePath}:${i.line} - ${i.severity}: ${i.message}`).join('\n')}`
+        ? `Found ${String(issues.length)} ESLint issues:\n${issues.map(i => `  ${i.filePath}:${String(i.line)} - ${i.severity}: ${i.message}`).join('\n')}`
         : 'No ESLint issues found',
     };
   }
@@ -657,18 +657,18 @@ export class ToolExecutor {
     const output = result.output + result.stderr;
     while ((match = errorRegex.exec(output)) !== null) {
       errors.push({
-        filePath: match[1]!,
-        line: parseInt(match[2]!, 10),
-        column: parseInt(match[3]!, 10),
-        code: parseInt(match[4]!, 10),
-        message: match[5]!,
+        filePath: match[1],
+        line: parseInt(match[2], 10),
+        column: parseInt(match[3], 10),
+        code: parseInt(match[4], 10),
+        message: match[5],
       });
     }
 
     return {
       result: errors,
       output: errors.length > 0
-        ? `Found ${errors.length} TypeScript errors:\n${errors.map(e => `  ${e.filePath}:${e.line} - TS${e.code}: ${e.message}`).join('\n')}`
+        ? `Found ${String(errors.length)} TypeScript errors:\n${errors.map(e => `  ${e.filePath}:${String(e.line)} - TS${String(e.code)}: ${e.message}`).join('\n')}`
         : 'No TypeScript errors found',
     };
   }
@@ -685,17 +685,17 @@ export class ToolExecutor {
     let command = 'npm';
     let args = ['test'];
 
-    if (packageJson?.scripts?.test) {
+    if (packageJson?.scripts?.test !== undefined && packageJson.scripts.test !== '') {
       if (packageJson.scripts.test.includes('vitest')) {
         command = 'npx';
         args = ['vitest', 'run', '--reporter=json'];
-        if (pattern) args.push(pattern);
-        if (testName) args.push('-t', testName);
+        if (pattern !== undefined && pattern !== '') {args.push(pattern);}
+        if (testName !== undefined && testName !== '') {args.push('-t', testName);}
       } else if (packageJson.scripts.test.includes('jest')) {
         command = 'npx';
         args = ['jest', '--json'];
-        if (pattern) args.push(pattern);
-        if (testName) args.push('-t', testName);
+        if (pattern !== undefined && pattern !== '') {args.push(pattern);}
+        if (testName !== undefined && testName !== '') {args.push('-t', testName);}
       }
     }
 
@@ -709,19 +709,19 @@ export class ToolExecutor {
 
     // Try to parse JSON output
     try {
-      const jsonMatch = result.output.match(/\{[\s\S]*"numPassedTests"[\s\S]*\}/);
+      const jsonMatch = /\{[\s\S]*"numPassedTests"[\s\S]*\}/.exec(result.output);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]) as {
           numPassedTests?: number;
           numFailedTests?: number;
           numPendingTests?: number;
-          testResults?: Array<{
-            assertionResults?: Array<{
+          testResults?: {
+            assertionResults?: {
               status: string;
               title: string;
               failureMessages?: string[];
-            }>;
-          }>;
+            }[];
+          }[];
         };
         testResult.passed = parsed.numPassedTests ?? 0;
         testResult.failed = parsed.numFailedTests ?? 0;
@@ -743,15 +743,15 @@ export class ToolExecutor {
       }
     } catch {
       // Fall back to simple parsing
-      const passMatch = result.output.match(/(\d+)\s+(?:passing|passed)/i);
-      const failMatch = result.output.match(/(\d+)\s+(?:failing|failed)/i);
-      if (passMatch) testResult.passed = parseInt(passMatch[1]!, 10);
-      if (failMatch) testResult.failed = parseInt(failMatch[1]!, 10);
+      const passMatch = /(\d+)\s+(?:passing|passed)/i.exec(result.output);
+      const failMatch = /(\d+)\s+(?:failing|failed)/i.exec(result.output);
+      if (passMatch) {testResult.passed = parseInt(passMatch[1], 10);}
+      if (failMatch) {testResult.failed = parseInt(failMatch[1], 10);}
     }
 
     return {
       result: testResult,
-      output: `Tests: ${testResult.passed} passed, ${testResult.failed} failed, ${testResult.skipped} skipped${
+      output: `Tests: ${String(testResult.passed)} passed, ${String(testResult.failed)} failed, ${String(testResult.skipped)} skipped${
         testResult.failures.length > 0
           ? '\n\nFailures:\n' + testResult.failures.map(f => `  - ${f.testName}: ${f.error.substring(0, 200)}`).join('\n')
           : ''
@@ -806,22 +806,22 @@ export class ToolExecutor {
         const end = endLine ?? lines.length;
         const selectedLines = lines.slice(start, end);
         const numberedContent = selectedLines
-          .map((line, i) => `${start + i + 1} | ${line}`)
+          .map((line, i) => `${String(start + i + 1)} | ${line}`)
           .join('\n');
 
         return {
           result: { content: selectedLines.join('\n'), lines: selectedLines.length },
-          output: `File: ${filePath} (lines ${start + 1}-${end})\n\n${numberedContent}`,
+          output: `File: ${filePath} (lines ${String(start + 1)}-${String(end)})\n\n${numberedContent}`,
         };
       }
 
       const numberedContent = lines
-        .map((line, i) => `${i + 1} | ${line}`)
+        .map((line, i) => `${String(i + 1)} | ${line}`)
         .join('\n');
 
       return {
         result: { content, lines: lines.length },
-        output: `File: ${filePath} (${lines.length} lines)\n\n${numberedContent}`,
+        output: `File: ${filePath} (${String(lines.length)} lines)\n\n${numberedContent}`,
       };
     } catch {
       throw new Error(`Failed to read file: ${filePath}`);
@@ -864,7 +864,7 @@ export class ToolExecutor {
       if (stat.isFile()) {
         files = [searchDir];
       } else {
-        files = await glob(include || '**/*', {
+        files = await glob(include ?? '**/*', {
           cwd: searchDir,
           absolute: true,
           ignore: exclude ? [exclude] : ['**/node_modules/**', '**/dist/**'],
@@ -877,14 +877,14 @@ export class ToolExecutor {
 
     // Search files
     for (const file of files) {
-      if (matches.length >= maxResults) break;
+      if (matches.length >= maxResults) {break;}
 
       try {
         const content = await fs.promises.readFile(file, 'utf-8');
         const lines = content.split('\n');
 
         for (let i = 0; i < lines.length && matches.length < maxResults; i++) {
-          const line = lines[i]!;
+          const line = lines[i];
           regex.lastIndex = 0;
           const match = regex.exec(line);
 
@@ -916,8 +916,8 @@ export class ToolExecutor {
     return {
       result: matches,
       output: matches.length > 0
-        ? `Found ${matches.length} matches for "${pattern}":\n${matches.map(m =>
-            `  ${m.file}:${m.line}:${m.column}: ${m.content.substring(0, 100)}`
+        ? `Found ${String(matches.length)} matches for "${pattern}":\n${matches.map(m =>
+            `  ${m.file}:${String(m.line)}:${String(m.column)}: ${m.content.substring(0, 100)}`
           ).join('\n')}`
         : `No matches found for "${pattern}"`,
     };
@@ -957,21 +957,21 @@ export class ToolExecutor {
     if (type === 'file') {
       options.nodir = true;
       const result = await glob(pattern, options);
-      files = result.map(f => String(f));
+      files = result as string[];
     } else if (type === 'directory') {
       // For directories, get all entries and filter to directories
       const result = await glob(pattern + '/', { ...options, mark: true });
-      files = result.map(f => String(f).replace(/\/$/, ''));
+      files = (result as string[]).map(f => f.replace(/\/$/, ''));
     } else {
       const result = await glob(pattern, options);
-      files = result.map(f => String(f));
+      files = result as string[];
     }
 
     const sortedFiles = files.sort();
 
     return {
       result: sortedFiles,
-      output: `Found ${sortedFiles.length} ${type === 'all' ? 'entries' : type + 's'}:\n${sortedFiles.slice(0, 50).join('\n')}${sortedFiles.length > 50 ? '\n...(truncated)' : ''}`,
+      output: `Found ${String(sortedFiles.length)} ${type === 'all' ? 'entries' : type + 's'}:\n${sortedFiles.slice(0, 50).join('\n')}${sortedFiles.length > 50 ? '\n...(truncated)' : ''}`,
     };
   }
 
@@ -1003,7 +1003,7 @@ export class ToolExecutor {
       ignore: ['**/node_modules/**', '**/dist/**'],
       nodir: false,
     });
-    const files = result.map(f => String(f));
+    const files = result;
 
     return {
       result: files.sort(),
@@ -1025,35 +1025,35 @@ export class ToolExecutor {
     const imports: string[] = [];
     let match;
     while ((match = importRegex.exec(content)) !== null) {
-      imports.push(match[1]!);
+      imports.push(match[1]);
     }
 
     // Extract exports
     const exportRegex = /export\s+(?:default\s+)?(?:const|let|var|function|class|interface|type|enum)\s+(\w+)/g;
     const exports: string[] = [];
     while ((match = exportRegex.exec(content)) !== null) {
-      exports.push(match[1]!);
+      exports.push(match[1]);
     }
 
     // Extract function names
-    const funcRegex = /(?:function|const|let|var)\s+(\w+)\s*(?:=\s*(?:async\s*)?\(|[\(<])/g;
+    const funcRegex = /(?:function|const|let|var)\s+(\w+)\s*(?:=\s*(?:async\s*)?[(]|[(<])/g;
     const functions: string[] = [];
     while ((match = funcRegex.exec(content)) !== null) {
-      functions.push(match[1]!);
+      functions.push(match[1]);
     }
 
     // Extract class names
     const classRegex = /class\s+(\w+)/g;
     const classes: string[] = [];
     while ((match = classRegex.exec(content)) !== null) {
-      classes.push(match[1]!);
+      classes.push(match[1]);
     }
 
     const info = { imports, exports, functions, classes };
 
     return {
       result: info,
-      output: `File: ${filePath}\n\nImports (${imports.length}):\n${imports.map(i => `  - ${i}`).join('\n')}\n\nExports (${exports.length}):\n${exports.map(e => `  - ${e}`).join('\n')}\n\nFunctions (${functions.length}):\n${functions.map(f => `  - ${f}`).join('\n')}\n\nClasses (${classes.length}):\n${classes.map(c => `  - ${c}`).join('\n')}`,
+      output: `File: ${filePath}\n\nImports (${String(imports.length)}):\n${imports.map(i => `  - ${i}`).join('\n')}\n\nExports (${String(exports.length)}):\n${exports.map(e => `  - ${e}`).join('\n')}\n\nFunctions (${String(functions.length)}):\n${functions.map(fn => `  - ${fn}`).join('\n')}\n\nClasses (${String(classes.length)}):\n${classes.map(c => `  - ${c}`).join('\n')}`,
     };
   }
 
@@ -1082,8 +1082,8 @@ export class ToolExecutor {
     return {
       result,
       output: result.success
-        ? result.output || '(no output)'
-        : `Command failed (exit ${result.exitCode}): ${result.stderr || result.output}`,
+        ? result.output !== '' ? result.output : '(no output)'
+        : `Command failed (exit ${String(result.exitCode)}): ${result.stderr !== '' ? result.stderr : result.output}`,
     };
   }
 
@@ -1093,7 +1093,7 @@ export class ToolExecutor {
   async runGit(args: string[]): Promise<{ result: ToolResult; output: string }> {
     // Validate git args - block destructive operations
     const blockedGitOps = ['push', 'reset', 'clean', 'checkout', 'rebase', 'merge'];
-    if (blockedGitOps.includes(args[0]!)) {
+    if (blockedGitOps.includes(args[0])) {
       throw new Error(`Git operation '${args[0]}' is not allowed for analysis`);
     }
 
@@ -1113,9 +1113,9 @@ export class ToolExecutor {
    */
   async writeLearnings(
     learnings: string,
-    file?: string,
-    append: boolean = true,
-    category: string = 'general'
+    _file?: string,
+    _append = true,
+    category = 'general'
   ): Promise<{ result: { written: boolean }; output: string }> {
     try {
       // Parse learnings - try to extract structured info
@@ -1127,9 +1127,9 @@ export class ToolExecutor {
       };
 
       // Extract file patterns if mentioned
-      const filePatternMatch = learnings.match(/(?:files?|patterns?):\s*([^\n]+)/i);
+      const filePatternMatch = /(?:files?|patterns?):\s*([^\n]+)/i.exec(learnings);
       if (filePatternMatch) {
-        learning.file_patterns = filePatternMatch[1]!.split(',').map(p => p.trim());
+        learning.file_patterns = filePatternMatch[1].split(',').map(p => p.trim());
       }
 
       await this.learningsStore.write(learning);
@@ -1161,12 +1161,12 @@ export class ToolExecutor {
       }
 
       const output = learnings.map((l, i) =>
-        `${i + 1}. [${l.category}] ${l.pattern}\n   ${l.description.slice(0, 200)}${l.description.length > 200 ? '...' : ''}`
+        `${String(i + 1)}. [${l.category}] ${l.pattern}\n   ${l.description.slice(0, 200)}${l.description.length > 200 ? '...' : ''}`
       ).join('\n\n');
 
       return {
         result: { learnings, count: learnings.length },
-        output: `Found ${learnings.length} learnings:\n\n${output}`,
+        output: `Found ${String(learnings.length)} learnings:\n\n${output}`,
       };
     } catch (error) {
       return {
@@ -1191,12 +1191,12 @@ export class ToolExecutor {
       }
 
       const output = learnings.map((l, i) =>
-        `${i + 1}. [${l.category}] ${l.pattern}`
+        `${String(i + 1)}. [${l.category}] ${l.pattern}`
       ).join('\n');
 
       return {
         result: learnings,
-        output: `Found ${learnings.length} learnings matching "${query}":\n${output}`,
+        output: `Found ${String(learnings.length)} learnings matching "${query}":\n${output}`,
       };
     } catch (error) {
       return {
@@ -1269,7 +1269,7 @@ export class ToolExecutor {
         path.join(this.rootDir, 'package.json'),
         'utf-8'
       );
-      return JSON.parse(content);
+      return JSON.parse(content) as { scripts?: Record<string, string> };
     } catch {
       return null;
     }

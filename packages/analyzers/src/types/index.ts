@@ -4,7 +4,6 @@ import {
   BaseAnalyzer,
   type Issue,
   type AnalyzerOptions,
-  type Severity,
 } from '../base.js';
 
 /**
@@ -49,7 +48,7 @@ export class TypeAnalyzer extends BaseAnalyzer {
     'missing-generic-type',
   ];
 
-  async analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
+  analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> {
     const issues: Issue[] = [];
     const config = this.getConfig(options);
 
@@ -60,7 +59,7 @@ export class TypeAnalyzer extends BaseAnalyzer {
 
     if (tsFiles.length === 0) {
       this.log(options, 'No TypeScript files to analyze');
-      return issues;
+      return Promise.resolve(issues);
     }
 
     try {
@@ -88,8 +87,7 @@ export class TypeAnalyzer extends BaseAnalyzer {
             sourceFile,
             checker,
             program,
-            config,
-            options
+            config
           );
           issues.push(...fileIssues);
         } catch (error) {
@@ -97,12 +95,12 @@ export class TypeAnalyzer extends BaseAnalyzer {
         }
       }
 
-      this.log(options, `Analyzed ${tsFiles.length} TypeScript files, found ${issues.length} type issues`);
+      this.log(options, `Analyzed ${String(tsFiles.length)} TypeScript files, found ${String(issues.length)} type issues`);
     } catch (error) {
       this.logError('Failed to create TypeScript program', error);
     }
 
-    return issues;
+    return Promise.resolve(issues);
   }
 
   /**
@@ -158,8 +156,8 @@ export class TypeAnalyzer extends BaseAnalyzer {
       skipLibCheck: true,
     };
 
-    if (tsconfigPath) {
-      const configFile = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+    if (tsconfigPath !== undefined && tsconfigPath !== '') {
+      const configFile = ts.readConfigFile(tsconfigPath, (p: string) => ts.sys.readFile(p));
       if (!configFile.error) {
         const parsed = ts.parseJsonConfigFileContent(
           configFile.config,
@@ -192,9 +190,8 @@ export class TypeAnalyzer extends BaseAnalyzer {
   private analyzeSourceFile(
     sourceFile: ts.SourceFile,
     checker: ts.TypeChecker,
-    program: ts.Program,
-    config: Required<TypeAnalyzerConfig>,
-    options: AnalyzerOptions
+    _program: ts.Program,
+    config: Required<TypeAnalyzerConfig>
   ): Issue[] {
     const issues: Issue[] = [];
     const patterns = new Set(config.patterns);
@@ -288,12 +285,12 @@ export class TypeAnalyzer extends BaseAnalyzer {
    * Check if node is inside a catch clause
    */
   private isInCatchClause(node: ts.Node): boolean {
-    let parent = node.parent;
-    while (parent) {
-      if (ts.isCatchClause(parent)) {
+    let currentNode: ts.Node | undefined = node;
+    while (currentNode !== undefined) {
+      if (ts.isCatchClause(currentNode)) {
         return true;
       }
-      parent = parent.parent;
+      currentNode = currentNode.parent as ts.Node | undefined;
     }
     return false;
   }
@@ -435,7 +432,7 @@ export class TypeAnalyzer extends BaseAnalyzer {
     if (typeNode.kind === ts.SyntaxKind.UnknownKeyword) {
       // Check if parent is also an as expression
       const parent = node.parent;
-      if (parent && ts.isAsExpression(parent)) {
+      if (ts.isAsExpression(parent)) {
         const { line, character } = sourceFile.getLineAndCharacterOfPosition(
           parent.getStart()
         );

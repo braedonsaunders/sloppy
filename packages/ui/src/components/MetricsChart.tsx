@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useMemo } from 'react';
 import {
   LineChart,
@@ -20,7 +21,7 @@ import type { Metrics } from '@/lib/api';
 export interface MetricsChartProps {
   data: Metrics[];
   type?: 'line' | 'area' | 'bar';
-  metrics?: Array<'issuesFound' | 'issuesResolved' | 'testsPassing' | 'testsFailing' | 'lintErrors'>;
+  metrics?: ('issuesFound' | 'issuesResolved' | 'testsPassing' | 'testsFailing' | 'lintErrors')[];
   height?: number;
   className?: string;
   showLegend?: boolean;
@@ -49,15 +50,15 @@ const CustomTooltip = ({
   label,
 }: {
   active?: boolean;
-  payload?: Array<{ name: string; value: number; color: string }>;
+  payload?: { name: string; value: number; color: string }[];
   label?: string;
-}) => {
-  if (!active || !payload) return null;
+}): JSX.Element | null => {
+  if (active !== true || payload === undefined) {return null;}
 
   return (
     <div className="rounded-lg border border-dark-600 bg-dark-800 p-3 shadow-xl">
       <p className="mb-2 text-xs text-dark-400">
-        {new Date(label || '').toLocaleTimeString()}
+        {new Date(label ?? '').toLocaleTimeString()}
       </p>
       {payload.map((entry) => (
         <div key={entry.name} className="flex items-center gap-2 text-sm">
@@ -81,7 +82,7 @@ export default function MetricsChart({
   className,
   showLegend = true,
   showGrid = true,
-}: MetricsChartProps) {
+}: MetricsChartProps): JSX.Element {
   const formattedData = useMemo(() => {
     return data.map((item) => ({
       ...item,
@@ -92,7 +93,7 @@ export default function MetricsChart({
     }));
   }, [data]);
 
-  const renderChart = () => {
+  const renderChart = (): JSX.Element => {
     const commonProps = {
       data: formattedData,
       margin: { top: 10, right: 10, left: 0, bottom: 0 },
@@ -230,9 +231,9 @@ export interface MetricsSummaryProps {
   className?: string;
 }
 
-export function MetricsSummary({ data, className }: MetricsSummaryProps) {
+export function MetricsSummary({ data, className }: MetricsSummaryProps): JSX.Element | null {
   const summary = useMemo(() => {
-    if (data.length === 0) return null;
+    if (data.length === 0) {return null;}
 
     const latest = data[data.length - 1];
     const first = data[0];
@@ -297,7 +298,7 @@ interface SummaryCardProps {
   color: 'success' | 'warning' | 'error' | 'info' | 'neutral';
 }
 
-function SummaryCard({ label, value, delta, color }: SummaryCardProps) {
+function SummaryCard({ label, value, delta, color }: SummaryCardProps): JSX.Element {
   const colorStyles = {
     success: 'text-success',
     warning: 'text-warning',

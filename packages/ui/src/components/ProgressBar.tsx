@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -37,12 +38,12 @@ export default function ProgressBar({
   animated = false,
   striped = false,
   className,
-}: ProgressBarProps) {
+}: ProgressBarProps): JSX.Element {
   const percentage = Math.min(Math.max((value / max) * 100, 0), 100);
 
   return (
     <div className={twMerge('w-full', className)}>
-      {(showLabel || label) && (
+      {(showLabel || (label !== undefined && label !== '')) && (
         <div className="mb-2 flex items-center justify-between text-sm">
           <span className="text-dark-300">{label}</span>
           {showLabel && (
@@ -69,7 +70,7 @@ export default function ProgressBar({
             striped && 'bg-stripes',
             animated && 'animate-progress bg-[length:30px_30px]'
           )}
-          style={{ width: `${percentage}%` }}
+          style={{ width: `${String(percentage)}%` }}
         />
       </div>
     </div>
@@ -81,7 +82,7 @@ export function IndeterminateProgress({
   size = 'md',
   variant = 'default',
   className,
-}: Pick<ProgressBarProps, 'size' | 'variant' | 'className'>) {
+}: Pick<ProgressBarProps, 'size' | 'variant' | 'className'>): JSX.Element {
   return (
     <div
       className={twMerge(
@@ -140,7 +141,7 @@ export function CircularProgress({
   variant = 'default',
   showValue = true,
   className,
-}: CircularProgressProps) {
+}: CircularProgressProps): JSX.Element {
   const percentage = Math.min(Math.max((value / max) * 100, 0), 100);
   const radius = (size - strokeWidth) / 2;
   const circumference = radius * 2 * Math.PI;

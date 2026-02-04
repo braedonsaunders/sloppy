@@ -1,11 +1,10 @@
 import { z } from 'zod';
 import { BaseProvider, ProviderError } from './base.js';
-import { ClaudeProvider, ClaudeProviderConfig, ClaudeModel } from './claude/index.js';
+import { ClaudeProvider, ClaudeProviderConfig } from './claude/index.js';
 import { OpenAIProvider, OpenAIProviderConfig, OpenAIModel } from './openai/index.js';
-import { OllamaProvider, OllamaProviderConfig, OllamaModel } from './ollama/index.js';
+import { OllamaProvider, OllamaProviderConfig } from './ollama/index.js';
 import { ClaudeCodeCLIProvider, ClaudeCodeCLIConfig } from './cli/claude-code.js';
-import { CodexCLIProvider, CodexCLIConfig, CodexModel } from './cli/codex.js';
-import { AnalysisType } from './prompts/analysis.js';
+import { CodexCLIProvider, CodexCLIConfig } from './cli/codex.js';
 
 // ============================================================================
 // Provider Types
@@ -240,84 +239,84 @@ export function createProvider(config: ProviderConfig): BaseProvider {
   switch (validated.type) {
     case 'claude': {
       const claudeConfig: ClaudeProviderConfig = {};
-      if (validated.apiKey !== undefined) claudeConfig.apiKey = validated.apiKey;
-      if (validated.baseUrl !== undefined) claudeConfig.baseUrl = validated.baseUrl;
-      if (validated.model !== undefined) claudeConfig.model = validated.model;
-      if (validated.maxTokens !== undefined) claudeConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) claudeConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) claudeConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) claudeConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) claudeConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) claudeConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) claudeConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {claudeConfig.apiKey = validated.apiKey;}
+      if (validated.baseUrl !== undefined) {claudeConfig.baseUrl = validated.baseUrl;}
+      if (validated.model !== undefined) {claudeConfig.model = validated.model;}
+      if (validated.maxTokens !== undefined) {claudeConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {claudeConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {claudeConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {claudeConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {claudeConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {claudeConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {claudeConfig.analysisType = validated.analysisType;}
       return new ClaudeProvider(claudeConfig);
     }
 
     case 'openai': {
       const openaiConfig: OpenAIProviderConfig = {};
-      if (validated.apiKey !== undefined) openaiConfig.apiKey = validated.apiKey;
-      if (validated.organization !== undefined) openaiConfig.organization = validated.organization;
-      if (validated.baseUrl !== undefined) openaiConfig.baseUrl = validated.baseUrl;
-      if (validated.model !== undefined) openaiConfig.model = validated.model;
-      if (validated.maxTokens !== undefined) openaiConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) openaiConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) openaiConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) openaiConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) openaiConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) openaiConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) openaiConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {openaiConfig.apiKey = validated.apiKey;}
+      if (validated.organization !== undefined) {openaiConfig.organization = validated.organization;}
+      if (validated.baseUrl !== undefined) {openaiConfig.baseUrl = validated.baseUrl;}
+      if (validated.model !== undefined) {openaiConfig.model = validated.model;}
+      if (validated.maxTokens !== undefined) {openaiConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {openaiConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {openaiConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {openaiConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {openaiConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {openaiConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {openaiConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(openaiConfig);
     }
 
     case 'ollama': {
       const ollamaConfig: OllamaProviderConfig = {};
-      if (validated.baseUrl !== undefined) ollamaConfig.baseUrl = validated.baseUrl;
-      if (validated.model !== undefined) ollamaConfig.model = validated.model;
-      if (validated.maxTokens !== undefined) ollamaConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) ollamaConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) ollamaConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) ollamaConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) ollamaConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) ollamaConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) ollamaConfig.analysisType = validated.analysisType;
-      if (validated.keepAlive !== undefined) ollamaConfig.keepAlive = validated.keepAlive;
-      if (validated.numCtx !== undefined) ollamaConfig.numCtx = validated.numCtx;
-      if (validated.numGpu !== undefined) ollamaConfig.numGpu = validated.numGpu;
+      if (validated.baseUrl !== undefined) {ollamaConfig.baseUrl = validated.baseUrl;}
+      if (validated.model !== undefined) {ollamaConfig.model = validated.model;}
+      if (validated.maxTokens !== undefined) {ollamaConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {ollamaConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {ollamaConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {ollamaConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {ollamaConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {ollamaConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {ollamaConfig.analysisType = validated.analysisType;}
+      if (validated.keepAlive !== undefined) {ollamaConfig.keepAlive = validated.keepAlive;}
+      if (validated.numCtx !== undefined) {ollamaConfig.numCtx = validated.numCtx;}
+      if (validated.numGpu !== undefined) {ollamaConfig.numGpu = validated.numGpu;}
       return new OllamaProvider(ollamaConfig);
     }
 
     case 'claude-cli': {
       const cliConfig: ClaudeCodeCLIConfig = {};
-      if (validated.cliPath !== undefined) cliConfig.cliPath = validated.cliPath;
-      if (validated.maxTokens !== undefined) cliConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) cliConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) cliConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) cliConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) cliConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) cliConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) cliConfig.analysisType = validated.analysisType;
-      if (validated.workingDirectory !== undefined) cliConfig.workingDirectory = validated.workingDirectory;
-      if (validated.allowedTools !== undefined) cliConfig.allowedTools = validated.allowedTools;
-      if (validated.disallowedTools !== undefined) cliConfig.disallowedTools = validated.disallowedTools;
-      if (validated.maxTurns !== undefined) cliConfig.maxTurns = validated.maxTurns;
-      if (validated.outputFormat !== undefined) cliConfig.outputFormat = validated.outputFormat;
+      if (validated.cliPath !== undefined) {cliConfig.cliPath = validated.cliPath;}
+      if (validated.maxTokens !== undefined) {cliConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {cliConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {cliConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {cliConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {cliConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {cliConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {cliConfig.analysisType = validated.analysisType;}
+      if (validated.workingDirectory !== undefined) {cliConfig.workingDirectory = validated.workingDirectory;}
+      if (validated.allowedTools !== undefined) {cliConfig.allowedTools = validated.allowedTools;}
+      if (validated.disallowedTools !== undefined) {cliConfig.disallowedTools = validated.disallowedTools;}
+      if (validated.maxTurns !== undefined) {cliConfig.maxTurns = validated.maxTurns;}
+      if (validated.outputFormat !== undefined) {cliConfig.outputFormat = validated.outputFormat;}
       return new ClaudeCodeCLIProvider(cliConfig);
     }
 
     case 'codex-cli': {
       const codexConfig: CodexCLIConfig = {};
-      if (validated.cliPath !== undefined) codexConfig.cliPath = validated.cliPath;
-      if (validated.model !== undefined) codexConfig.model = validated.model;
-      if (validated.maxTokens !== undefined) codexConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) codexConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) codexConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) codexConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) codexConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) codexConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) codexConfig.analysisType = validated.analysisType;
-      if (validated.workingDirectory !== undefined) codexConfig.workingDirectory = validated.workingDirectory;
-      if (validated.approvalMode !== undefined) codexConfig.approvalMode = validated.approvalMode;
-      if (validated.quietMode !== undefined) codexConfig.quietMode = validated.quietMode;
+      if (validated.cliPath !== undefined) {codexConfig.cliPath = validated.cliPath;}
+      if (validated.model !== undefined) {codexConfig.model = validated.model;}
+      if (validated.maxTokens !== undefined) {codexConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {codexConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {codexConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {codexConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {codexConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {codexConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {codexConfig.analysisType = validated.analysisType;}
+      if (validated.workingDirectory !== undefined) {codexConfig.workingDirectory = validated.workingDirectory;}
+      if (validated.approvalMode !== undefined) {codexConfig.approvalMode = validated.approvalMode;}
+      if (validated.quietMode !== undefined) {codexConfig.quietMode = validated.quietMode;}
       return new CodexCLIProvider(codexConfig);
     }
 
@@ -325,119 +324,119 @@ export function createProvider(config: ProviderConfig): BaseProvider {
     case 'gemini': {
       // Google Gemini via OpenAI-compatible endpoint
       const geminiConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://generativelanguage.googleapis.com/v1beta/openai',
+        baseUrl: validated.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
       };
-      if (validated.apiKey !== undefined) geminiConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) geminiConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) geminiConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) geminiConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) geminiConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) geminiConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) geminiConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) geminiConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) geminiConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {geminiConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {geminiConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {geminiConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {geminiConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {geminiConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {geminiConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {geminiConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {geminiConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {geminiConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(geminiConfig);
     }
 
     case 'openrouter': {
       // OpenRouter is fully OpenAI-compatible
       const openrouterConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://openrouter.ai/api/v1',
+        baseUrl: validated.baseUrl ?? 'https://openrouter.ai/api/v1',
       };
-      if (validated.apiKey !== undefined) openrouterConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) openrouterConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) openrouterConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) openrouterConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) openrouterConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) openrouterConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) openrouterConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) openrouterConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) openrouterConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {openrouterConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {openrouterConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {openrouterConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {openrouterConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {openrouterConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {openrouterConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {openrouterConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {openrouterConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {openrouterConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(openrouterConfig);
     }
 
     case 'deepseek': {
       // DeepSeek is OpenAI-compatible
       const deepseekConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://api.deepseek.com/v1',
+        baseUrl: validated.baseUrl ?? 'https://api.deepseek.com/v1',
       };
-      if (validated.apiKey !== undefined) deepseekConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) deepseekConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) deepseekConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) deepseekConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) deepseekConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) deepseekConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) deepseekConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) deepseekConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) deepseekConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {deepseekConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {deepseekConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {deepseekConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {deepseekConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {deepseekConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {deepseekConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {deepseekConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {deepseekConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {deepseekConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(deepseekConfig);
     }
 
     case 'mistral': {
       // Mistral is OpenAI-compatible
       const mistralConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://api.mistral.ai/v1',
+        baseUrl: validated.baseUrl ?? 'https://api.mistral.ai/v1',
       };
-      if (validated.apiKey !== undefined) mistralConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) mistralConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) mistralConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) mistralConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) mistralConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) mistralConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) mistralConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) mistralConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) mistralConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {mistralConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {mistralConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {mistralConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {mistralConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {mistralConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {mistralConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {mistralConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {mistralConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {mistralConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(mistralConfig);
     }
 
     case 'groq': {
       // Groq is OpenAI-compatible
       const groqConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://api.groq.com/openai/v1',
+        baseUrl: validated.baseUrl ?? 'https://api.groq.com/openai/v1',
       };
-      if (validated.apiKey !== undefined) groqConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) groqConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) groqConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) groqConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) groqConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) groqConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) groqConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) groqConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) groqConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {groqConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {groqConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {groqConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {groqConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {groqConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {groqConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {groqConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {groqConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {groqConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(groqConfig);
     }
 
     case 'together': {
       // Together AI is OpenAI-compatible
       const togetherConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://api.together.xyz/v1',
+        baseUrl: validated.baseUrl ?? 'https://api.together.xyz/v1',
       };
-      if (validated.apiKey !== undefined) togetherConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) togetherConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) togetherConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) togetherConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) togetherConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) togetherConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) togetherConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) togetherConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) togetherConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {togetherConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {togetherConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {togetherConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {togetherConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {togetherConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {togetherConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {togetherConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {togetherConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {togetherConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(togetherConfig);
     }
 
     case 'cohere': {
       // Cohere is OpenAI-compatible
       const cohereConfig: OpenAIProviderConfig = {
-        baseUrl: validated.baseUrl || 'https://api.cohere.ai/v1',
+        baseUrl: validated.baseUrl ?? 'https://api.cohere.ai/v1',
       };
-      if (validated.apiKey !== undefined) cohereConfig.apiKey = validated.apiKey;
-      if (validated.model !== undefined) cohereConfig.model = validated.model as OpenAIModel;
-      if (validated.maxTokens !== undefined) cohereConfig.maxTokens = validated.maxTokens;
-      if (validated.temperature !== undefined) cohereConfig.temperature = validated.temperature;
-      if (validated.timeout !== undefined) cohereConfig.timeout = validated.timeout;
-      if (validated.maxRetries !== undefined) cohereConfig.maxRetries = validated.maxRetries;
-      if (validated.rateLimitRpm !== undefined) cohereConfig.rateLimitRpm = validated.rateLimitRpm;
-      if (validated.rateLimitTpm !== undefined) cohereConfig.rateLimitTpm = validated.rateLimitTpm;
-      if (validated.analysisType !== undefined) cohereConfig.analysisType = validated.analysisType;
+      if (validated.apiKey !== undefined) {cohereConfig.apiKey = validated.apiKey;}
+      if (validated.model !== undefined) {cohereConfig.model = validated.model as OpenAIModel;}
+      if (validated.maxTokens !== undefined) {cohereConfig.maxTokens = validated.maxTokens;}
+      if (validated.temperature !== undefined) {cohereConfig.temperature = validated.temperature;}
+      if (validated.timeout !== undefined) {cohereConfig.timeout = validated.timeout;}
+      if (validated.maxRetries !== undefined) {cohereConfig.maxRetries = validated.maxRetries;}
+      if (validated.rateLimitRpm !== undefined) {cohereConfig.rateLimitRpm = validated.rateLimitRpm;}
+      if (validated.rateLimitTpm !== undefined) {cohereConfig.rateLimitTpm = validated.rateLimitTpm;}
+      if (validated.analysisType !== undefined) {cohereConfig.analysisType = validated.analysisType;}
       return new OpenAIProvider(cohereConfig);
     }
 
@@ -515,12 +514,12 @@ export function createCodexCLIProvider(
  */
 export async function autoDetectProvider(): Promise<BaseProvider> {
   // Check for Claude API key
-  if (process.env['ANTHROPIC_API_KEY']) {
+  if (process.env.ANTHROPIC_API_KEY !== undefined && process.env.ANTHROPIC_API_KEY !== '') {
     return createClaudeProvider();
   }
 
   // Check for OpenAI API key
-  if (process.env['OPENAI_API_KEY']) {
+  if (process.env.OPENAI_API_KEY !== undefined && process.env.OPENAI_API_KEY !== '') {
     return createOpenAIProvider();
   }
 

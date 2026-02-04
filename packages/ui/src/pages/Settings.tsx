@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -26,7 +27,7 @@ interface Settings {
   [key: string]: unknown;
 }
 
-export default function Settings() {
+export default function Settings(): JSX.Element {
   const [activeTab, setActiveTab] = useState<'providers' | 'defaults'>('providers');
 
   return (
@@ -43,7 +44,7 @@ export default function Settings() {
       <div className="border-b border-dark-700">
         <nav className="flex gap-1">
           <button
-            onClick={() => setActiveTab('providers')}
+            onClick={() => { setActiveTab('providers'); }}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === 'providers'
                 ? 'border-accent text-accent'
@@ -54,7 +55,7 @@ export default function Settings() {
             Providers
           </button>
           <button
-            onClick={() => setActiveTab('defaults')}
+            onClick={() => { setActiveTab('defaults'); }}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === 'defaults'
                 ? 'border-accent text-accent'
@@ -74,7 +75,7 @@ export default function Settings() {
   );
 }
 
-function ProvidersTab() {
+function ProvidersTab(): JSX.Element {
   const queryClient = useQueryClient();
   const [selectedProviderId, setSelectedProviderId] = useState<string>('');
 
@@ -85,40 +86,40 @@ function ProvidersTab() {
 
   const configureMutation = useMutation({
     mutationFn: (config: ProviderConfig) => api.providers.configure(config),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['providers'] });
     },
   });
 
   const testMutation = useMutation({
     mutationFn: (providerId: string) => api.providers.test(providerId),
-    onSuccess: () => {
+    onSuccess: (): void => {
       // Refresh providers to get updated models
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+      void queryClient.invalidateQueries({ queryKey: ['providers'] });
     },
   });
 
   const refreshModelsMutation = useMutation({
     mutationFn: (providerId: string) => api.providers.refreshModels(providerId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['providers'] });
     },
   });
 
   const selectModelMutation = useMutation({
     mutationFn: ({ providerId, model }: { providerId: string; model: string }) =>
       api.providers.selectModel(providerId, model),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    onSuccess: (): void => {
+      void queryClient.invalidateQueries({ queryKey: ['providers'] });
     },
   });
 
   // Set default selected provider when providers load
   useEffect(() => {
-    if (providers && providers.length > 0 && !selectedProviderId) {
+    if (providers !== undefined && providers.length > 0 && selectedProviderId === '') {
       // Prefer to select a configured provider first, otherwise pick the first one
       const configured = providers.find((p) => p.configured);
-      setSelectedProviderId(configured?.id || providers[0]!.id);
+      setSelectedProviderId(configured?.id ?? providers[0].id);
     }
   }, [providers, selectedProviderId]);
 
@@ -141,18 +142,18 @@ function ProvidersTab() {
 
   const getProviderCategory = (id: string): string => {
     for (const [category, ids] of Object.entries(providerCategories)) {
-      if (ids.includes(id)) return category;
+      if (ids.includes(id)) {return category;}
     }
     return 'Other';
   };
 
   // Group providers for display
-  const groupedProviders = providers?.reduce((acc, provider) => {
+  const groupedProviders = providers?.reduce<Record<string, Provider[]>>((acc, provider) => {
     const category = getProviderCategory(provider.id);
-    if (!acc[category]) acc[category] = [];
+    acc[category] ??= [];
     acc[category].push(provider);
     return acc;
-  }, {} as Record<string, Provider[]>) || {};
+  }, {}) ?? {};
 
   return (
     <div className="space-y-6">
@@ -189,9 +190,9 @@ function ProvidersTab() {
         <ProviderCard
           key={selectedProvider.id}
           provider={selectedProvider}
-          onConfigure={(config) => configureMutation.mutate(config)}
-          onTest={() => testMutation.mutate(selectedProvider.id)}
-          onRefreshModels={() => refreshModelsMutation.mutate(selectedProvider.id)}
+          onConfigure={(config) => { configureMutation.mutate(config); }}
+          onTest={() => { testMutation.mutate(selectedProvider.id); }}
+          onRefreshModels={() => { refreshModelsMutation.mutate(selectedProvider.id); }}
           isConfiguring={configureMutation.isPending}
           isTesting={testMutation.isPending}
           isRefreshing={refreshModelsMutation.isPending}
@@ -202,7 +203,7 @@ function ProvidersTab() {
           }
           selectedModel={selectedProvider.selectedModel}
           onSelectModel={(model) =>
-            selectModelMutation.mutate({ providerId: selectedProvider.id, model })
+            { selectModelMutation.mutate({ providerId: selectedProvider.id, model }); }
           }
         />
       ) : (
@@ -272,17 +273,17 @@ function ProviderCard({
   testResult,
   selectedModel,
   onSelectModel,
-}: ProviderCardProps) {
+}: ProviderCardProps): JSX.Element {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
-  const handleSave = () => {
+  const handleSave = (): void => {
     onConfigure({
       providerId: provider.id,
-      apiKey: apiKey || undefined,
-      baseUrl: baseUrl || undefined,
+      apiKey: apiKey !== '' ? apiKey : undefined,
+      baseUrl: baseUrl !== '' ? baseUrl : undefined,
     });
     setIsDirty(false);
     setApiKey('');
@@ -343,7 +344,7 @@ function ProviderCard({
               rightIcon={
                 <button
                   type="button"
-                  onClick={() => setShowApiKey(!showApiKey)}
+                  onClick={() => { setShowApiKey(!showApiKey); }}
                   className="text-dark-400 hover:text-dark-200"
                 >
                   {showApiKey ? (
@@ -408,8 +409,8 @@ function ProviderCard({
                   label: model,
                 })),
               ]}
-              value={selectedModel || ''}
-              onChange={(e) => onSelectModel(e.target.value)}
+              value={selectedModel ?? ''}
+              onChange={(e) => { onSelectModel(e.target.value); }}
             />
           ) : (
             <div className="rounded-lg border border-dark-700 bg-dark-850 p-3 text-center">
@@ -437,7 +438,7 @@ function ProviderCard({
               <AlertCircle className="h-4 w-4" />
             )}
             <span className="text-sm">
-              {testResult.message || (testResult.success ? 'Connection successful' : 'Connection failed')}
+              {testResult.message ?? (testResult.success ? 'Connection successful' : 'Connection failed')}
             </span>
           </div>
         )}
@@ -468,7 +469,7 @@ function ProviderCard({
   );
 }
 
-function DefaultsTab() {
+function DefaultsTab(): JSX.Element {
   const defaultsQueryClient = useQueryClient();
 
   const { data: settings, isLoading } = useQuery({
@@ -483,8 +484,8 @@ function DefaultsTab() {
 
   const updateMutation = useMutation({
     mutationFn: (settings: Settings) => api.settings.update(settings as Record<string, unknown>),
-    onSuccess: () => {
-      defaultsQueryClient.invalidateQueries({ queryKey: ['settings'] });
+    onSuccess: (): void => {
+      void defaultsQueryClient.invalidateQueries({ queryKey: ['settings'] });
     },
   });
 
@@ -496,7 +497,7 @@ function DefaultsTab() {
     }
   }, [settings]);
 
-  const handleSave = () => {
+  const handleSave = (): void => {
     updateMutation.mutate(formData);
   };
 
@@ -527,11 +528,11 @@ function DefaultsTab() {
             ...(providers?.filter((p) => p.configured).map((p) => ({
               value: p.id,
               label: p.name,
-            })) || []),
+            })) ?? []),
           ]}
-          value={formData.defaultProvider || ''}
+          value={formData.defaultProvider ?? ''}
           onChange={(e) =>
-            setFormData({ ...formData, defaultProvider: e.target.value || undefined })
+            { setFormData({ ...formData, defaultProvider: e.target.value !== '' ? e.target.value : undefined }); }
           }
         />
 
@@ -542,13 +543,13 @@ function DefaultsTab() {
             ...(selectedProvider?.models.map((m) => ({
               value: m,
               label: m,
-            })) || []),
+            })) ?? []),
           ]}
-          value={formData.defaultModel || ''}
+          value={formData.defaultModel ?? ''}
           onChange={(e) =>
-            setFormData({ ...formData, defaultModel: e.target.value || undefined })
+            { setFormData({ ...formData, defaultModel: e.target.value !== '' ? e.target.value : undefined }); }
           }
-          disabled={!formData.defaultProvider}
+          disabled={formData.defaultProvider === undefined}
         />
 
         <Select
@@ -558,9 +559,9 @@ function DefaultsTab() {
             { value: 'medium', label: 'Medium - Balanced approach' },
             { value: 'high', label: 'High - Thorough, more changes' },
           ]}
-          value={formData.defaultStrictness || 'medium'}
+          value={formData.defaultStrictness ?? 'medium'}
           onChange={(e) =>
-            setFormData({ ...formData, defaultStrictness: e.target.value })
+            { setFormData({ ...formData, defaultStrictness: e.target.value }); }
           }
         />
 
@@ -569,12 +570,12 @@ function DefaultsTab() {
           type="number"
           min={1}
           max={480}
-          value={formData.defaultMaxTime || ''}
+          value={formData.defaultMaxTime ?? ''}
           onChange={(e) =>
-            setFormData({
+            { setFormData({
               ...formData,
-              defaultMaxTime: e.target.value ? parseInt(e.target.value) : undefined,
-            })
+              defaultMaxTime: e.target.value !== '' ? parseInt(e.target.value, 10) : undefined,
+            }); }
           }
           hint="Leave empty for no time limit"
         />
@@ -584,9 +585,9 @@ function DefaultsTab() {
         <input
           type="checkbox"
           id="approvalMode"
-          checked={formData.approvalModeDefault || false}
+          checked={formData.approvalModeDefault ?? false}
           onChange={(e) =>
-            setFormData({ ...formData, approvalModeDefault: e.target.checked })
+            { setFormData({ ...formData, approvalModeDefault: e.target.checked }); }
           }
           className="h-4 w-4 rounded border-dark-600 bg-dark-700 text-accent focus:ring-accent"
         />

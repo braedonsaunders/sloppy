@@ -2,24 +2,24 @@ const API_BASE = '/api';
 
 // Helper to convert snake_case keys to camelCase
 function snakeToCamel(str: string): string {
-  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+  return str.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
-function normalizeKeys<T>(obj: unknown): T {
+function normalizeKeys(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
-    return obj as T;
+    return obj;
   }
   if (Array.isArray(obj)) {
-    return obj.map(normalizeKeys) as T;
+    return obj.map((item: unknown) => normalizeKeys(item));
   }
   if (typeof obj === 'object') {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       result[snakeToCamel(key)] = normalizeKeys(value);
     }
-    return result as T;
+    return result;
   }
-  return obj as T;
+  return obj;
 }
 
 export interface ApiError {
@@ -50,7 +50,7 @@ async function request<T>(
   const headers: Record<string, string> = {
     ...(options.headers as Record<string, string>),
   };
-  if (options.body) {
+  if (options.body !== undefined && options.body !== null) {
     headers['Content-Type'] = 'application/json';
   }
 
@@ -62,9 +62,10 @@ async function request<T>(
   const response = await fetch(url, config);
 
   if (!response.ok) {
-    const error: ApiError = await response.json().catch(() => ({
+    const errorData: unknown = await response.json().catch((): ApiError => ({
       message: response.statusText,
     }));
+    const error = errorData as ApiError;
     throw new ApiClientError(
       error.message,
       response.status,
@@ -77,18 +78,18 @@ async function request<T>(
     return undefined as T;
   }
 
-  const json = await response.json();
+  const json: unknown = await response.json();
 
   // Unwrap server response format: { success: true, data: ... }
   let data: unknown;
-  if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
-    data = json.data;
+  if (json !== null && typeof json === 'object' && 'success' in json && 'data' in json) {
+    data = (json as { success: boolean; data: unknown }).data;
   } else {
     data = json;
   }
 
   // Normalize snake_case keys to camelCase
-  return normalizeKeys<T>(data);
+  return normalizeKeys(data) as T;
 }
 
 // Session Types
@@ -240,79 +241,82 @@ interface MetricsResponse {
 export const api = {
   // Sessions
   sessions: {
-    list: async () => {
+    list: async (): Promise<Session[]> => {
       const res = await request<SessionsResponse>('/sessions');
       return res.sessions;
     },
 
-    get: async (id: string) => {
+    get: async (id: string): Promise<Session> => {
       const res = await request<SessionDetailResponse>(`/sessions/${id}`);
       return res.session;
     },
 
-    create: (data: CreateSessionRequest) =>
+    create: (data: CreateSessionRequest): Promise<Session> =>
       request<Session>('/sessions', {
         method: 'POST',
         body: JSON.stringify(data),
       }),
 
-    start: (id: string) =>
+    start: (id: string): Promise<Session> =>
       request<Session>(`/sessions/${id}/start`, { method: 'POST' }),
 
-    pause: (id: string) =>
+    pause: (id: string): Promise<Session> =>
       request<Session>(`/sessions/${id}/pause`, { method: 'POST' }),
 
-    resume: (id: string) =>
+    resume: (id: string): Promise<Session> =>
       request<Session>(`/sessions/${id}/resume`, { method: 'POST' }),
 
-    stop: (id: string) =>
+    stop: (id: string): Promise<Session> =>
       request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
 
-    delete: (id: string) =>
-      request<void>(`/sessions/${id}`, { method: 'DELETE' }),
+    delete: (id: string): Promise<void> =>
+      request<undefined>(`/sessions/${id}`, { method: 'DELETE' }).then(() => undefined),
 
-    getStats: (id: string) => request<SessionStats>(`/sessions/${id}/stats`),
+    getStats: (id: string): Promise<SessionStats> => request<SessionStats>(`/sessions/${id}/stats`),
 
-    getMetrics: async (id: string, since?: string) => {
-      const res = await request<MetricsResponse>(
-        `/sessions/${id}/metrics${since ? `?since=${since}` : ''}`
-      );
+    getMetrics: async (id: string, since?: string): Promise<Metrics[]> => {
+      const query = since !== undefined && since !== '' ? `?since=${since}` : '';
+      const res = await request<MetricsResponse>(`/sessions/${id}/metrics${query}`);
       return res.metrics;
     },
 
-    getActivity: (id: string, limit?: number) =>
-      request<Activity[]>(
-        `/sessions/${id}/activity${limit ? `?limit=${limit}` : ''}`
-      ),
+    getActivity: (id: string, limit?: number): Promise<Activity[]> => {
+      const query = limit !== undefined && limit > 0 ? `?limit=${String(limit)}` : '';
+      return request<Activity[]>(`/sessions/${id}/activity${query}`);
+    },
   },
 
   // Issues
   issues: {
-    list: async (sessionId: string, filters?: { status?: string; type?: string }) => {
+    list: async (sessionId: string, filters?: { status?: string; type?: string }): Promise<Issue[]> => {
       const params = new URLSearchParams();
-      if (filters?.status) params.set('status', filters.status);
-      if (filters?.type) params.set('type', filters.type);
+      if (filters?.status !== undefined && filters.status !== '') {
+        params.set('status', filters.status);
+      }
+      if (filters?.type !== undefined && filters.type !== '') {
+        params.set('type', filters.type);
+      }
       const query = params.toString();
       const res = await request<IssuesResponse>(
-        `/sessions/${sessionId}/issues${query ? `?${query}` : ''}`
+        `/sessions/${sessionId}/issues${query !== '' ? `?${query}` : ''}`
       );
       return res.issues;
     },
 
-    get: (sessionId: string, issueId: string) =>
+    get: (sessionId: string, issueId: string): Promise<Issue> =>
       request<Issue>(`/sessions/${sessionId}/issues/${issueId}`),
 
-    approve: (sessionId: string, issueId: string) =>
+    approve: (sessionId: string, issueId: string): Promise<Issue> =>
       request<Issue>(`/sessions/${sessionId}/issues/${issueId}/approve`, {
         method: 'POST',
       }),
 
-    reject: (sessionId: string, issueId: string) =>
+    reject: (sessionId: string, issueId: string): Promise<Issue> =>
       request<Issue>(`/sessions/${sessionId}/issues/${issueId}/reject`, {
         method: 'POST',
       }),
 
-    skip: (sessionId: string, issueId: string) =>
+    skip: (sessionId: string, issueId: string): Promise<Issue> =>
       request<Issue>(`/sessions/${sessionId}/issues/${issueId}/skip`, {
         method: 'POST',
       }),
@@ -320,17 +324,17 @@ export const api = {
 
   // Commits
   commits: {
-    list: async (sessionId: string) => {
+    list: async (sessionId: string): Promise<Commit[]> => {
       const res = await request<CommitsResponse>(`/sessions/${sessionId}/commits`);
       return res.commits;
     },
 
-    get: async (sessionId: string, commitId: string) => {
+    get: async (sessionId: string, commitId: string): Promise<Commit> => {
       const res = await request<{ commit: Commit; issue: Issue | null }>(`/sessions/${sessionId}/commits/${commitId}`);
       return res.commit;
     },
 
-    revert: async (sessionId: string, commitId: string) => {
+    revert: async (sessionId: string, commitId: string): Promise<Commit> => {
       const res = await request<{ commit: Commit; revertHash: string }>(`/sessions/${sessionId}/commits/${commitId}/revert`, {
         method: 'POST',
       });
@@ -340,29 +344,29 @@ export const api = {
 
   // Providers
   providers: {
-    list: () => request<Provider[]>('/providers'),
+    list: (): Promise<Provider[]> => request<Provider[]>('/providers'),
 
-    get: (id: string) => request<Provider>(`/providers/${id}`),
+    get: (id: string): Promise<Provider> => request<Provider>(`/providers/${id}`),
 
-    configure: (config: ProviderConfig) =>
+    configure: (config: ProviderConfig): Promise<Provider> =>
       request<Provider>('/providers/configure', {
         method: 'POST',
         body: JSON.stringify(config),
       }),
 
-    test: (providerId: string) =>
+    test: (providerId: string): Promise<{ success: boolean; message?: string; models?: string[] }> =>
       request<{ success: boolean; message?: string; models?: string[] }>(
         `/providers/${providerId}/test`,
         { method: 'POST' }
       ),
 
-    refreshModels: (providerId: string) =>
+    refreshModels: (providerId: string): Promise<{ provider: Provider; modelsFound: number }> =>
       request<{ provider: Provider; modelsFound: number }>(
         `/providers/${providerId}/refresh-models`,
         { method: 'POST' }
       ),
 
-    selectModel: (providerId: string, model: string) =>
+    selectModel: (providerId: string, model: string): Promise<Provider> =>
       request<Provider>(
         `/providers/${providerId}/select-model`,
         {
@@ -374,9 +378,9 @@ export const api = {
 
   // Settings
   settings: {
-    get: () => request<Record<string, unknown>>('/settings'),
+    get: (): Promise<Record<string, unknown>> => request<Record<string, unknown>>('/settings'),
 
-    update: (settings: Record<string, unknown>) =>
+    update: (settings: Record<string, unknown>): Promise<Record<string, unknown>> =>
       request<Record<string, unknown>>('/settings', {
         method: 'PUT',
         body: JSON.stringify(settings),
@@ -384,22 +388,32 @@ export const api = {
   },
 
   // Health
-  health: () => request<{ status: string; version: string }>('/health'),
+  health: (): Promise<{ status: string; version: string }> => request<{ status: string; version: string }>('/health'),
 
   // Files
   files: {
-    browse: (path?: string) => {
-      const params = path ? `?path=${encodeURIComponent(path)}` : '';
+    browse: (path?: string): Promise<{
+      currentPath: string;
+      parentPath: string | null;
+      entries: {
+        name: string;
+        path: string;
+        type: 'file' | 'directory';
+        size?: number;
+        modifiedAt?: string;
+      }[];
+    }> => {
+      const params = path !== undefined && path !== '' ? `?path=${encodeURIComponent(path)}` : '';
       return request<{
         currentPath: string;
         parentPath: string | null;
-        entries: Array<{
+        entries: {
           name: string;
           path: string;
           type: 'file' | 'directory';
           size?: number;
           modifiedAt?: string;
-        }>;
+        }[];
       }>(`/files/browse${params}`);
     },
   },
