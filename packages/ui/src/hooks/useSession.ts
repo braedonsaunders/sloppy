@@ -1,9 +1,17 @@
 import { useCallback, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { api, type CreateSessionRequest } from '@/lib/api';
+import { api, type CreateSessionRequest, ApiClientError } from '@/lib/api';
 import { useSessionStore } from '@/stores/session';
 import { useIssuesStore } from '@/stores/issues';
+
+// Don't retry on 404 errors (session not found)
+const shouldRetry = (failureCount: number, error: Error) => {
+  if (error instanceof ApiClientError && error.status === 404) {
+    return false;
+  }
+  return failureCount < 3;
+};
 
 export function useSession(sessionId?: string) {
   const queryClient = useQueryClient();
@@ -26,7 +34,10 @@ export function useSession(sessionId?: string) {
     queryKey: ['session', sessionId],
     queryFn: () => api.sessions.get(sessionId!),
     enabled: !!sessionId,
+    retry: shouldRetry,
     refetchInterval: (query) => {
+      // Don't refetch if there's an error (e.g., 404)
+      if (query.state.error) return false;
       const session = query.state.data;
       return session?.status === 'running' ? 5000 : false;
     },
@@ -36,41 +47,69 @@ export function useSession(sessionId?: string) {
   const statsQuery = useQuery({
     queryKey: ['session', sessionId, 'stats'],
     queryFn: () => api.sessions.getStats(sessionId!),
-    enabled: !!sessionId,
-    refetchInterval: 3000,
+    enabled: !!sessionId && !sessionQuery.error,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      return 3000;
+    },
   });
 
   // Fetch session issues
   const issuesQuery = useQuery({
     queryKey: ['session', sessionId, 'issues'],
     queryFn: () => api.issues.list(sessionId!),
-    enabled: !!sessionId,
-    refetchInterval: 5000,
+    enabled: !!sessionId && !sessionQuery.error,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      return 5000;
+    },
   });
 
   // Fetch session commits
   const commitsQuery = useQuery({
     queryKey: ['session', sessionId, 'commits'],
     queryFn: () => api.commits.list(sessionId!),
-    enabled: !!sessionId,
-    refetchInterval: 10000,
+    enabled: !!sessionId && !sessionQuery.error,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      return 10000;
+    },
   });
 
   // Fetch session activity
   const activityQuery = useQuery({
     queryKey: ['session', sessionId, 'activity'],
     queryFn: () => api.sessions.getActivity(sessionId!, 50),
-    enabled: !!sessionId,
-    refetchInterval: 2000,
+    enabled: !!sessionId && !sessionQuery.error,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      return 2000;
+    },
   });
 
   // Fetch session metrics
   const metricsQuery = useQuery({
     queryKey: ['session', sessionId, 'metrics'],
     queryFn: () => api.sessions.getMetrics(sessionId!),
-    enabled: !!sessionId,
-    refetchInterval: 10000,
+    enabled: !!sessionId && !sessionQuery.error,
+    retry: shouldRetry,
+    refetchInterval: (query) => {
+      if (query.state.error) return false;
+      return 10000;
+    },
   });
+
+  // Handle 404 error - navigate to home
+  useEffect(() => {
+    if (sessionQuery.error instanceof ApiClientError && sessionQuery.error.status === 404) {
+      resetIssues();
+      navigate('/', { replace: true });
+    }
+  }, [sessionQuery.error, navigate, resetIssues]);
 
   // Update stores when data changes
   useEffect(() => {
