@@ -10,11 +10,13 @@ import {
   AlertTriangle,
   Terminal,
   CheckSquare,
+  FolderSearch,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
 import Select from '@/components/Select';
 import Badge from '@/components/Badge';
+import FileBrowser from '@/components/FileBrowser';
 import { useSession } from '@/hooks/useSession';
 import { api, type CreateSessionRequest, type SessionConfig } from '@/lib/api';
 
@@ -55,6 +57,7 @@ export default function NewSession() {
   const [lintCommand, setLintCommand] = useState('');
   const [buildCommand, setBuildCommand] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Get configured providers
@@ -168,27 +171,33 @@ export default function NewSession() {
             </button>
           </div>
 
-          <Input
-            placeholder={
-              repoType === 'local'
-                ? '/path/to/your/project'
-                : 'https://github.com/user/repo.git'
-            }
-            value={repoPath}
-            onChange={(e) => setRepoPath(e.target.value)}
-            leftIcon={repoType === 'local' ? <FolderOpen className="h-4 w-4" /> : <GitBranch className="h-4 w-4" />}
-          />
-
-          <div className="mt-4">
+          {repoType === 'local' ? (
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <Input
+                  placeholder="/path/to/your/project"
+                  value={repoPath}
+                  onChange={(e) => setRepoPath(e.target.value)}
+                  leftIcon={<FolderOpen className="h-4 w-4" />}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShowFileBrowser(true)}
+                leftIcon={<FolderSearch className="h-4 w-4" />}
+              >
+                Browse
+              </Button>
+            </div>
+          ) : (
             <Input
-              label="Branch"
-              placeholder="main"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
+              placeholder="https://github.com/user/repo.git"
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
               leftIcon={<GitBranch className="h-4 w-4" />}
-              hint="The branch to analyze (defaults to main)"
             />
-          </div>
+          )}
         </section>
 
         {/* Provider Section */}
@@ -417,6 +426,14 @@ export default function NewSession() {
           </Button>
         </div>
       </form>
+
+      {/* File Browser Modal */}
+      <FileBrowser
+        isOpen={showFileBrowser}
+        onClose={() => setShowFileBrowser(false)}
+        onSelect={(path) => setRepoPath(path)}
+        initialPath={repoPath || undefined}
+      />
     </div>
   );
 }

@@ -20,6 +20,7 @@ import { registerCommitRoutes } from './routes/commits.js';
 import { registerMetricsRoutes } from './routes/metrics.js';
 import { registerProviderRoutes } from './routes/providers.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerFileRoutes } from './routes/files.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -122,6 +123,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   await registerMetricsRoutes(app);
   await registerProviderRoutes(app);
   await registerSettingsRoutes(app);
+  await registerFileRoutes(app);
 
   // Health check endpoint
   app.get('/health', async () => {

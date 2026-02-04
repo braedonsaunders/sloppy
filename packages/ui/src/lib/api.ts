@@ -356,6 +356,24 @@ export const api = {
 
   // Health
   health: () => request<{ status: string; version: string }>('/health'),
+
+  // Files
+  files: {
+    browse: (path?: string) => {
+      const params = path ? `?path=${encodeURIComponent(path)}` : '';
+      return request<{
+        currentPath: string;
+        parentPath: string | null;
+        entries: Array<{
+          name: string;
+          path: string;
+          type: 'file' | 'directory';
+          size?: number;
+          modifiedAt?: string;
+        }>;
+      }>(`/files/browse${params}`);
+    },
+  },
 };
 
 export default api;

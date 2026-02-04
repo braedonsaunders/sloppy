@@ -8,3 +8,4 @@ export { registerCommitRoutes } from './commits.js';
 export { registerMetricsRoutes } from './metrics.js';
 export { registerProviderRoutes } from './providers.js';
 export { registerSettingsRoutes } from './settings.js';
+export { registerFileRoutes } from './files.js';
