@@ -105,6 +105,14 @@ function ProvidersTab() {
     },
   });
 
+  const selectModelMutation = useMutation({
+    mutationFn: ({ providerId, model }: { providerId: string; model: string }) =>
+      api.providers.selectModel(providerId, model),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['providers'] });
+    },
+  });
+
   // Set default selected provider when providers load
   useEffect(() => {
     if (providers && providers.length > 0 && !selectedProviderId) {
@@ -192,6 +200,10 @@ function ProvidersTab() {
               ? testMutation.data
               : null
           }
+          selectedModel={selectedProvider.selectedModel}
+          onSelectModel={(model) =>
+            selectModelMutation.mutate({ providerId: selectedProvider.id, model })
+          }
         />
       ) : (
         <div className="text-center py-12">
@@ -245,6 +257,8 @@ interface ProviderCardProps {
   isTesting: boolean;
   isRefreshing: boolean;
   testResult: { success: boolean; message?: string } | null;
+  selectedModel: string | null;
+  onSelectModel: (model: string) => void;
 }
 
 function ProviderCard({
@@ -256,6 +270,8 @@ function ProviderCard({
   isTesting,
   isRefreshing,
   testResult,
+  selectedModel,
+  onSelectModel,
 }: ProviderCardProps) {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -366,11 +382,11 @@ function ProviderCard({
           />
         )}
 
-        {/* Available Models */}
+        {/* Model Selection */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="block text-sm font-medium text-dark-200">
-              Available Models ({provider.models.length})
+              Model ({provider.models.length} available)
             </label>
             <Button
               variant="ghost"
@@ -384,15 +400,17 @@ function ProviderCard({
             </Button>
           </div>
           {provider.models.length > 0 ? (
-            <div className="max-h-32 overflow-y-auto rounded-lg border border-dark-700 bg-dark-850 p-2">
-              <div className="flex flex-wrap gap-1.5">
-                {provider.models.map((model) => (
-                  <Badge key={model} variant="neutral" size="sm">
-                    {model}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <Select
+              options={[
+                { value: '', label: 'Select a model...' },
+                ...provider.models.map((model) => ({
+                  value: model,
+                  label: model,
+                })),
+              ]}
+              value={selectedModel || ''}
+              onChange={(e) => onSelectModel(e.target.value)}
+            />
           ) : (
             <div className="rounded-lg border border-dark-700 bg-dark-850 p-3 text-center">
               <p className="text-sm text-dark-500">

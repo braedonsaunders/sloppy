@@ -140,6 +140,7 @@ export interface Provider {
   name: string;
   models: string[];
   configured: boolean;
+  selectedModel: string | null;
 }
 
 export interface ProviderConfig {
@@ -329,6 +330,15 @@ export const api = {
       request<{ provider: Provider; modelsFound: number }>(
         `/providers/${providerId}/refresh-models`,
         { method: 'POST' }
+      ),
+
+    selectModel: (providerId: string, model: string) =>
+      request<Provider>(
+        `/providers/${providerId}/select-model`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ model }),
+        }
       ),
   },
 
