@@ -44,7 +44,7 @@ export interface SloppyServer {
 export async function createServer(options: ServerOptions = {}): Promise<SloppyServer> {
   const {
     host = '0.0.0.0',
-    port = 3000,
+    port = 7749,
     dbPath = join(__dirname, '..', 'data', 'sloppy.db'),
     staticDir = join(__dirname, '..', '..', 'ui', 'dist'),
     corsOrigin = true,
@@ -186,8 +186,9 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
 
   // Graceful shutdown handling
   let isShuttingDown = false;
+  const SHUTDOWN_TIMEOUT_MS = 10000; // 10 seconds max for graceful shutdown
 
-  async function shutdown(signal: string): Promise<void> {
+  async function shutdown(signal: string, exitCode = 0): Promise<void> {
     if (isShuttingDown) {
       app.log.warn(`[server] Already shutting down, ignoring ${signal}`);
       return;
@@ -196,6 +197,12 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
     isShuttingDown = true;
     app.log.info(`[server] Received ${signal}, starting graceful shutdown...`);
 
+    // Set a timeout to force exit if graceful shutdown takes too long
+    const forceExitTimeout = setTimeout(() => {
+      app.log.error('[server] Shutdown timeout exceeded, forcing exit');
+      process.exit(exitCode || 1);
+    }, SHUTDOWN_TIMEOUT_MS);
+
     try {
       // Close session manager first (stops active sessions)
       await closeSessionManager();
@@ -203,26 +210,42 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
       // Close WebSocket connections
       closeWebSocketHandler();
 
-      // Close server
+      // Close server (releases the port)
       await app.close();
 
       // Close database
       closeDatabase();
 
+      clearTimeout(forceExitTimeout);
       app.log.info('[server] Graceful shutdown complete');
+
+      // Exit the process to ensure port is fully released
+      process.exit(exitCode);
     } catch (error) {
+      clearTimeout(forceExitTimeout);
       app.log.error({ error }, '[server] Error during shutdown');
-      throw error;
+      process.exit(1);
     }
   }
 
-  // Register signal handlers
+  // Register signal handlers for graceful shutdown
   process.on('SIGTERM', () => {
     void shutdown('SIGTERM');
   });
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT');
+  });
+
+  // Handle uncaught errors to ensure cleanup
+  process.on('uncaughtException', (error) => {
+    app.log.error({ error }, '[server] Uncaught exception');
+    void shutdown('uncaughtException', 1);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    app.log.error({ reason, promise }, '[server] Unhandled promise rejection');
+    void shutdown('unhandledRejection', 1);
   });
 
   // Start function
@@ -237,9 +260,26 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
     }
   }
 
-  // Stop function
+  // Stop function (for programmatic use - doesn't exit process)
   async function stop(): Promise<void> {
-    await shutdown('manual');
+    if (isShuttingDown) {
+      app.log.warn('[server] Already shutting down');
+      return;
+    }
+
+    isShuttingDown = true;
+    app.log.info('[server] Stopping server...');
+
+    try {
+      await closeSessionManager();
+      closeWebSocketHandler();
+      await app.close();
+      closeDatabase();
+      app.log.info('[server] Server stopped');
+    } catch (error) {
+      app.log.error({ error }, '[server] Error during stop');
+      throw error;
+    }
   }
 
   return { app, start, stop };
