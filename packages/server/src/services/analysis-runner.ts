@@ -44,9 +44,27 @@ interface AnalysisResult {
 type AnalyzeFn = (
   rootDir: string,
   options?: { include?: string[]; exclude?: string[] },
-  config?: { analyzers?: string[]; concurrency?: number; deduplicate?: boolean; sortBySeverity?: boolean },
+  config?: {
+    analyzers?: string[];
+    concurrency?: number;
+    deduplicate?: boolean;
+    sortBySeverity?: boolean;
+    analyzerConfigs?: Record<string, Record<string, unknown>>;
+  },
   onProgress?: (progress: { analyzer: string; status: string; issueCount?: number }) => void
 ) => Promise<AnalysisResult>;
+
+// Provider row type from database
+interface ProviderRow {
+  id: string;
+  name: string;
+  api_key: string | null;
+  base_url: string | null;
+  models: string;
+  configured: number;
+  options: string;
+  selected_model: string | null;
+}
 
 export interface AnalysisRunnerOptions {
   db: SloppyDatabase;
@@ -175,6 +193,9 @@ export class AnalysisRunner {
         );
       }
 
+      // Get LLM config from database
+      const llmConfig = this.getLLMConfig(session);
+
       // Run analysis
       const result = await analyze(
         session.repo_path,
@@ -187,6 +208,9 @@ export class AnalysisRunner {
           concurrency: 4,
           deduplicate: true,
           sortBySeverity: true,
+          analyzerConfigs: {
+            llm: llmConfig,
+          },
         },
         (progress) => {
           // Broadcast progress
@@ -300,6 +324,80 @@ export class AnalysisRunner {
    */
   isAnalysisRunning(sessionId: string): boolean {
     return this.runningAnalyses.has(sessionId);
+  }
+
+  /**
+   * Get LLM analyzer configuration from the database
+   * Fetches the configured provider's API key and settings
+   */
+  private getLLMConfig(session: Session): Record<string, unknown> {
+    const rawDb = this.db.getRawDb();
+
+    // Check if session has provider_config (stored as JSON string in database)
+    let sessionConfig: { providerId?: string; model?: string } | null = null;
+    try {
+      const parsed = JSON.parse(session.provider_config || '{}');
+      sessionConfig = parsed;
+    } catch {
+      // Ignore parse errors
+    }
+    let providerId = sessionConfig?.providerId;
+
+    // Fallback to default provider from settings
+    if (!providerId) {
+      const settingStmt = rawDb.prepare('SELECT value FROM settings WHERE key = ?');
+      const defaultProviderRow = settingStmt.get('defaultProvider') as { value: string } | undefined;
+      if (defaultProviderRow) {
+        try {
+          providerId = JSON.parse(defaultProviderRow.value) as string;
+        } catch {
+          providerId = 'claude'; // Fallback
+        }
+      } else {
+        providerId = 'claude';
+      }
+    }
+
+    // Fetch provider config from database
+    const providerStmt = rawDb.prepare(`
+      SELECT id, name, api_key, base_url, models, configured, options, selected_model
+      FROM providers
+      WHERE id = ?
+    `);
+    const provider = providerStmt.get(providerId) as ProviderRow | undefined;
+
+    if (!provider) {
+      this.logger.warn(`[analysis-runner] Provider '${providerId}' not found in database`);
+      return {};
+    }
+
+    if (!provider.api_key && providerId !== 'ollama') {
+      this.logger.warn(`[analysis-runner] No API key configured for provider '${providerId}'. LLM analysis will be skipped.`);
+      return {};
+    }
+
+    // Get model - from session config, provider's selected model, or default
+    let model = sessionConfig?.model ?? provider.selected_model;
+    if (!model) {
+      const modelSettingStmt = rawDb.prepare('SELECT value FROM settings WHERE key = ?');
+      const defaultModelRow = modelSettingStmt.get('defaultModel') as { value: string } | undefined;
+      if (defaultModelRow) {
+        try {
+          model = JSON.parse(defaultModelRow.value) as string;
+        } catch {
+          // Use provider default
+        }
+      }
+    }
+
+    this.logger.info(`[analysis-runner] Using LLM provider: ${providerId}, model: ${model ?? 'default'}`);
+
+    return {
+      apiKey: provider.api_key,
+      provider: providerId,
+      model: model ?? undefined,
+      baseUrl: provider.base_url ?? undefined,
+    };
   }
 
   /**
