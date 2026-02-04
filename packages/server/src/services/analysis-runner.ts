@@ -155,12 +155,13 @@ export class AnalysisRunner {
       });
 
       // Dynamically import @sloppy/analyzers
-      // Use createRequire to handle workspace package resolution properly
+      // Use createRequire.resolve to find the package, then dynamic import
       let analyze: AnalyzeFn;
       try {
         const require = createRequire(import.meta.url);
+        const analyzerPath = require.resolve('@sloppy/analyzers');
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const analyzerModule = require('@sloppy/analyzers') as any;
+        const analyzerModule = (await import(analyzerPath)) as any;
         analyze = analyzerModule.analyze as AnalyzeFn;
       } catch (importError) {
         const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
