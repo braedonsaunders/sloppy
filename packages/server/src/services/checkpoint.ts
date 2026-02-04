@@ -11,8 +11,8 @@ import {
   SessionMetrics,
   Logger,
   DatabaseCheckpoint,
-} from './types';
-import { IssueTracker } from './issue-tracker';
+} from './types.js';
+import { IssueTracker } from './issue-tracker.js';
 
 // ============================================================================
 // Types

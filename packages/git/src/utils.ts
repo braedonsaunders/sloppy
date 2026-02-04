@@ -2,7 +2,7 @@
  * Git utility functions for @sloppy/git
  */
 
-import { ParsedGitUrl } from './types';
+import { ParsedGitUrl } from './types.js';
 
 /**
  * Validates if a string is a valid commit hash (full or abbreviated)

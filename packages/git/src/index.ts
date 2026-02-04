@@ -25,7 +25,7 @@
  */
 
 // Main class export
-export { GitManager } from './manager';
+export { GitManager } from './manager.js';
 
 // Type exports
 export {
@@ -45,7 +45,7 @@ export {
   DangerousOperationError,
   RefNotFoundError,
   UncommittedChangesError,
-} from './types';
+} from './types.js';
 
 // Diff parser exports
 export {
@@ -57,7 +57,7 @@ export {
   formatDiff,
   invertDiff,
   getAffectedFiles,
-} from './diff-parser';
+} from './diff-parser.js';
 
 // Utility exports
 export {
@@ -73,4 +73,4 @@ export {
   isPathWithinRepo,
   normalizeGitPath,
   isSafeRefName,
-} from './utils';
+} from './utils.js';

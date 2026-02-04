@@ -9,7 +9,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import Button from '@/components/Button';
-import Badge, { StatusBadge } from '@/components/Badge';
+import { StatusBadge } from '@/components/Badge';
 import ProgressBar from '@/components/ProgressBar';
 import { useSessions } from '@/hooks/useSession';
 import type { Session } from '@/lib/api';

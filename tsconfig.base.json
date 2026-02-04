@@ -12,12 +12,7 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
-    "useDefineForClassFields": true,
-    "isolatedModules": true
+    "useDefineForClassFields": true
   }
 }

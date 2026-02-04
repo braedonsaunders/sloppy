@@ -35,32 +35,5 @@ export {
   type ProgressCallback,
 } from './orchestrator.js';
 
-/**
- * Create all default analyzers
- */
-export function createAnalyzers(): Map<string, BaseAnalyzer> {
-  const { StubAnalyzer } = require('./stubs/index.js');
-  const { DuplicateAnalyzer } = require('./duplicates/index.js');
-  const { BugAnalyzer } = require('./bugs/index.js');
-  const { TypeAnalyzer } = require('./types/index.js');
-  const { CoverageAnalyzer } = require('./coverage/index.js');
-  const { LintAnalyzer } = require('./lint/index.js');
-  const { SecurityAnalyzer } = require('./security/index.js');
-  const { DeadCodeAnalyzer } = require('./dead-code/index.js');
-
-  return new Map([
-    ['stub', new StubAnalyzer()],
-    ['duplicate', new DuplicateAnalyzer()],
-    ['bug', new BugAnalyzer()],
-    ['type', new TypeAnalyzer()],
-    ['coverage', new CoverageAnalyzer()],
-    ['lint', new LintAnalyzer()],
-    ['security', new SecurityAnalyzer()],
-    ['dead-code', new DeadCodeAnalyzer()],
-  ]);
-}
-
-/**
- * Default export - the main analyze function
- */
-export default analyze;
+// Re-export analyze as default
+export { analyze as default } from './orchestrator.js';

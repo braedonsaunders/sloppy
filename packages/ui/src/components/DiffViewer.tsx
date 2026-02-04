@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react';
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
-import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import Button from './Button';
@@ -84,7 +83,7 @@ export default function DiffViewer({
   newTitle = 'Modified',
   splitView = true,
   showDiffOnly = true,
-  language,
+  language: _language,
   className,
   collapsible = false,
   defaultExpanded = true,

@@ -11,7 +11,7 @@ import {
   IssueFilter,
   Logger,
   DatabaseIssue,
-} from './types';
+} from './types.js';
 
 // ============================================================================
 // Types

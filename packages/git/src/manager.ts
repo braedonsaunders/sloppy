@@ -2,7 +2,7 @@
  * GitManager - Comprehensive git operations handler for Sloppy
  */
 
-import simpleGit, { SimpleGit, StatusResult, LogResult } from 'simple-git';
+import { simpleGit, SimpleGit, StatusResult, LogResult } from 'simple-git';
 import * as path from 'path';
 import {
   CommitInfo,
@@ -14,7 +14,7 @@ import {
   DangerousOperationError,
   RefNotFoundError,
   UncommittedChangesError,
-} from './types';
+} from './types.js';
 import {
   isValidCommitHash,
   sanitizeBranchName,
@@ -23,7 +23,7 @@ import {
   generateTimestamp,
   isPathWithinRepo,
   normalizeGitPath,
-} from './utils';
+} from './utils.js';
 
 /** Prefix for Sloppy-created checkpoints */
 const SLOPPY_CHECKPOINT_PREFIX = 'sloppy-checkpoint/';
@@ -839,14 +839,14 @@ export class GitManager {
           ]);
 
           const parts = showResult.trim().split(' ');
-          const hash = parts[0];
-          const dateStr = parts[1];
+          const hash = parts[0] ?? '';
+          const dateStr = parts[1] ?? '';
           const message = parts.slice(2).join(' ') || null;
 
           checkpoints.push({
             name: tag,
             hash,
-            createdAt: new Date(dateStr),
+            createdAt: dateStr ? new Date(dateStr) : new Date(),
             message,
             isSloppyCheckpoint,
           });

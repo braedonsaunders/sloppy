@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -7,9 +7,7 @@ import {
   Square,
   Clock,
   GitCommit,
-  AlertCircle,
   CheckCircle,
-  Filter,
   RefreshCw,
   Trash2,
 } from 'lucide-react';
@@ -20,13 +18,13 @@ import IssueCard from '@/components/IssueCard';
 import CommitCard from '@/components/CommitCard';
 import ActivityLog, { ActivityIndicator } from '@/components/ActivityLog';
 import MetricsChart from '@/components/MetricsChart';
-import Modal, { ConfirmModal } from '@/components/Modal';
+import { ConfirmModal } from '@/components/Modal';
 import Select from '@/components/Select';
 import Input from '@/components/Input';
 import { useSession } from '@/hooks/useSession';
 import { useSessionWebSocket } from '@/hooks/useWebSocket';
 import { useSessionStore } from '@/stores/session';
-import { useIssuesStore, selectFilteredIssues, selectIssueStats } from '@/stores/issues';
+import { useIssuesStore, selectFilteredIssues, selectIssueStats, type IssueFilter } from '@/stores/issues';
 import { api } from '@/lib/api';
 
 type Tab = 'issues' | 'commits' | 'activity' | 'metrics';
@@ -339,8 +337,8 @@ export default function Session() {
 
 interface IssuesPanelProps {
   issues: ReturnType<typeof selectFilteredIssues>;
-  filters: ReturnType<typeof useIssuesStore>['filters'];
-  onSetFilters: (filters: any) => void;
+  filters: IssueFilter;
+  onSetFilters: (filters: IssueFilter) => void;
   onClearFilters: () => void;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
@@ -373,7 +371,7 @@ function IssuesPanel({
             { value: 'skipped', label: 'Skipped' },
           ]}
           value={filters.status || ''}
-          onChange={(e) => onSetFilters({ status: e.target.value || undefined })}
+          onChange={(e) => onSetFilters({ status: (e.target.value || undefined) as IssueFilter['status'] })}
           className="w-40"
         />
         <Select
@@ -387,7 +385,7 @@ function IssuesPanel({
             { value: 'style', label: 'Style' },
           ]}
           value={filters.type || ''}
-          onChange={(e) => onSetFilters({ type: e.target.value || undefined })}
+          onChange={(e) => onSetFilters({ type: (e.target.value || undefined) as IssueFilter['type'] })}
           className="w-40"
         />
         <Input

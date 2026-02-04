@@ -25,12 +25,12 @@ import {
   Logger,
   OrchestratorConfig,
   DEFAULT_ORCHESTRATOR_CONFIG,
-} from './types';
-import { SloppyEventEmitter } from './event-emitter';
-import { VerificationService, extractVerificationErrors } from './verification';
-import { IssueTracker, DatabaseAdapter as IssueDbAdapter } from './issue-tracker';
-import { CheckpointService, CheckpointDatabaseAdapter } from './checkpoint';
-import { MetricsCollector, MetricsDatabaseAdapter } from './metrics-collector';
+} from './types.js';
+import { SloppyEventEmitter } from './event-emitter.js';
+import { VerificationService, extractVerificationErrors } from './verification.js';
+import { IssueTracker, DatabaseAdapter as IssueDbAdapter } from './issue-tracker.js';
+import { CheckpointService, CheckpointDatabaseAdapter } from './checkpoint.js';
+import { MetricsCollector, MetricsDatabaseAdapter } from './metrics-collector.js';
 
 // ============================================================================
 // Types

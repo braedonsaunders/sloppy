@@ -20,7 +20,7 @@ import {
   SloppyEvent,
   SessionStatus,
   Logger,
-} from './services/types';
+} from './services/types.js';
 import {
   Orchestrator,
   createOrchestrator,
@@ -28,24 +28,24 @@ import {
   SessionDatabaseAdapter,
   AIProvider,
   CodeAnalyzer,
-} from './services/orchestrator';
-import { createEventEmitter, SloppyEventEmitter } from './services/event-emitter';
-import { createVerificationService, VerificationService } from './services/verification';
+} from './services/orchestrator.js';
+import { createEventEmitter, SloppyEventEmitter } from './services/event-emitter.js';
+import { createVerificationService, VerificationService } from './services/verification.js';
 import {
   createIssueTracker,
   IssueTracker,
   InMemoryDatabaseAdapter as IssueDbAdapter,
-} from './services/issue-tracker';
+} from './services/issue-tracker.js';
 import {
   createCheckpointService,
   CheckpointService,
   InMemoryCheckpointDatabaseAdapter as CheckpointDbAdapter,
-} from './services/checkpoint';
+} from './services/checkpoint.js';
 import {
   createMetricsCollector,
   MetricsCollector,
   InMemoryMetricsDatabaseAdapter as MetricsDbAdapter,
-} from './services/metrics-collector';
+} from './services/metrics-collector.js';
 
 // ============================================================================
 // Types
@@ -480,7 +480,7 @@ class WorkerRunner {
       this.orchestrator = createOrchestrator(session, deps, sessionDb);
 
       // Set up event forwarding
-      this.eventEmitter.onAny((event) => {
+      this.eventEmitter.onAny((event: SloppyEvent) => {
         this.sendEvent(event);
       });
 
@@ -616,7 +616,7 @@ class WorkerRunner {
   private createAIProvider(): AIProvider {
     // Placeholder AI provider - in production, would connect to real AI service
     return {
-      async generateFix(request) {
+      async generateFix(_request: unknown) {
         // This is a stub - real implementation would call AI service
         return {
           success: false,
@@ -629,7 +629,7 @@ class WorkerRunner {
   private createAnalyzer(): CodeAnalyzer {
     // Placeholder analyzer - in production, would use real analyzers
     return {
-      async analyze(repositoryPath, types, excludePatterns) {
+      async analyze(_repositoryPath: string, _types?: string[], _excludePatterns?: string[]) {
         // This is a stub - real implementation would run analyzers
         return [];
       },
