@@ -4,6 +4,7 @@
  */
 
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import {
   SloppyDatabase,
   type Session,
@@ -160,8 +161,10 @@ export class AnalysisRunner {
       try {
         const require = createRequire(import.meta.url);
         const analyzerPath = require.resolve('@sloppy/analyzers');
+        // Convert to file:// URL for Windows compatibility
+        const analyzerUrl = pathToFileURL(analyzerPath).href;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const analyzerModule = (await import(analyzerPath)) as any;
+        const analyzerModule = (await import(analyzerUrl)) as any;
         analyze = analyzerModule.analyze as AnalyzeFn;
       } catch (importError) {
         const importErrorMsg = importError instanceof Error ? importError.message : String(importError);
