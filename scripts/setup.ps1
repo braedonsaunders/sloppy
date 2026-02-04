@@ -39,13 +39,107 @@ function Compare-Version {
     return $true
 }
 
+# Function to check if Visual Studio Build Tools are installed
+function Test-BuildTools {
+    # Check for VS Build Tools via vswhere
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vsPath) {
+            return $true
+        }
+    }
+
+    # Alternative check: look for cl.exe in common locations
+    $commonPaths = @(
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe"
+    )
+
+    foreach ($path in $commonPaths) {
+        if (Get-ChildItem -Path $path -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+# Function to install Visual Studio Build Tools
+function Install-BuildTools {
+    Write-Host ""
+    Write-Host "Visual Studio Build Tools are required to compile native modules." -ForegroundColor Yellow
+    Write-Host ""
+
+    # Check if winget is available
+    if (Test-Command "winget") {
+        Write-Host "Installing Visual Studio Build Tools via winget..." -ForegroundColor Yellow
+        Write-Host "This may take several minutes and require ~6-8 GB of disk space." -ForegroundColor Gray
+        Write-Host ""
+
+        try {
+            # Install Build Tools with C++ workload
+            $process = Start-Process -FilePath "winget" -ArgumentList "install", "Microsoft.VisualStudio.2022.BuildTools", "--override", "`"--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended`"" -Wait -PassThru -NoNewWindow
+
+            if ($process.ExitCode -eq 0) {
+                Write-Host "  Visual Studio Build Tools installed successfully" -ForegroundColor Green
+                Write-Host ""
+                Write-Host "  IMPORTANT: Please restart PowerShell and run this script again." -ForegroundColor Yellow
+                Write-Host ""
+                exit 0
+            } else {
+                throw "winget exited with code $($process.ExitCode)"
+            }
+        }
+        catch {
+            Write-Host "  Automatic installation failed." -ForegroundColor Red
+            Write-Host ""
+        }
+    }
+
+    # Manual installation instructions
+    Write-Host "Please install Visual Studio Build Tools manually:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  1. Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/" -ForegroundColor Gray
+    Write-Host "  2. Run the installer" -ForegroundColor Gray
+    Write-Host "  3. Select 'Desktop development with C++' workload" -ForegroundColor Gray
+    Write-Host "  4. Click Install" -ForegroundColor Gray
+    Write-Host "  5. Restart PowerShell and run this script again" -ForegroundColor Gray
+    Write-Host ""
+
+    # Offer to open the download page
+    $response = Read-Host "Would you like to open the download page now? (y/n)"
+    if ($response -eq 'y' -or $response -eq 'Y') {
+        Start-Process "https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+    }
+
+    exit 1
+}
+
 # Step 1: Check Node.js
-Write-Host "[1/6] Checking Node.js..." -ForegroundColor Yellow
+Write-Host "[1/7] Checking Node.js..." -ForegroundColor Yellow
 
 if (-not (Test-Command "node")) {
     Write-Host ""
     Write-Host "Node.js is not installed!" -ForegroundColor Red
     Write-Host ""
+
+    # Try to install via winget
+    if (Test-Command "winget") {
+        Write-Host "Installing Node.js via winget..." -ForegroundColor Yellow
+        try {
+            winget install OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements
+            Write-Host ""
+            Write-Host "  Node.js installed. Please restart PowerShell and run this script again." -ForegroundColor Yellow
+            exit 0
+        }
+        catch {
+            Write-Host "  Automatic installation failed." -ForegroundColor Red
+        }
+    }
+
     Write-Host "Please install Node.js v22 or later:" -ForegroundColor White
     Write-Host "  1. Download from: https://nodejs.org/" -ForegroundColor Gray
     Write-Host "  2. Choose the LTS version (must be 22+)" -ForegroundColor Gray
@@ -73,7 +167,7 @@ if (-not (Compare-Version -Current $nodeVersion -Required $requiredNode)) {
 Write-Host "  Node.js v$nodeVersion" -ForegroundColor Green
 
 # Step 2: Check/Install pnpm
-Write-Host "[2/6] Checking pnpm..." -ForegroundColor Yellow
+Write-Host "[2/7] Checking pnpm..." -ForegroundColor Yellow
 
 if (-not (Test-Command "pnpm")) {
     Write-Host "  pnpm not found, installing..." -ForegroundColor Yellow
@@ -101,12 +195,27 @@ if (-not (Test-Command "pnpm")) {
 }
 
 # Step 3: Check Git
-Write-Host "[3/6] Checking Git..." -ForegroundColor Yellow
+Write-Host "[3/7] Checking Git..." -ForegroundColor Yellow
 
 if (-not (Test-Command "git")) {
     Write-Host ""
     Write-Host "Git is not installed!" -ForegroundColor Red
     Write-Host ""
+
+    # Try to install via winget
+    if (Test-Command "winget") {
+        Write-Host "Installing Git via winget..." -ForegroundColor Yellow
+        try {
+            winget install Git.Git --accept-source-agreements --accept-package-agreements
+            Write-Host ""
+            Write-Host "  Git installed. Please restart PowerShell and run this script again." -ForegroundColor Yellow
+            exit 0
+        }
+        catch {
+            Write-Host "  Automatic installation failed." -ForegroundColor Red
+        }
+    }
+
     Write-Host "Please install Git:" -ForegroundColor White
     Write-Host "  Download from: https://git-scm.com/download/win" -ForegroundColor Gray
     Write-Host ""
@@ -116,27 +225,73 @@ if (-not (Test-Command "git")) {
 $gitVersion = (git --version) -replace 'git version ', ''
 Write-Host "  Git $gitVersion" -ForegroundColor Green
 
-# Step 4: Install dependencies
-Write-Host "[4/6] Installing dependencies..." -ForegroundColor Yellow
+# Step 4: Check Visual Studio Build Tools
+Write-Host "[4/7] Checking Visual Studio Build Tools..." -ForegroundColor Yellow
 
+if (-not (Test-BuildTools)) {
+    Install-BuildTools
+}
+
+Write-Host "  Build tools found" -ForegroundColor Green
+
+# Step 5: Install dependencies
+Write-Host "[5/7] Installing dependencies..." -ForegroundColor Yellow
+
+# Clean up any previous failed installs
+if (Test-Path "node_modules\.pnpm\better-sqlite3*") {
+    $hasBuildError = Get-ChildItem -Path "node_modules\.pnpm\better-sqlite3*" -Recurse -Filter "*.node" -ErrorAction SilentlyContinue
+    if (-not $hasBuildError) {
+        Write-Host "  Cleaning up previous failed install..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force "node_modules" -ErrorAction SilentlyContinue
+    }
+}
+
+$installSuccess = $false
 try {
-    pnpm install
-    Write-Host "  Dependencies installed" -ForegroundColor Green
+    $output = pnpm install 2>&1
+    $installSuccess = $LASTEXITCODE -eq 0
+
+    # Check for node-gyp errors in output
+    if ($output -match "gyp ERR!" -or $output -match "node-gyp rebuild") {
+        $installSuccess = $false
+    }
 }
 catch {
-    Write-Host ""
-    Write-Host "Failed to install dependencies." -ForegroundColor Red
-    Write-Host ""
-    Write-Host "Common fixes:" -ForegroundColor White
-    Write-Host "  1. Delete node_modules and pnpm-lock.yaml, then retry" -ForegroundColor Gray
-    Write-Host "  2. Run: npm install -g windows-build-tools (as Admin)" -ForegroundColor Gray
-    Write-Host "  3. Install Visual Studio Build Tools" -ForegroundColor Gray
-    Write-Host ""
-    exit 1
+    $installSuccess = $false
 }
 
-# Step 5: Create config files
-Write-Host "[5/6] Setting up configuration..." -ForegroundColor Yellow
+if (-not $installSuccess) {
+    Write-Host ""
+    Write-Host "Dependency installation failed (likely native module compilation)." -ForegroundColor Red
+    Write-Host ""
+
+    # Check if it's a build tools issue
+    if (-not (Test-BuildTools)) {
+        Install-BuildTools
+    }
+
+    Write-Host "Retrying after cleaning up..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force "node_modules" -ErrorAction SilentlyContinue
+    Remove-Item "pnpm-lock.yaml" -ErrorAction SilentlyContinue
+
+    try {
+        pnpm install
+        Write-Host "  Dependencies installed" -ForegroundColor Green
+    }
+    catch {
+        Write-Host ""
+        Write-Host "Installation still failing. Please try:" -ForegroundColor Red
+        Write-Host "  1. Restart PowerShell (to pick up new environment variables)" -ForegroundColor Gray
+        Write-Host "  2. Run this script again" -ForegroundColor Gray
+        Write-Host ""
+        exit 1
+    }
+} else {
+    Write-Host "  Dependencies installed" -ForegroundColor Green
+}
+
+# Step 6: Create config files
+Write-Host "[6/7] Setting up configuration..." -ForegroundColor Yellow
 
 # Create .env if it doesn't exist
 if (-not (Test-Path ".env")) {
@@ -168,8 +323,8 @@ if (-not (Test-Path "sloppy.config.json")) {
     Write-Host "  sloppy.config.json already exists" -ForegroundColor Gray
 }
 
-# Step 6: Build the project
-Write-Host "[6/6] Building project..." -ForegroundColor Yellow
+# Step 7: Build the project
+Write-Host "[7/7] Building project..." -ForegroundColor Yellow
 
 try {
     pnpm build
