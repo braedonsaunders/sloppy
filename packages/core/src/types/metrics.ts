@@ -341,18 +341,9 @@ export function analyzeMetricsTrends(metrics: Metrics[]): MetricsTrends {
 
   // Get recent trend (last 5 snapshots or all if fewer)
   const recentMetrics = metrics.slice(-5);
+  // We know these exist because metrics.length >= 2 (checked above)
   const first = recentMetrics[0];
   const last = recentMetrics[recentMetrics.length - 1];
-
-  if (!first || !last) {
-    return {
-      issuesTrending: 'stable',
-      testsTrending: 'stable',
-      lintTrending: 'stable',
-      typesTrending: 'stable',
-      healthScore: 50,
-    };
-  }
 
   const determineTrend = (
     startValue: number,
@@ -362,7 +353,9 @@ export function analyzeMetricsTrends(metrics: Metrics[]): MetricsTrends {
     const threshold = 0.05; // 5% change threshold
     const change = (endValue - startValue) / (startValue || 1);
 
-    if (Math.abs(change) < threshold) return 'stable';
+    if (Math.abs(change) < threshold) {
+      return 'stable';
+    }
 
     if (lowerIsBetter) {
       return change < 0 ? 'improving' : 'worsening';
@@ -433,10 +426,10 @@ export function formatMetrics(metrics: Metrics): string {
       : 'N/A';
 
   return [
-    `Issues: ${metrics.resolvedIssues}/${metrics.totalIssues} resolved`,
-    `Tests: ${metrics.testsPassing}/${metrics.testCount} passing (${testPassRate}%)`,
-    `Lint Errors: ${metrics.lintErrors}`,
-    `Type Errors: ${metrics.typeErrors}`,
+    `Issues: ${String(metrics.resolvedIssues)}/${String(metrics.totalIssues)} resolved`,
+    `Tests: ${String(metrics.testsPassing)}/${String(metrics.testCount)} passing (${testPassRate}%)`,
+    `Lint Errors: ${String(metrics.lintErrors)}`,
+    `Type Errors: ${String(metrics.typeErrors)}`,
     metrics.coveragePercent !== undefined
       ? `Coverage: ${metrics.coveragePercent.toFixed(1)}%`
       : null,

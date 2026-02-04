@@ -151,7 +151,8 @@ function formatMeta(meta: Record<string, unknown>, useColors: boolean): string {
         formatted = '[Circular]';
       }
     } else {
-      formatted = String(value);
+      // Value is a primitive (string, number, boolean, symbol, bigint)
+      formatted = String(value as string | number | boolean | symbol | bigint);
     }
 
     if (useColors) {
@@ -187,7 +188,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     level = 'info',
     name,
     timestamps = true,
-    colors = process.stdout.isTTY ?? false,
+    colors = process.stdout.isTTY,
     output,
   } = options;
 
@@ -200,6 +201,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     if (logLevel === 'error') {
       console.error(message);
     } else {
+      // eslint-disable-next-line no-console -- Logger utility intentionally uses console.log
       console.log(message);
     }
   };
@@ -235,7 +237,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     }
 
     // Add logger name
-    if (name) {
+    if (name !== undefined && name !== '') {
       if (colors) {
         parts.push(`${COLORS.magenta}[${name}]${COLORS.reset}`);
       } else {
@@ -272,7 +274,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     },
 
     child(childName: string): Logger {
-      const fullName = name ? `${name}:${childName}` : childName;
+      const fullName = name !== undefined && name !== '' ? `${name}:${childName}` : childName;
       const childOptions: LoggerOptions = {
         level: currentLevel,
         name: fullName,
@@ -328,7 +330,7 @@ export function getLogLevelFromEnv(
   defaultLevel: LogLevel = 'info'
 ): LogLevel {
   const envValue = process.env[envVar];
-  if (envValue) {
+  if (envValue !== undefined && envValue !== '') {
     const parsed = parseLogLevel(envValue);
     if (parsed) {
       return parsed;
@@ -357,9 +359,9 @@ export function createSilentLogger(): Logger {
  */
 export function createTestLogger(): {
   logger: Logger;
-  messages: Array<{ level: LogLevel; message: string }>;
+  messages: { level: LogLevel; message: string }[];
 } {
-  const messages: Array<{ level: LogLevel; message: string }> = [];
+  const messages: { level: LogLevel; message: string }[] = [];
 
   const testLogger = createLogger({
     level: 'debug',

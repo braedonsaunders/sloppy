@@ -528,11 +528,11 @@ export function validateProviderConfig(
 ): string[] {
   const errors: string[] = [];
 
-  if (!config.type) {
+  if (config.type === undefined) {
     errors.push('Provider type is required');
   }
 
-  if (!config.model) {
+  if (config.model === undefined || config.model === '') {
     errors.push('Model is required');
   }
 
@@ -549,14 +549,14 @@ export function validateProviderConfig(
     ProviderType.COHERE,
   ];
 
-  if (apiKeyRequiredProviders.includes(config.type as ProviderType)) {
-    if (!config.apiKey) {
+  if (config.type !== undefined && apiKeyRequiredProviders.includes(config.type)) {
+    if (config.apiKey === undefined || config.apiKey === '') {
       errors.push(`API key is required for ${config.type} provider`);
     }
   }
 
   if (config.type === ProviderType.OLLAMA) {
-    if (!config.baseUrl) {
+    if (config.baseUrl === undefined || config.baseUrl === '') {
       errors.push('Base URL is required for Ollama provider');
     }
   }
