@@ -5,6 +5,10 @@
 
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { GitManager } from '@sloppy/git';
 import {
   SloppyDatabase,
   type Session,
@@ -196,9 +200,13 @@ export class AnalysisRunner {
       // Get LLM config from database
       const llmConfig = this.getLLMConfig(session);
 
-      // Run analysis
-      const result = await analyze(
-        session.repo_path,
+      // Resolve repo path - clone if it's a URL
+      const { localPath, tempDir } = await this.resolveRepoPath(session.repo_path, session.id, wsHandler);
+
+      try {
+        // Run analysis
+        const result = await analyze(
+          localPath,
         {
           include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
           exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**'],
@@ -274,6 +282,17 @@ export class AnalysisRunner {
           },
         });
       }
+      } finally {
+        // Clean up temp directory if we cloned
+        if (tempDir) {
+          try {
+            await rm(tempDir, { recursive: true, force: true });
+            this.logger.info(`[analysis-runner] Cleaned up temp directory: ${tempDir}`);
+          } catch (cleanupError) {
+            this.logger.warn(`[analysis-runner] Failed to clean up temp directory: ${tempDir}`);
+          }
+        }
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`[analysis-runner] Analysis failed for session ${session.id}: ${errorMessage}`);
@@ -324,6 +343,67 @@ export class AnalysisRunner {
    */
   isAnalysisRunning(sessionId: string): boolean {
     return this.runningAnalyses.has(sessionId);
+  }
+
+  /**
+   * Resolve repository path - clone if it's a URL, otherwise use directly
+   */
+  private async resolveRepoPath(
+    repoPath: string,
+    sessionId: string,
+    wsHandler: ReturnType<typeof getWebSocketHandler>
+  ): Promise<{ localPath: string; tempDir: string | null }> {
+    // Check if it's a URL (GitHub, GitLab, etc.)
+    const isUrl = repoPath.startsWith('http://') ||
+                  repoPath.startsWith('https://') ||
+                  repoPath.startsWith('git@');
+
+    if (!isUrl) {
+      // Local path - use directly
+      return { localPath: repoPath, tempDir: null };
+    }
+
+    // It's a URL - need to clone
+    this.logger.info(`[analysis-runner] Cloning repository: ${repoPath}`);
+    wsHandler.broadcastToSession(sessionId, {
+      type: 'activity:log',
+      data: {
+        sessionId,
+        type: 'info',
+        message: 'Cloning repository...',
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    // Create temp directory
+    const tempDir = await mkdtemp(join(tmpdir(), 'sloppy-'));
+    const localPath = join(tempDir, 'repo');
+
+    try {
+      const gitManager = new GitManager(localPath);
+      await gitManager.clone(repoPath, localPath);
+      this.logger.info(`[analysis-runner] Cloned to: ${localPath}`);
+
+      wsHandler.broadcastToSession(sessionId, {
+        type: 'activity:log',
+        data: {
+          sessionId,
+          type: 'success',
+          message: 'Repository cloned successfully',
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      return { localPath, tempDir };
+    } catch (error) {
+      // Clean up temp dir on failure
+      try {
+        await rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+      throw new Error(`Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**

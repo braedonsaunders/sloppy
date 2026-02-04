@@ -54,7 +54,9 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   } = options;
 
   // Create Fastify instance
+  // Disable request logging to reduce noise - only errors and explicit logs will show
   const app = Fastify({
+    disableRequestLogging: true, // Don't log every request/response
     logger: {
       level: logLevel,
       transport:
@@ -65,7 +67,6 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
                 colorize: true,
                 translateTime: 'HH:MM:ss Z',
                 ignore: 'pid,hostname',
-                minimumLevel: logLevel, // Filter logs at the transport level
               },
             }
           : undefined,
