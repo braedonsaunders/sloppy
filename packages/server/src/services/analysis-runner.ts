@@ -5,7 +5,7 @@
 
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -397,6 +397,22 @@ export class AnalysisRunner {
       // Use simpleGit directly since the target directory doesn't exist yet
       await simpleGit().clone(repoPath, localPath);
       this.logger.info(`[analysis-runner] Cloned to: ${localPath}`);
+
+      // List directory contents for debugging
+      try {
+        const files = await readdir(localPath);
+        this.logger.info(`[analysis-runner] Repo contents (top-level): ${files.join(', ')}`);
+
+        // Check for common source directories
+        for (const dir of ['src', 'lib', 'app', 'packages']) {
+          if (files.includes(dir)) {
+            const subFiles = await readdir(join(localPath, dir));
+            this.logger.info(`[analysis-runner] ${dir}/ contents: ${subFiles.slice(0, 10).join(', ')}${subFiles.length > 10 ? '...' : ''}`);
+          }
+        }
+      } catch (listError) {
+        this.logger.warn(`[analysis-runner] Could not list directory: ${listError}`);
+      }
 
       wsHandler.broadcastToSession(sessionId, {
         type: 'activity:log',
