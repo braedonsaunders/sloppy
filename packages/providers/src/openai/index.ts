@@ -384,7 +384,7 @@ export class OpenAIProvider extends BaseProvider {
     throw new ProviderError(String(error), 'UNKNOWN', false);
   }
 
-  private extractRetryAfter(error: InstanceType<typeof OpenAI.APIError>): number | undefined {
+  private extractRetryAfter(error: unknown): number | undefined {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
     const headers = (error as any).headers as Record<string, string> | undefined;
     if (headers !== undefined) {
