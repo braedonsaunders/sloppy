@@ -5,6 +5,8 @@
 
 import Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
+import { mkdirSync, existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { runMigrations } from './migrations.js';
 
 // Types for database entities
@@ -141,6 +143,14 @@ export class SloppyDatabase {
 
   constructor(options: DatabaseOptions) {
     this.logger = options.logger ?? console;
+
+    // Ensure parent directory exists
+    const dbDir = dirname(options.path);
+    if (!existsSync(dbDir)) {
+      mkdirSync(dbDir, { recursive: true });
+      this.logger.info(`[database] Created directory ${dbDir}`);
+    }
+
     this.db = new Database(options.path);
 
     // Enable WAL mode for better concurrent access

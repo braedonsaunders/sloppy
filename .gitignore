@@ -29,8 +29,12 @@ logs/
 npm-debug.log*
 pnpm-debug.log*
 
-# Test coverage
-coverage/
+# Test coverage (but not source code in coverage/ dirs)
+/coverage/
+**/coverage/*.json
+**/coverage/*.info
+**/coverage/lcov-report/
+!packages/*/src/coverage/
 
 # Database
 *.db
