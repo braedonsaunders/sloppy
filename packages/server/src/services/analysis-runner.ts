@@ -199,9 +199,21 @@ export class AnalysisRunner {
 
       // Get LLM config from database
       const llmConfig = this.getLLMConfig(session);
+      this.logger.info(`[analysis-runner] LLM config: provider=${llmConfig.provider ?? 'none'}, apiKey=${llmConfig.apiKey ? 'present' : 'MISSING'}, model=${llmConfig.model ?? 'default'}`);
 
       // Resolve repo path - clone if it's a URL
       const { localPath, tempDir } = await this.resolveRepoPath(session.repo_path, session.id, wsHandler);
+
+      this.logger.info(`[analysis-runner] Analysis path: ${localPath}`);
+      wsHandler.broadcastToSession(session.id, {
+        type: 'activity:log',
+        data: {
+          sessionId: session.id,
+          type: 'info',
+          message: `Analyzing path: ${localPath}`,
+          timestamp: new Date().toISOString(),
+        },
+      });
 
       try {
         // Run analysis
@@ -256,6 +268,8 @@ export class AnalysisRunner {
       });
 
       this.logger.info(`[analysis-runner] Analysis complete for session ${session.id}: ${result.issues.length} issues`);
+      this.logger.info(`[analysis-runner] Analyzers run: ${result.analyzersRun.join(', ')}`);
+      this.logger.info(`[analysis-runner] Summary: ${JSON.stringify(result.summary)}`);
 
       // Broadcast session update with new issue counts
       const stats = this.db.getSessionStats(session.id);
