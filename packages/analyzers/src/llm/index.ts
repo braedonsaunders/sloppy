@@ -654,6 +654,61 @@ Use the tools to explore the codebase and create issues for any problems you fin
   }
 
   /**
+   * Flatten tool interaction messages into regular messages.
+   * Converts assistant(tool_calls) + tool(results) sequences into
+   * regular assistant + user messages. This is needed for Gemini because:
+   * 1. Gemini 3 models require a thought_signature to be echoed back on
+   *    tool_calls, which the OpenAI SDK doesn't expose (causes 400 errors)
+   * 2. Gemini's OpenAI-compatible endpoint has limited multi-turn function
+   *    calling support in general
+   * By flattening to plain text, we avoid both issues while preserving
+   * the conversation context for the LLM.
+   */
+  private flattenToolMessages(messages: Message[]): Message[] {
+    const result: Message[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        // Convert assistant message with tool calls to regular text
+        const toolDescriptions = msg.toolCalls.map(tc =>
+          `- ${tc.name}(${JSON.stringify(tc.parameters)})`
+        ).join('\n');
+
+        result.push({
+          role: 'assistant',
+          content: `${msg.content !== '' ? msg.content + '\n\n' : ''}I called the following tools:\n${toolDescriptions}`,
+        });
+
+        // Collect all following tool result messages
+        const toolResults: string[] = [];
+        while (i + 1 < messages.length && messages[i + 1].role === 'tool') {
+          i++;
+          toolResults.push(messages[i].content);
+        }
+
+        if (toolResults.length > 0) {
+          result.push({
+            role: 'user',
+            content: `Tool results:\n${toolResults.join('\n---\n')}`,
+          });
+        }
+      } else if (msg.role === 'tool') {
+        // Orphan tool message (shouldn't normally happen)
+        result.push({
+          role: 'user',
+          content: `Tool result: ${msg.content}`,
+        });
+      } else {
+        result.push(msg);
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Call OpenAI-compatible API
    * Used for OpenAI, Ollama, Gemini, OpenRouter, DeepSeek, Mistral, Groq, Together, Cohere
    */
@@ -662,13 +717,21 @@ Use the tools to explore the codebase and create issues for any problems you fin
     toolCalls?: ToolCall[];
   }> {
     const { default: OpenAI } = await import('openai');
+    const isGemini = this.getConfig().provider === 'gemini';
     const client = new OpenAI({
       apiKey: this.getConfig().apiKey || 'ollama', // Ollama doesn't require a key
       baseURL: this.getConfig().baseUrl,
     });
 
+    // For Gemini, flatten past tool interactions into regular messages.
+    // Gemini 3 models require thought_signature on tool_calls which the
+    // OpenAI SDK doesn't expose, causing 400 errors on multi-turn calls.
+    const effectiveMessages = isGemini
+      ? this.flattenToolMessages(messages)
+      : messages;
+
     // Convert messages to OpenAI format
-    const openaiMessages = messages.map(m => {
+    const openaiMessages = effectiveMessages.map(m => {
       if (m.role === 'tool') {
         return {
           role: 'tool' as const,
@@ -679,7 +742,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
       if (m.toolCalls && m.toolCalls.length > 0) {
         return {
           role: 'assistant' as const,
-          content: m.content,
+          content: m.content || null,
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
