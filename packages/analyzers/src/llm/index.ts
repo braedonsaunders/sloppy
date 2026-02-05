@@ -679,7 +679,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
       if (m.toolCalls && m.toolCalls.length > 0) {
         return {
           role: 'assistant' as const,
-          content: m.content || null,
+          content: m.content,
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
