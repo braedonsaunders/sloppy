@@ -642,23 +642,25 @@ function IssuesPanel({
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Filters - horizontal compact row */}
+      <div className="flex items-center gap-2 overflow-x-auto">
         <Select
           options={[
-            { value: '', label: 'All statuses' },
-            { value: 'pending', label: 'Pending' },
+            { value: '', label: 'Status' },
+            { value: 'detected', label: 'Detected' },
             { value: 'in_progress', label: 'In Progress' },
-            { value: 'resolved', label: 'Resolved' },
+            { value: 'fixed', label: 'Fixed' },
+            { value: 'approved', label: 'Approved' },
+            { value: 'rejected', label: 'Rejected' },
             { value: 'skipped', label: 'Skipped' },
           ]}
           value={filters.status ?? ''}
           onChange={(e) => { onSetFilters({ status: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['status'] }); }}
-          className="w-40"
+          className="w-32 flex-shrink-0"
         />
         <Select
           options={[
-            { value: '', label: 'All types' },
+            { value: '', label: 'Type' },
             { value: 'lint', label: 'Lint' },
             { value: 'type', label: 'Type' },
             { value: 'test', label: 'Test' },
@@ -668,46 +670,46 @@ function IssuesPanel({
           ]}
           value={filters.type ?? ''}
           onChange={(e) => { onSetFilters({ type: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['type'] }); }}
-          className="w-40"
+          className="w-32 flex-shrink-0"
         />
         <Select
           options={[
-            { value: '', label: 'All severities' },
+            { value: '', label: 'Severity' },
             { value: 'error', label: 'Errors' },
             { value: 'warning', label: 'Warnings' },
             { value: 'info', label: 'Info' },
           ]}
           value={filters.severity ?? ''}
           onChange={(e) => { onSetFilters({ severity: (e.target.value !== '' ? e.target.value : undefined) as IssueFilter['severity'] }); }}
-          className="w-40"
+          className="w-32 flex-shrink-0"
         />
         <Input
-          placeholder="Search issues..."
+          placeholder="Search..."
           value={filters.search ?? ''}
           onChange={(e) => { onSetFilters({ search: e.target.value !== '' ? e.target.value : undefined }); }}
-          className="w-60"
+          className="flex-1 min-w-[120px]"
         />
         {hasFilters && (
-          <Button variant="ghost" size="sm" onClick={onClearFilters}>
-            Clear filters
+          <Button variant="ghost" size="sm" onClick={onClearFilters} className="flex-shrink-0">
+            Clear
           </Button>
         )}
       </div>
 
       {/* Fix All Bar */}
-      {approvalMode && issues.filter(i => i.status === 'pending').length > 0 && (
+      {approvalMode && issues.filter(i => i.status === 'detected').length > 0 && (
         <div className="flex items-center justify-between rounded-lg bg-accent/5 border border-accent/20 p-3">
           <div className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-accent" />
             <span className="text-sm text-dark-200">
-              {issues.filter(i => i.status === 'pending').length} issues ready to fix
+              {issues.filter(i => i.status === 'detected').length} issues ready to fix
             </span>
           </div>
           <Button
             variant="primary"
             size="sm"
             onClick={() => {
-              issues.filter(i => i.status === 'pending').forEach(i => { onApprove(i.id); });
+              issues.filter(i => i.status === 'detected').forEach(i => { onApprove(i.id); });
             }}
             leftIcon={<Zap className="h-3.5 w-3.5" />}
           >

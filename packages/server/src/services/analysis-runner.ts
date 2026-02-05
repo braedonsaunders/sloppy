@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, isAbsolute, relative } from 'node:path';
 import { simpleGit } from 'simple-git';
 import {
   SloppyDatabase,
@@ -17,6 +17,7 @@ import {
   type IssueType,
 } from '../db/database.js';
 import { getWebSocketHandler } from '../websocket/handler.js';
+import { formatIssueForClient } from '../routes/issues.js';
 
 // Types from @sloppy/analyzers (imported dynamically to avoid module resolution issues in dev)
 interface AnalysisResult {
@@ -372,31 +373,41 @@ export class AnalysisRunner {
             if (abortController.signal.aborted) break;
             if (!issue.location?.file) continue;
 
-            const filePath = join(localPath, issue.location.file);
+            // Normalize path: issue.location.file may be absolute (from convertLLMIssue) or relative
+            const issueFile = isAbsolute(issue.location.file)
+              ? issue.location.file
+              : join(localPath, issue.location.file);
+            // Also get relative path for display and DB matching
+            const relativeFile = isAbsolute(issue.location.file)
+              ? relative(localPath, issue.location.file)
+              : issue.location.file;
             try {
-              const fileContent = await readFile(filePath, 'utf-8');
+              const fileContent = await readFile(issueFile, 'utf-8');
               const fixResult = await this.generateFix(issue, fileContent, llmConfig);
 
               if (fixResult !== null) {
-                await writeFile(filePath, fixResult, 'utf-8');
+                await writeFile(issueFile, fixResult, 'utf-8');
                 fixedCount++;
 
                 // Update issue status in DB
                 const dbIssues = this.db.listIssuesBySession(session.id);
                 const matchingIssue = dbIssues.find(
                   (di: { file_path: string; description: string }) =>
-                    di.file_path === issue.location.file && di.description === issue.message
+                    (di.file_path === issue.location.file || di.file_path === relativeFile) &&
+                    di.description === issue.message
                 );
                 if (matchingIssue) {
-                  this.db.updateIssue(matchingIssue.id, { status: 'fixed', resolved_at: new Date().toISOString() });
-                  wsHandler.broadcastToSession(session.id, {
-                    type: 'issue:updated',
-                    data: { ...matchingIssue, status: 'fixed' },
-                  });
+                  const updatedIssue = this.db.updateIssue(matchingIssue.id, { status: 'fixed', resolved_at: new Date().toISOString() });
+                  if (updatedIssue) {
+                    wsHandler.broadcastToSession(session.id, {
+                      type: 'issue:updated',
+                      data: formatIssueForClient(updatedIssue),
+                    });
+                  }
                 }
 
                 this.broadcastActivity(session.id, wsHandler, 'success',
-                  `Fixed: ${issue.message.slice(0, 80)} in ${issue.location.file}`);
+                  `Fixed: ${issue.message.slice(0, 80)} in ${relativeFile}`);
               }
             } catch (fixErr) {
               const errMsg = fixErr instanceof Error ? fixErr.message : String(fixErr);
@@ -875,6 +886,17 @@ export class AnalysisRunner {
    * Generate a fix for an issue using the LLM.
    * Returns the fixed file content, or null if the fix couldn't be generated.
    */
+  private static readonly PROVIDER_BASE_URLS: Record<string, string> = {
+    openai: 'https://api.openai.com/v1',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    openrouter: 'https://openrouter.ai/api/v1',
+    deepseek: 'https://api.deepseek.com/v1',
+    mistral: 'https://api.mistral.ai/v1',
+    groq: 'https://api.groq.com/openai/v1',
+    together: 'https://api.together.xyz/v1',
+    ollama: 'http://localhost:11434/v1',
+  };
+
   private async generateFix(
     issue: { message: string; suggestion?: string; location: { file: string; line: number } },
     fileContent: string,
@@ -883,7 +905,7 @@ export class AnalysisRunner {
     const provider = (llmConfig.provider as string) ?? 'openai';
     const model = (llmConfig.model as string) ?? 'gpt-4o';
     const apiKey = (llmConfig.apiKey as string) ?? '';
-    const baseUrl = (llmConfig.baseUrl as string) ?? '';
+    const baseUrl = (llmConfig.baseUrl as string) || AnalysisRunner.PROVIDER_BASE_URLS[provider] || '';
 
     if (!apiKey) return null;
 
@@ -972,10 +994,10 @@ export class AnalysisRunner {
 
       const createdIssue = this.db.createIssue(input);
 
-      // Broadcast new issue
+      // Broadcast new issue (send formatted directly, not wrapped in { issue })
       wsHandler.broadcastToSession(sessionId, {
         type: 'issue:created',
-        data: { issue: createdIssue },
+        data: formatIssueForClient(createdIssue),
       });
     }
   }
