@@ -211,10 +211,10 @@ export const selectIssuesByStatus = (status: Issue['status']): ((state: IssuesSt
   (state: IssuesState): Issue[] => state.issues.filter((issue) => issue.status === status);
 
 export const selectPendingIssues = (state: IssuesState): Issue[] =>
-  state.issues.filter((issue) => issue.status === 'pending');
+  state.issues.filter((issue) => issue.status === 'detected');
 
 export const selectResolvedIssues = (state: IssuesState): Issue[] =>
-  state.issues.filter((issue) => issue.status === 'resolved');
+  state.issues.filter((issue) => issue.status === 'fixed' || issue.status === 'approved');
 
 interface IssueStats {
   total: number;
@@ -227,8 +227,8 @@ interface IssueStats {
 
 export const selectIssueStats = (state: IssuesState): IssueStats => {
   const total = state.issues.length;
-  const resolved = state.issues.filter((i) => i.status === 'resolved').length;
-  const pending = state.issues.filter((i) => i.status === 'pending').length;
+  const resolved = state.issues.filter((i) => i.status === 'fixed').length;
+  const pending = state.issues.filter((i) => i.status === 'detected').length;
   const inProgress = state.issues.filter((i) => i.status === 'in_progress').length;
   const skipped = state.issues.filter((i) => i.status === 'skipped').length;
 

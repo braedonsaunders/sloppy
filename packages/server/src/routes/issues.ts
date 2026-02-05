@@ -4,8 +4,32 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { getDatabase, type IssueStatus } from '../db/database.js';
+import { getDatabase, type Issue as DbIssue, type IssueStatus } from '../db/database.js';
 import { getWebSocketHandler } from '../websocket/handler.js';
+
+/**
+ * Transform a database Issue to the frontend API contract.
+ * DB uses: description, file_path, line_start, line_end, session_id, created_at, resolved_at
+ * Frontend expects: message, file, line, sessionId, createdAt, resolvedAt
+ * The frontend's normalizeKeys handles snake_case→camelCase, but NOT field renames.
+ */
+export function formatIssueForClient(issue: DbIssue): Record<string, unknown> {
+  return {
+    id: issue.id,
+    sessionId: issue.session_id,
+    type: issue.type,
+    severity: issue.severity,
+    file: issue.file_path,
+    line: issue.line_start,
+    column: undefined,
+    message: issue.description,
+    code: undefined,
+    context: issue.context,
+    status: issue.status,
+    createdAt: issue.created_at,
+    resolvedAt: issue.resolved_at,
+  };
+}
 
 // Request schemas
 const SessionIdParamsSchema = z.object({
@@ -97,7 +121,7 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
         },
       };
 
-      sendSuccess(reply, { issues, summary });
+      sendSuccess(reply, { issues: issues.map(formatIssueForClient), summary });
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
@@ -122,13 +146,7 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
 
-      // Parse JSON fields for response
-      const parsedIssue = {
-        ...issue,
-        context: issue.context ? JSON.parse(issue.context) as unknown : null,
-      };
-
-      sendSuccess(reply, parsedIssue);
+      sendSuccess(reply, formatIssueForClient(issue));
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
@@ -176,10 +194,10 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
       // Broadcast update
       wsHandler.broadcastToSession(issue.session_id, {
         type: 'issue:updated',
-        data: { issue: updated, action: 'approved' },
+        data: formatIssueForClient(updated),
       });
 
-      sendSuccess(reply, updated);
+      sendSuccess(reply, formatIssueForClient(updated));
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
@@ -243,10 +261,10 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
       // Broadcast update
       wsHandler.broadcastToSession(issue.session_id, {
         type: 'issue:updated',
-        data: { issue: finalIssue, action: 'rejected', reason: body.reason },
+        data: finalIssue ? formatIssueForClient(finalIssue) : { id: params.id, status: 'rejected' },
       });
 
-      sendSuccess(reply, finalIssue);
+      sendSuccess(reply, finalIssue ? formatIssueForClient(finalIssue) : { id: params.id });
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
@@ -292,10 +310,10 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
       // Broadcast update
       wsHandler.broadcastToSession(issue.session_id, {
         type: 'issue:updated',
-        data: { issue: updated, action: 'skipped' },
+        data: formatIssueForClient(updated),
       });
 
-      sendSuccess(reply, updated);
+      sendSuccess(reply, formatIssueForClient(updated));
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);
@@ -339,10 +357,12 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
 
       app.log.info({ issueId: params.id }, 'Fix requested for issue');
 
+      const formattedUpdated = updated ? formatIssueForClient(updated) : { id: params.id };
+
       // Broadcast update so the UI shows the issue is being worked on
       wsHandler.broadcastToSession(issue.session_id, {
         type: 'issue:updated',
-        data: { issue: updated, action: 'fix_requested' },
+        data: formattedUpdated,
       });
 
       // Broadcast activity log
@@ -354,7 +374,7 @@ export async function registerIssueRoutes(app: FastifyInstance): Promise<void> {
         },
       });
 
-      sendSuccess(reply, { issue: updated, message: 'Fix queued for processing' }, 202);
+      sendSuccess(reply, { issue: formattedUpdated, message: 'Fix queued for processing' }, 202);
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);

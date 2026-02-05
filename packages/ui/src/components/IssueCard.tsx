@@ -39,12 +39,14 @@ const severityIcons: Record<string, typeof AlertCircle> = {
   error: AlertCircle,
   warning: AlertTriangle,
   info: Info,
+  hint: Info,
 };
 
-const severityColors = {
+const severityColors: Record<string, string> = {
   error: 'border-error/30 bg-error/5',
   warning: 'border-warning/30 bg-warning/5',
   info: 'border-accent/30 bg-accent/5',
+  hint: 'border-dark-600 bg-dark-800',
 };
 
 export default function IssueCard({
@@ -80,7 +82,7 @@ export default function IssueCard({
   };
 
   const SeverityIcon = severityIcons[issue.severity] ?? Info;
-  const isPending = issue.status === 'pending';
+  const isPending = issue.status === 'detected';
   const canApprove = isPending && onApprove !== undefined;
   const canReject = isPending && onReject !== undefined;
   const canSkip = isPending && onSkip !== undefined;
@@ -93,7 +95,7 @@ export default function IssueCard({
       className={twMerge(
         clsx(
           'rounded-lg border bg-dark-800 transition-all duration-200',
-          issue.status === 'resolved'
+          issue.status === 'fixed'
             ? 'border-success/30 bg-success/5'
             : issue.status === 'rejected'
             ? 'border-error/30 bg-error/5'
@@ -436,7 +438,7 @@ export function IssueDetailView({
 }: IssueDetailViewProps): JSX.Element {
   const [copied, setCopied] = useState(false);
   const SeverityIcon = severityIcons[issue.severity] ?? Info;
-  const isPending = issue.status === 'pending';
+  const isPending = issue.status === 'detected';
   const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
 
   const handleCopy = (text: string): void => {

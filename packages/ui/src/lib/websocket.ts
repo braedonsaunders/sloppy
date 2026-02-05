@@ -30,7 +30,11 @@ export type WebSocketMessageType =
   | 'activity:log'
   | 'metrics:update'
   | 'ping'
-  | 'pong';
+  | 'pong'
+  | 'subscribe'
+  | 'unsubscribe'
+  | 'subscribed'
+  | 'unsubscribed';
 
 export interface WebSocketMessage<T = unknown> {
   type: WebSocketMessageType;
@@ -68,6 +72,7 @@ export class WebSocketClient {
   private isConnecting = false;
   private intentionalClose = false;
   private messageQueue: Omit<WebSocketMessage, 'timestamp'>[] = [];
+  private joinedSessions = new Set<string>();
 
   constructor(options: WebSocketClientOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -136,6 +141,24 @@ export class WebSocketClient {
     return this.subscribe(type, wrappedHandler);
   }
 
+  /**
+   * Join a session room on the server so broadcastToSession events are received
+   */
+  joinSession(sessionId: string): void {
+    if (this.joinedSessions.has(sessionId)) return;
+    this.joinedSessions.add(sessionId);
+    this.send({ type: 'subscribe', sessionId, payload: {} });
+  }
+
+  /**
+   * Leave a session room on the server
+   */
+  leaveSession(sessionId: string): void {
+    if (!this.joinedSessions.has(sessionId)) return;
+    this.joinedSessions.delete(sessionId);
+    this.send({ type: 'unsubscribe', sessionId, payload: {} });
+  }
+
   send(message: Omit<WebSocketMessage, 'timestamp'>): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
       this.messageQueue.push(message);
@@ -169,6 +192,10 @@ export class WebSocketClient {
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      // Re-join session rooms after reconnect
+      for (const sid of this.joinedSessions) {
+        this.ws?.send(JSON.stringify({ type: 'subscribe', sessionId: sid, timestamp: new Date().toISOString() }));
+      }
       this.flushQueue();
     };
 

@@ -71,7 +71,7 @@ export function StatusBadge({
   status,
   ...props
 }: Omit<BadgeProps, 'variant' | 'children'> & {
-  status: 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'pending' | 'in_progress' | 'resolved' | 'skipped' | 'approved' | 'rejected';
+  status: 'running' | 'paused' | 'completed' | 'failed' | 'stopped' | 'detected' | 'in_progress' | 'fixed' | 'skipped' | 'approved' | 'rejected';
 }): JSX.Element {
   const statusConfig: Record<
     string,
@@ -82,9 +82,9 @@ export function StatusBadge({
     completed: { variant: 'success', label: 'Completed' },
     failed: { variant: 'error', label: 'Failed' },
     stopped: { variant: 'neutral', label: 'Stopped' },
-    pending: { variant: 'neutral', label: 'Pending' },
+    detected: { variant: 'neutral', label: 'Detected' },
     in_progress: { variant: 'info', label: 'In Progress' },
-    resolved: { variant: 'success', label: 'Resolved' },
+    fixed: { variant: 'success', label: 'Fixed' },
     skipped: { variant: 'neutral', label: 'Skipped' },
     approved: { variant: 'success', label: 'Approved' },
     rejected: { variant: 'error', label: 'Rejected' },
@@ -103,7 +103,7 @@ export function SeverityBadge({
   severity,
   ...props
 }: Omit<BadgeProps, 'variant' | 'children'> & {
-  severity: 'error' | 'warning' | 'info';
+  severity: 'error' | 'warning' | 'info' | 'hint';
 }): JSX.Element {
   const severityConfig: Record<
     string,
@@ -112,9 +112,10 @@ export function SeverityBadge({
     error: { variant: 'error', label: 'Error' },
     warning: { variant: 'warning', label: 'Warning' },
     info: { variant: 'info', label: 'Info' },
+    hint: { variant: 'neutral', label: 'Hint' },
   };
 
-  const config = severityConfig[severity];
+  const config = severityConfig[severity] ?? { variant: 'neutral', label: severity };
 
   return (
     <Badge variant={config.variant} {...props}>

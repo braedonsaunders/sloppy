@@ -136,14 +136,14 @@ export interface Issue {
   id: string;
   sessionId: string;
   type: 'lint' | 'type' | 'test' | 'security' | 'performance' | 'style';
-  severity: 'error' | 'warning' | 'info';
+  severity: 'error' | 'warning' | 'info' | 'hint';
   file: string;
   line?: number;
   column?: number;
   message: string;
   code?: string;
   context?: string;
-  status: 'pending' | 'in_progress' | 'resolved' | 'skipped' | 'approved' | 'rejected';
+  status: 'detected' | 'in_progress' | 'fixed' | 'approved' | 'rejected' | 'skipped';
   commitId?: string;
   createdAt: string;
   resolvedAt?: string;

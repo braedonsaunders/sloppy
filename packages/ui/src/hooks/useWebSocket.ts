@@ -146,6 +146,9 @@ export function useSessionWebSocket(sessionId: string): void {
   useEffect(() => {
     if (sessionId === '') { return; }
 
+    // Join server-side room so broadcastToSession events reach us
+    wsClient.joinSession(sessionId);
+
     const unsubscribes: (() => void)[] = [];
 
     unsubscribes.push(
@@ -229,6 +232,7 @@ export function useSessionWebSocket(sessionId: string): void {
 
     return (): void => {
       unsubscribes.forEach((unsub) => { unsub(); });
+      wsClient.leaveSession(sessionId);
     };
   }, [sessionId, updateCurrentSession, addIssue, updateIssue, addCommit, addActivity, addMetrics, addLLMRequest, updateLLMRequest, setActiveLLMRequest]);
 }
