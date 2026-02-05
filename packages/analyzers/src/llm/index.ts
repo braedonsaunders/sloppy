@@ -744,7 +744,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
         // Capture extra_content (e.g. Gemini thought_signature) from the response.
         // The OpenAI SDK passes through unknown fields at runtime even though
         // TypeScript types don't include them.
-        const extraContent = (tc as Record<string, unknown>).extra_content as Record<string, unknown> | undefined;
+        const extraContent = (tc as unknown as Record<string, unknown>).extra_content as Record<string, unknown> | undefined;
         toolCalls.push({
           id: tc.id,
           name: tc.function.name,
