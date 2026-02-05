@@ -80,9 +80,9 @@ function TreeNode({ node, depth, onFileSelect, selectedFile, issueCountByFile }:
       <div>
         <button
           type="button"
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => { setIsOpen(!isOpen); }}
           className="flex items-center gap-1 w-full px-1 py-0.5 rounded hover:bg-dark-700/50 text-dark-300 hover:text-dark-100 transition-colors"
-          style={{ paddingLeft: `${depth * 16 + 4}px` }}
+          style={{ paddingLeft: `${String(depth * 16 + 4)}px` }}
         >
           {isOpen ? (
             <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-dark-500" />
@@ -130,7 +130,7 @@ function TreeNode({ node, depth, onFileSelect, selectedFile, issueCountByFile }:
           ? 'bg-accent/10 text-accent'
           : 'text-dark-400 hover:bg-dark-700/50 hover:text-dark-200'
       }`}
-      style={{ paddingLeft: `${depth * 16 + 20}px` }}
+      style={{ paddingLeft: `${String(depth * 16 + 20)}px` }}
     >
       <FileIcon className="h-3.5 w-3.5 flex-shrink-0" />
       <span className="truncate">{node.name}</span>
@@ -142,7 +142,7 @@ function TreeNode({ node, depth, onFileSelect, selectedFile, issueCountByFile }:
       )}
       {node.size !== undefined && node.size > 0 && (
         <span className="ml-1 text-[10px] text-dark-600 flex-shrink-0">
-          {node.size > 1024 ? `${(node.size / 1024).toFixed(0)}KB` : `${node.size}B`}
+          {node.size > 1024 ? `${(node.size / 1024).toFixed(0)}KB` : `${String(node.size)}B`}
         </span>
       )}
     </button>

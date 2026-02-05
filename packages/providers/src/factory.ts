@@ -649,7 +649,7 @@ export async function createFallbackChain(
 
   for (const { envKey, type } of envProviderPairs) {
     const key = process.env[envKey];
-    if (key && !addedTypes.has(type)) {
+    if (key !== undefined && key !== '' && !addedTypes.has(type)) {
       try {
         providers.push(createProvider({ type, apiKey: key } as ProviderConfig));
         addedTypes.add(type);

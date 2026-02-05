@@ -7,13 +7,13 @@ import { api } from '@/lib/api';
 interface FileViewerProps {
   filePath: string;
   repoPath: string;
-  issues?: Array<{
+  issues?: {
     id: string;
     line?: number;
     severity: string;
     message: string;
     status: string;
-  }>;
+  }[];
   onFixFile?: (filePath: string) => void;
   onFixIssue?: (issueId: string) => void;
 }
@@ -43,7 +43,7 @@ export default function FileViewer({
         setLanguage(result.language);
         setLoading(false);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Failed to load file');
         setLoading(false);
       });
@@ -51,7 +51,7 @@ export default function FileViewer({
 
   const issuesByLine = new Map<number, typeof issues>();
   for (const issue of issues) {
-    if (issue.line) {
+    if (issue.line !== undefined && issue.line !== 0) {
       const existing = issuesByLine.get(issue.line) ?? [];
       existing.push(issue);
       issuesByLine.set(issue.line, existing);
@@ -59,10 +59,10 @@ export default function FileViewer({
   }
 
   const handleCopy = (): void => {
-    if (content) {
+    if (content !== null && content !== '') {
       void navigator.clipboard.writeText(content);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => { setCopied(false); }, 2000);
     }
   };
 
@@ -75,7 +75,7 @@ export default function FileViewer({
     );
   }
 
-  if (error) {
+  if (error !== null && error !== '') {
     return (
       <div className="flex items-center justify-center h-64 text-error">
         <AlertCircle className="h-5 w-5 mr-2" />
@@ -101,11 +101,11 @@ export default function FileViewer({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {onFixFile && issues.length > 0 && (
+          {onFixFile !== undefined && issues.length > 0 && (
             <Button
               variant="primary"
               size="sm"
-              onClick={() => onFixFile(filePath)}
+              onClick={() => { onFixFile(filePath); }}
               leftIcon={<Wrench className="h-3 w-3" />}
             >
               Fix All
@@ -128,7 +128,7 @@ export default function FileViewer({
             {lines.map((line, index) => {
               const lineNum = index + 1;
               const lineIssues = issuesByLine.get(lineNum);
-              const hasIssue = lineIssues && lineIssues.length > 0;
+              const hasIssue = lineIssues !== undefined && lineIssues.length > 0;
               const severityBg = hasIssue
                 ? lineIssues[0].severity === 'error'
                   ? 'bg-error/5'
@@ -153,10 +153,10 @@ export default function FileViewer({
                       >
                         <AlertCircle className="h-3 w-3 text-error flex-shrink-0" />
                         <span className="text-error/80">{issue.message}</span>
-                        {onFixIssue && issue.status === 'detected' && (
+                        {onFixIssue !== undefined && issue.status === 'detected' && (
                           <button
                             type="button"
-                            onClick={() => onFixIssue(issue.id)}
+                            onClick={() => { onFixIssue(issue.id); }}
                             className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded bg-accent/10 text-accent text-[10px] font-medium hover:bg-accent/20 transition-colors"
                           >
                             <Wrench className="h-2.5 w-2.5" />

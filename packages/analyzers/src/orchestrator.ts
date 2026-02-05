@@ -90,7 +90,7 @@ export class AnalysisOrchestrator {
     // Load plugins from registry
     const registry = PluginRegistry.getInstance();
     for (const plugin of registry.getAnalyzers()) {
-      this.analyzers.set(plugin.category as IssueCategory, plugin);
+      this.analyzers.set(plugin.category, plugin);
     }
   }
 

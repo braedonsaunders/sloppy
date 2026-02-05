@@ -636,8 +636,8 @@ export const api = {
     resume: (id: string): Promise<{ resumed: boolean }> =>
       request<{ resumed: boolean }>(`/watch/${id}/resume`, { method: 'POST' }),
 
-    list: (): Promise<{ sessions: Array<{ id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }> }> =>
-      request<{ sessions: Array<{ id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }> }>('/watch'),
+    list: (): Promise<{ sessions: { id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }[] }> =>
+      request<{ sessions: { id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }[] }>('/watch'),
 
     get: (id: string): Promise<{ id: string; repoPath: string; status: string; changedFiles: string[] }> =>
       request<{ id: string; repoPath: string; status: string; changedFiles: string[] }>(`/watch/${id}`),
@@ -647,7 +647,7 @@ export const api = {
   fileTree: {
     get: (path: string, depth?: number): Promise<{ root: string; tree: FileTreeNode[] }> => {
       const params = new URLSearchParams({ path });
-      if (depth !== undefined) params.set('depth', String(depth));
+      if (depth !== undefined) { params.set('depth', String(depth)); }
       return request<{ root: string; tree: FileTreeNode[] }>(`/file-tree?${params.toString()}`);
     },
 

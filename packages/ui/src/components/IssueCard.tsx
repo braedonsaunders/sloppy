@@ -230,7 +230,7 @@ export default function IssueCard({
                 </button>
               </div>
               <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-dark-200 overflow-x-auto border border-dark-700">
-                {contextData?.context ?? issue.context}
+                {contextData !== null ? contextData.context : issue.context}
               </pre>
             </div>
           )}
@@ -270,7 +270,7 @@ export default function IssueCard({
               {showErrorDetails && (
                 <div className="px-3 pb-3">
                   <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-error/80 overflow-x-auto border border-error/20 max-h-[200px] overflow-y-auto">
-                    {contextData?.context ?? issue.context}
+                    {contextData.context}
                   </pre>
                 </div>
               )}
@@ -579,7 +579,7 @@ export function IssueDetailView({
             Code Context
           </h3>
           <pre className="rounded-lg bg-dark-900 p-4 text-sm font-mono text-dark-200 overflow-x-auto border border-dark-700 leading-relaxed">
-            {contextData?.context ?? issue.context}
+            {contextData !== null ? contextData.context : issue.context}
           </pre>
         </div>
       )}
@@ -616,7 +616,7 @@ export function IssueDetailView({
           {showErrorDetails && (
             <div className="px-4 pb-4">
               <pre className="rounded-lg bg-dark-900 p-4 text-sm font-mono text-error/80 overflow-x-auto border border-error/20 max-h-[300px] overflow-y-auto leading-relaxed">
-                {contextData?.context ?? issue.context}
+                {contextData.context}
               </pre>
             </div>
           )}

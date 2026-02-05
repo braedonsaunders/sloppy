@@ -1,4 +1,4 @@
-import { BaseAnalyzer, type Issue, type AnalyzerOptions, type IssueCategory } from './base.js';
+import { BaseAnalyzer } from './base.js';
 
 export interface AnalyzerPluginManifest {
   name: string;
@@ -24,13 +24,11 @@ export class PluginValidationError extends Error {
 }
 
 export class PluginRegistry {
-  private plugins: Map<string, AnalyzerPlugin> = new Map();
+  private plugins = new Map<string, AnalyzerPlugin>();
   private static instance: PluginRegistry | null = null;
 
   static getInstance(): PluginRegistry {
-    if (!PluginRegistry.instance) {
-      PluginRegistry.instance = new PluginRegistry();
-    }
+    PluginRegistry.instance ??= new PluginRegistry();
     return PluginRegistry.instance;
   }
 
@@ -68,52 +66,54 @@ export class PluginRegistry {
 }
 
 export function validatePlugin(plugin: AnalyzerPlugin): void {
-  if (!plugin.manifest) {
-    throw new PluginValidationError('Plugin must have a manifest');
-  }
-  if (!plugin.manifest.name || typeof plugin.manifest.name !== 'string') {
+  if (typeof plugin.manifest.name !== 'string' || plugin.manifest.name === '') {
     throw new PluginValidationError('Plugin manifest must have a name');
   }
-  if (!plugin.manifest.version || typeof plugin.manifest.version !== 'string') {
+  if (typeof plugin.manifest.version !== 'string' || plugin.manifest.version === '') {
     throw new PluginValidationError('Plugin manifest must have a version');
   }
-  if (!plugin.manifest.description || typeof plugin.manifest.description !== 'string') {
+  if (typeof plugin.manifest.description !== 'string' || plugin.manifest.description === '') {
     throw new PluginValidationError('Plugin manifest must have a description');
-  }
-  if (!plugin.analyzer) {
-    throw new PluginValidationError('Plugin must have an analyzer instance');
   }
   if (typeof plugin.analyzer.analyze !== 'function') {
     throw new PluginValidationError('Plugin analyzer must implement analyze()');
   }
-  if (!plugin.analyzer.name || !plugin.analyzer.category) {
-    throw new PluginValidationError('Plugin analyzer must have name and category properties');
-  }
+}
+
+interface PluginModule {
+  default?: unknown;
+  manifest?: AnalyzerPluginManifest;
+  analyzer?: BaseAnalyzer;
+}
+
+function isAnalyzerPlugin(value: unknown): value is AnalyzerPlugin {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'manifest' in value &&
+    'analyzer' in value &&
+    typeof (value as AnalyzerPlugin).manifest === 'object' &&
+    typeof (value as AnalyzerPlugin).analyzer === 'object'
+  );
 }
 
 export async function loadPluginFromPath(pluginPath: string): Promise<AnalyzerPlugin> {
   try {
-    const module = await import(pluginPath);
-    const plugin = module.default ?? module;
+    const loaded = (await import(pluginPath)) as PluginModule;
+    const pluginExport = loaded.default ?? loaded;
 
-    if (typeof plugin === 'function') {
-      // Plugin exports a class - instantiate it
-      const instance = new plugin();
-      return {
-        manifest: instance.manifest ?? {
-          name: instance.name,
-          version: '0.0.0',
-          description: instance.description ?? 'Unknown plugin',
-          category: instance.category,
-        },
-        analyzer: instance,
-      };
+    if (isAnalyzerPlugin(pluginExport)) {
+      validatePlugin(pluginExport);
+      return pluginExport;
     }
 
-    // Plugin exports an object with manifest and analyzer
-    validatePlugin(plugin);
-    return plugin;
+    throw new PluginValidationError(
+      'Plugin must export an object with manifest and analyzer properties'
+    );
   } catch (error) {
+    if (error instanceof PluginValidationError) {
+      throw error;
+    }
     throw new PluginValidationError(
       `Failed to load plugin from ${pluginPath}: ${error instanceof Error ? error.message : String(error)}`
     );
@@ -121,19 +121,19 @@ export async function loadPluginFromPath(pluginPath: string): Promise<AnalyzerPl
 }
 
 export async function loadPluginsFromDirectory(dirPath: string): Promise<AnalyzerPlugin[]> {
-  const { readdir } = await import('node:fs/promises');
-  const { join } = await import('node:path');
-  const { pathToFileURL } = await import('node:url');
+  const fsPromises = await import('node:fs/promises');
+  const nodePath = await import('node:path');
+  const nodeUrl = await import('node:url');
 
   const plugins: AnalyzerPlugin[] = [];
 
   try {
-    const entries = await readdir(dirPath, { withFileTypes: true });
+    const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
 
     for (const entry of entries) {
       if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs'))) {
         try {
-          const fullPath = pathToFileURL(join(dirPath, entry.name)).href;
+          const fullPath = nodeUrl.pathToFileURL(nodePath.join(dirPath, entry.name)).href;
           const plugin = await loadPluginFromPath(fullPath);
           plugins.push(plugin);
         } catch (error) {
