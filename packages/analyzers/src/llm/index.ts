@@ -274,7 +274,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       ...(hasExplicitBaseUrl
         ? { baseUrl: runtimeConfig.baseUrl }
         : providerChanged && runtimeProvider in PROVIDER_BASE_URLS
-          ? { baseUrl: PROVIDER_BASE_URLS[runtimeProvider as LLMProviderType] }
+          ? { baseUrl: PROVIDER_BASE_URLS[runtimeProvider] }
           : {}),
     };
 
