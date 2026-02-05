@@ -241,7 +241,9 @@ export class AnalysisOrchestrator {
     // Run fallback analyzers in parallel
     const promises = fallbackCategories.map(async (category) => {
       const analyzer = this.analyzers.get(category);
-      if (!analyzer) return [];
+      if (analyzer === undefined) {
+        return [];
+      }
 
       onProgress?.({
         analyzer: analyzer.name,
@@ -288,7 +290,7 @@ export class AnalysisOrchestrator {
    */
   private hasLLMApiKey(llmConfig: Record<string, unknown>): boolean {
     // Check runtime config from analyzerConfigs
-    if (llmConfig.apiKey && typeof llmConfig.apiKey === 'string' && llmConfig.apiKey !== '') {
+    if (typeof llmConfig.apiKey === 'string' && llmConfig.apiKey !== '') {
       return true;
     }
 

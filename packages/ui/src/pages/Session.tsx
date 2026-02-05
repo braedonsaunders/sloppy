@@ -79,7 +79,7 @@ export default function Session(): JSX.Element {
 
   // Fetch score data
   useEffect(() => {
-    if (!id) return;
+    if (id === undefined || id === '') { return; }
     void api.scores.get(id).then((data) => {
       setScoreData(data);
     }).catch(() => {
@@ -243,7 +243,7 @@ export default function Session(): JSX.Element {
               <p className="text-dark-500 text-sm mb-3">No score computed yet</p>
               <button
                 onClick={() => {
-                  if (!id) return;
+                  if (id === undefined || id === '') { return; }
                   void api.scores.compute(id).then((data) => {
                     setScoreData(data);
                   });
