@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseDiff,
-  parseUnifiedDiff,
-  createUnifiedDiff,
   applyDiff,
-  DiffHunk,
+  validateDiff,
+  extractHunks,
+  getDiffStats,
+  getAffectedFiles,
 } from '../diff-parser.js';
 
 describe('parseDiff', () => {
   it('should parse simple unified diff', () => {
-    const diff = `--- a/file.ts
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
 +++ b/file.ts
 @@ -1,3 +1,4 @@
  const a = 1;
@@ -20,18 +22,20 @@ describe('parseDiff', () => {
 
     const result = parseDiff(diff);
 
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0]?.oldPath).toBe('a/file.ts');
-    expect(result.files[0]?.newPath).toBe('b/file.ts');
-    expect(result.files[0]?.hunks).toHaveLength(1);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.oldPath).toBe('file.ts');
+    expect(result[0]?.newPath).toBe('file.ts');
+    expect(result[0]?.hunks).toHaveLength(1);
   });
 
   it('should parse diff with multiple files', () => {
-    const diff = `--- a/file1.ts
+    const diff = `diff --git a/file1.ts b/file1.ts
+--- a/file1.ts
 +++ b/file1.ts
 @@ -1 +1 @@
 -old
 +new
+diff --git a/file2.ts b/file2.ts
 --- a/file2.ts
 +++ b/file2.ts
 @@ -1 +1 @@
@@ -40,13 +44,14 @@ describe('parseDiff', () => {
 
     const result = parseDiff(diff);
 
-    expect(result.files).toHaveLength(2);
-    expect(result.files[0]?.oldPath).toBe('a/file1.ts');
-    expect(result.files[1]?.oldPath).toBe('a/file2.ts');
+    expect(result).toHaveLength(2);
+    expect(result[0]?.oldPath).toBe('file1.ts');
+    expect(result[1]?.oldPath).toBe('file2.ts');
   });
 
   it('should parse diff with multiple hunks', () => {
-    const diff = `--- a/file.ts
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
 +++ b/file.ts
 @@ -1,3 +1,3 @@
  line1
@@ -61,11 +66,13 @@ describe('parseDiff', () => {
 
     const result = parseDiff(diff);
 
-    expect(result.files[0]?.hunks).toHaveLength(2);
+    expect(result[0]?.hunks).toHaveLength(2);
   });
 
   it('should handle new files', () => {
-    const diff = `--- /dev/null
+    const diff = `diff --git a/newfile.ts b/newfile.ts
+new file mode 100644
+--- /dev/null
 +++ b/newfile.ts
 @@ -0,0 +1,3 @@
 +const x = 1;
@@ -74,13 +81,14 @@ describe('parseDiff', () => {
 
     const result = parseDiff(diff);
 
-    expect(result.files[0]?.oldPath).toBe('/dev/null');
-    expect(result.files[0]?.newPath).toBe('b/newfile.ts');
-    expect(result.files[0]?.isNew).toBe(true);
+    expect(result[0]?.changeType).toBe('add');
+    expect(result[0]?.additions).toBe(3);
   });
 
   it('should handle deleted files', () => {
-    const diff = `--- a/deleted.ts
+    const diff = `diff --git a/deleted.ts b/deleted.ts
+deleted file mode 100644
+--- a/deleted.ts
 +++ /dev/null
 @@ -1,3 +0,0 @@
 -const x = 1;
@@ -89,91 +97,145 @@ describe('parseDiff', () => {
 
     const result = parseDiff(diff);
 
-    expect(result.files[0]?.newPath).toBe('/dev/null');
-    expect(result.files[0]?.isDeleted).toBe(true);
+    expect(result[0]?.changeType).toBe('delete');
+    expect(result[0]?.deletions).toBe(3);
+  });
+
+  it('should return empty array for empty input', () => {
+    expect(parseDiff('')).toEqual([]);
+  });
+
+  it('should track additions and deletions counts', () => {
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,4 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
++const c = 4;
+ const d = 5;`;
+
+    const result = parseDiff(diff);
+
+    expect(result[0]?.additions).toBe(2);
+    expect(result[0]?.deletions).toBe(1);
   });
 });
 
-describe('parseUnifiedDiff', () => {
-  it('should parse hunk header', () => {
-    const hunkLine = '@@ -10,5 +12,7 @@';
-    const hunk = parseUnifiedDiff(hunkLine);
+describe('extractHunks', () => {
+  it('should extract all hunks from a diff', () => {
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line1
+-old1
++new1
+ line3
+@@ -10,3 +10,3 @@
+ line10
+-old2
++new2
+ line12`;
 
-    expect(hunk.oldStart).toBe(10);
-    expect(hunk.oldCount).toBe(5);
-    expect(hunk.newStart).toBe(12);
-    expect(hunk.newCount).toBe(7);
+    const hunks = extractHunks(diff);
+
+    expect(hunks).toHaveLength(2);
+    expect(hunks[0]?.oldStart).toBe(1);
+    expect(hunks[0]?.oldLines).toBe(3);
+    expect(hunks[0]?.newStart).toBe(1);
+    expect(hunks[0]?.newLines).toBe(3);
+    expect(hunks[1]?.oldStart).toBe(10);
   });
 
-  it('should parse hunk header with context', () => {
-    const hunkLine = '@@ -10,5 +12,7 @@ function test()';
-    const hunk = parseUnifiedDiff(hunkLine);
-
-    expect(hunk.context).toBe('function test()');
-  });
-
-  it('should parse single line hunk', () => {
-    const hunkLine = '@@ -1 +1 @@';
-    const hunk = parseUnifiedDiff(hunkLine);
-
-    expect(hunk.oldStart).toBe(1);
-    expect(hunk.oldCount).toBe(1);
-    expect(hunk.newStart).toBe(1);
-    expect(hunk.newCount).toBe(1);
+  it('should return empty array for empty diff', () => {
+    expect(extractHunks('')).toEqual([]);
   });
 });
 
-describe('createUnifiedDiff', () => {
-  it('should create valid unified diff', () => {
-    const oldContent = `line1
-line2
-line3`;
-    const newContent = `line1
-modified
-line3`;
+describe('getDiffStats', () => {
+  it('should return correct statistics', () => {
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,4 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
++const c = 4;
+ const d = 5;`;
 
-    const diff = createUnifiedDiff('test.ts', oldContent, newContent);
+    const stats = getDiffStats(diff);
 
-    expect(diff).toContain('--- a/test.ts');
-    expect(diff).toContain('+++ b/test.ts');
-    expect(diff).toContain('-line2');
-    expect(diff).toContain('+modified');
+    expect(stats.filesChanged).toBe(1);
+    expect(stats.additions).toBe(2);
+    expect(stats.deletions).toBe(1);
+    expect(stats.binary).toBe(0);
   });
 
-  it('should handle addition only', () => {
-    const oldContent = `line1
-line2`;
-    const newContent = `line1
-line2
-line3`;
+  it('should handle multiple files', () => {
+    const diff = `diff --git a/file1.ts b/file1.ts
+--- a/file1.ts
++++ b/file1.ts
+@@ -1 +1 @@
+-old
++new
+diff --git a/file2.ts b/file2.ts
+--- a/file2.ts
++++ b/file2.ts
+@@ -1 +1 @@
+-old2
++new2`;
 
-    const diff = createUnifiedDiff('test.ts', oldContent, newContent);
+    const stats = getDiffStats(diff);
 
-    expect(diff).toContain('+line3');
-    expect(diff).not.toContain('-line');
+    expect(stats.filesChanged).toBe(2);
+    expect(stats.additions).toBe(2);
+    expect(stats.deletions).toBe(2);
+  });
+});
+
+describe('validateDiff', () => {
+  it('should validate a correct diff', () => {
+    const diff = `diff --git a/file.ts b/file.ts
+--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ line1
+-old
++new
+ line3`;
+
+    expect(validateDiff(diff)).toBe(true);
   });
 
-  it('should handle deletion only', () => {
-    const oldContent = `line1
-line2
-line3`;
-    const newContent = `line1
-line3`;
-
-    const diff = createUnifiedDiff('test.ts', oldContent, newContent);
-
-    expect(diff).toContain('-line2');
+  it('should reject invalid input', () => {
+    expect(validateDiff('')).toBe(true); // Empty diff is valid (no changes)
+    expect(validateDiff('random text without diff markers')).toBe(false);
   });
+});
 
-  it('should handle empty old content (new file)', () => {
-    const oldContent = '';
-    const newContent = `line1
-line2`;
+describe('getAffectedFiles', () => {
+  it('should return unique file paths', () => {
+    const diff = `diff --git a/file1.ts b/file1.ts
+--- a/file1.ts
++++ b/file1.ts
+@@ -1 +1 @@
+-old
++new
+diff --git a/file2.ts b/file2.ts
+--- a/file2.ts
++++ b/file2.ts
+@@ -1 +1 @@
+-old2
++new2`;
 
-    const diff = createUnifiedDiff('test.ts', oldContent, newContent);
+    const files = getAffectedFiles(diff);
 
-    expect(diff).toContain('+line1');
-    expect(diff).toContain('+line2');
+    expect(files).toContain('file1.ts');
+    expect(files).toContain('file2.ts');
+    expect(files).toHaveLength(2);
   });
 });
 
@@ -183,7 +245,8 @@ describe('applyDiff', () => {
 line2
 line3`;
 
-    const diff = `--- a/test.ts
+    const diff = `diff --git a/test.ts b/test.ts
+--- a/test.ts
 +++ b/test.ts
 @@ -1,3 +1,3 @@
  line1
@@ -202,7 +265,8 @@ line3`);
     const original = `line1
 line2`;
 
-    const diff = `--- a/test.ts
+    const diff = `diff --git a/test.ts b/test.ts
+--- a/test.ts
 +++ b/test.ts
 @@ -1,2 +1,3 @@
  line1
@@ -219,7 +283,8 @@ line2`;
 line2
 line3`;
 
-    const diff = `--- a/test.ts
+    const diff = `diff --git a/test.ts b/test.ts
+--- a/test.ts
 +++ b/test.ts
 @@ -1,3 +1,2 @@
  line1
@@ -242,7 +307,8 @@ line5
 line6
 line7`;
 
-    const diff = `--- a/test.ts
+    const diff = `diff --git a/test.ts b/test.ts
+--- a/test.ts
 +++ b/test.ts
 @@ -1,3 +1,3 @@
  line1
@@ -268,7 +334,8 @@ line7`;
 content
 here`;
 
-    const diff = `--- a/test.ts
+    const diff = `diff --git a/test.ts b/test.ts
+--- a/test.ts
 +++ b/test.ts
 @@ -1,3 +1,3 @@
  line1
@@ -276,6 +343,6 @@ here`;
 +modified
  line3`;
 
-    expect(() => applyDiff(original, diff)).toThrow(/context/i);
+    expect(() => applyDiff(original, diff)).toThrow(/mismatch/i);
   });
 });

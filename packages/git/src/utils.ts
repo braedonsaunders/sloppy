@@ -2,6 +2,7 @@
  * Git utility functions for @sloppy/git
  */
 
+import * as path from 'path';
 import { ParsedGitUrl } from './types.js';
 
 /**
@@ -254,7 +255,11 @@ export function generateTimestamp(): string {
  * @returns True if the target is within the repo root
  */
 export function isPathWithinRepo(repoRoot: string, targetPath: string): boolean {
-  const path = require('path');
+  // Reject obvious traversal attempts before resolving
+  if (targetPath.includes('..')) {
+    return false;
+  }
+
   const resolvedRoot = path.resolve(repoRoot);
   const resolvedTarget = path.resolve(repoRoot, targetPath);
 
@@ -295,7 +300,7 @@ export function isSafeRefName(ref: string): boolean {
   }
 
   // Disallow shell metacharacters
-  const dangerousChars = /[;&|`$(){}!<>]/;
+  const dangerousChars = /[;&|`$(){}!<>~*:'"\\]/;
   if (dangerousChars.test(ref)) {
     return false;
   }

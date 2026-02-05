@@ -417,7 +417,7 @@ export abstract class BaseProvider {
     diff.push(`--- a/${filename}`);
     diff.push(`+++ b/${filename}`);
 
-    // Simple line-by-line diff (for production, use a proper diff library)
+    // Simple line-by-line diff
     let i = 0;
     let j = 0;
     let hunkStart = -1;
@@ -473,33 +473,60 @@ export abstract class BaseProvider {
   }
 
   /**
-   * Apply a diff to content (basic implementation)
+   * Apply a unified diff to content
    */
   protected applyDiff(content: string, diff: string): string {
     const lines = content.split('\n');
+    const result: string[] = [];
+    let lineIndex = 0;
+
+    // Parse hunks
     const diffLines = diff.split('\n');
-    let lineOffset = 0;
 
-    for (const diffLine of diffLines) {
-      const hunkMatch = /^@@ -(\d+),?\d* \+(\d+),?\d* @@/.exec(diffLine);
-      if (hunkMatch) {
-        // Reset offset for new hunk
-        continue;
-      }
-
-      if (diffLine.startsWith('-') && !diffLine.startsWith('---')) {
-        const lineIndex = parseInt(diffLine.slice(1)) - 1 + lineOffset;
-        if (lineIndex >= 0 && lineIndex < lines.length) {
-          lines.splice(lineIndex, 1);
-          lineOffset--;
+    // Find all hunk starts
+    const hunks: { oldStart: number; startIdx: number; endIdx: number }[] = [];
+    for (let i = 0; i < diffLines.length; i++) {
+      const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(diffLines[i]);
+      if (match) {
+        if (hunks.length > 0) {
+          hunks[hunks.length - 1].endIdx = i;
         }
-      } else if (diffLine.startsWith('+') && !diffLine.startsWith('+++')) {
-        // This is a simplified implementation
-        // For production, use a proper diff application library
+        hunks.push({ oldStart: parseInt(match[1], 10), startIdx: i + 1, endIdx: diffLines.length });
       }
     }
 
-    return lines.join('\n');
+    for (const hunk of hunks) {
+      // Copy lines before hunk
+      while (lineIndex < hunk.oldStart - 1) {
+        if (lineIndex < lines.length) {
+          result.push(lines[lineIndex]);
+        }
+        lineIndex++;
+      }
+
+      // Apply hunk
+      for (let i = hunk.startIdx; i < hunk.endIdx; i++) {
+        const dl = diffLines[i];
+        if (dl.startsWith('-') && !dl.startsWith('---')) {
+          lineIndex++; // skip removed line
+        } else if (dl.startsWith('+') && !dl.startsWith('+++')) {
+          result.push(dl.slice(1)); // add new line
+        } else if (dl.startsWith(' ')) {
+          if (lineIndex < lines.length) {
+            result.push(lines[lineIndex]);
+          }
+          lineIndex++;
+        }
+      }
+    }
+
+    // Copy remaining
+    while (lineIndex < lines.length) {
+      result.push(lines[lineIndex]);
+      lineIndex++;
+    }
+
+    return result.join('\n');
   }
 
   /**

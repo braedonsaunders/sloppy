@@ -145,6 +145,9 @@ importers:
       '@sloppy/core':
         specifier: workspace:*
         version: link:../core
+      '@sloppy/providers':
+        specifier: workspace:*
+        version: link:../providers
       better-sqlite3:
         specifier: ^12.1.0
         version: 12.6.2

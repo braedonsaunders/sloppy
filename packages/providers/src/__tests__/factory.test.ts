@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ProviderFactory, createProvider } from '../factory.js';
-import { ProviderType } from '@sloppy/core';
+import { createProvider } from '../factory.js';
+import type { ProviderConfig } from '../factory.js';
 
 // Mock the provider modules
 vi.mock('../claude/index.js', () => ({
@@ -33,145 +33,123 @@ vi.mock('../ollama/index.js', () => ({
   })),
 }));
 
-describe('ProviderFactory', () => {
-  let factory: ProviderFactory;
+vi.mock('../cli/claude-code.js', () => ({
+  ClaudeCodeCLIProvider: vi.fn().mockImplementation((config) => ({
+    name: 'claude-cli',
+    config,
+  })),
+}));
 
+vi.mock('../cli/codex.js', () => ({
+  CodexCLIProvider: vi.fn().mockImplementation((config) => ({
+    name: 'codex-cli',
+    config,
+  })),
+}));
+
+describe('createProvider', () => {
   beforeEach(() => {
-    factory = new ProviderFactory();
     vi.clearAllMocks();
   });
 
-  describe('createProvider', () => {
-    it('should create Claude provider', () => {
-      const provider = factory.createProvider({
-        type: ProviderType.CLAUDE,
-        apiKey: 'test-key',
-        model: 'claude-sonnet-4-20250514',
-      });
-
-      expect(provider.name).toBe('claude');
-    });
-
-    it('should create OpenAI provider', () => {
-      const provider = factory.createProvider({
-        type: ProviderType.OPENAI,
-        apiKey: 'test-key',
-        model: 'gpt-4',
-      });
-
-      expect(provider.name).toBe('openai');
-    });
-
-    it('should create Ollama provider', () => {
-      const provider = factory.createProvider({
-        type: ProviderType.OLLAMA,
-        model: 'codellama',
-        baseUrl: 'http://localhost:11434',
-      });
-
-      expect(provider.name).toBe('ollama');
-    });
-
-    it('should throw for unknown provider type', () => {
-      expect(() => {
-        factory.createProvider({
-          type: 'unknown' as ProviderType,
-          apiKey: 'test-key',
-        });
-      }).toThrow();
-    });
-
-    it('should throw when API key missing for Claude', () => {
-      expect(() => {
-        factory.createProvider({
-          type: ProviderType.CLAUDE,
-          model: 'claude-sonnet-4-20250514',
-        });
-      }).toThrow(/API key/i);
-    });
-
-    it('should throw when API key missing for OpenAI', () => {
-      expect(() => {
-        factory.createProvider({
-          type: ProviderType.OPENAI,
-          model: 'gpt-4',
-        });
-      }).toThrow(/API key/i);
-    });
-
-    it('should not require API key for Ollama', () => {
-      expect(() => {
-        factory.createProvider({
-          type: ProviderType.OLLAMA,
-          model: 'codellama',
-        });
-      }).not.toThrow();
-    });
-  });
-
-  describe('getAvailableProviders', () => {
-    it('should return list of available providers', () => {
-      const providers = factory.getAvailableProviders();
-
-      expect(providers).toContain(ProviderType.CLAUDE);
-      expect(providers).toContain(ProviderType.OPENAI);
-      expect(providers).toContain(ProviderType.OLLAMA);
-    });
-  });
-
-  describe('isValidConfig', () => {
-    it('should validate Claude config', () => {
-      expect(
-        factory.isValidConfig({
-          type: ProviderType.CLAUDE,
-          apiKey: 'key',
-          model: 'claude-sonnet-4-20250514',
-        })
-      ).toBe(true);
-
-      expect(
-        factory.isValidConfig({
-          type: ProviderType.CLAUDE,
-          model: 'claude-sonnet-4-20250514',
-        })
-      ).toBe(false);
-    });
-
-    it('should validate OpenAI config', () => {
-      expect(
-        factory.isValidConfig({
-          type: ProviderType.OPENAI,
-          apiKey: 'key',
-          model: 'gpt-4',
-        })
-      ).toBe(true);
-
-      expect(
-        factory.isValidConfig({
-          type: ProviderType.OPENAI,
-        })
-      ).toBe(false);
-    });
-
-    it('should validate Ollama config', () => {
-      expect(
-        factory.isValidConfig({
-          type: ProviderType.OLLAMA,
-          model: 'codellama',
-        })
-      ).toBe(true);
-    });
-  });
-});
-
-describe('createProvider helper', () => {
-  it('should create provider using factory', () => {
+  it('should create Claude provider', () => {
     const provider = createProvider({
-      type: ProviderType.CLAUDE,
+      type: 'claude',
       apiKey: 'test-key',
       model: 'claude-sonnet-4-20250514',
     });
 
     expect(provider.name).toBe('claude');
+  });
+
+  it('should create OpenAI provider', () => {
+    const provider = createProvider({
+      type: 'openai',
+      apiKey: 'test-key',
+      model: 'gpt-4',
+    });
+
+    expect(provider.name).toBe('openai');
+  });
+
+  it('should create Ollama provider', () => {
+    const provider = createProvider({
+      type: 'ollama',
+      model: 'codellama',
+      baseUrl: 'http://localhost:11434',
+    });
+
+    expect(provider.name).toBe('ollama');
+  });
+
+  it('should throw for unknown provider type', () => {
+    expect(() => {
+      createProvider({
+        type: 'unknown' as ProviderConfig['type'],
+      } as ProviderConfig);
+    }).toThrow();
+  });
+
+  it('should not require API key for Ollama', () => {
+    expect(() => {
+      createProvider({
+        type: 'ollama',
+        model: 'codellama',
+      });
+    }).not.toThrow();
+  });
+
+  it('should pass config options to Claude provider', () => {
+    const provider = createProvider({
+      type: 'claude',
+      apiKey: 'test-key',
+      model: 'claude-sonnet-4-20250514',
+      maxTokens: 4096,
+      temperature: 0.5,
+    });
+
+    expect(provider).toBeDefined();
+    expect(provider.name).toBe('claude');
+  });
+
+  it('should pass config options to OpenAI provider', () => {
+    const provider = createProvider({
+      type: 'openai',
+      apiKey: 'test-key',
+      model: 'gpt-4o',
+      maxTokens: 2048,
+    });
+
+    expect(provider).toBeDefined();
+    expect(provider.name).toBe('openai');
+  });
+
+  it('should create Claude CLI provider', () => {
+    const provider = createProvider({
+      type: 'claude-cli',
+      workingDirectory: '/test/dir',
+    });
+
+    expect(provider.name).toBe('claude-cli');
+  });
+
+  it('should create Codex CLI provider', () => {
+    const provider = createProvider({
+      type: 'codex-cli',
+      approvalMode: 'auto-edit',
+    });
+
+    expect(provider.name).toBe('codex-cli');
+  });
+
+  it('should create Gemini provider via OpenAI compatibility', () => {
+    const provider = createProvider({
+      type: 'gemini',
+      apiKey: 'test-key',
+      model: 'gemini-2.0-flash',
+    });
+
+    // Gemini uses OpenAI provider under the hood
+    expect(provider.name).toBe('openai');
   });
 });

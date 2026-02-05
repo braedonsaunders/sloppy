@@ -377,6 +377,51 @@ export default function Session(): JSX.Element {
         )}
       </div>
 
+      {/* Session Complete Summary */}
+      {(session.status === 'completed' || session.status === 'stopped') && (
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
+              session.status === 'completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+            }`}>
+              {session.status === 'completed' ? <CheckCircle className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-dark-100">
+                Session {session.status === 'completed' ? 'Complete' : 'Stopped'}
+              </h2>
+              <p className="text-sm text-dark-400">
+                {session.stats.issuesResolved} of {session.stats.issuesFound} issues resolved
+                {session.stats.commitsCreated > 0 && ` across ${session.stats.commitsCreated} commits`}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="text-center p-3 rounded-lg bg-dark-700/50">
+              <p className="text-2xl font-bold text-success">{session.stats.issuesResolved}</p>
+              <p className="text-xs text-dark-400 mt-1">Fixed</p>
+            </div>
+            <div className="text-center p-3 rounded-lg bg-dark-700/50">
+              <p className="text-2xl font-bold text-dark-200">{session.stats.commitsCreated}</p>
+              <p className="text-xs text-dark-400 mt-1">Commits</p>
+            </div>
+            <div className="text-center p-3 rounded-lg bg-dark-700/50">
+              <p className="text-2xl font-bold text-dark-200">
+                {String(elapsedMinutes).padStart(2, '0')}:{String(elapsedSeconds).padStart(2, '0')}
+              </p>
+              <p className="text-xs text-dark-400 mt-1">Duration</p>
+            </div>
+            <div className="text-center p-3 rounded-lg bg-dark-700/50">
+              <p className="text-2xl font-bold text-dark-200">
+                {formatTokens(llmRequests.reduce((acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0), 0))}
+              </p>
+              <p className="text-xs text-dark-400 mt-1">Tokens</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area - Two Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column - Tabs and Content */}
@@ -572,6 +617,28 @@ function IssuesPanel({
           </Button>
         )}
       </div>
+
+      {/* Fix All Bar */}
+      {approvalMode && issues.filter(i => i.status === 'pending').length > 0 && (
+        <div className="flex items-center justify-between rounded-lg bg-accent/5 border border-accent/20 p-3">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-accent" />
+            <span className="text-sm text-dark-200">
+              {issues.filter(i => i.status === 'pending').length} issues ready to fix
+            </span>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => {
+              issues.filter(i => i.status === 'pending').forEach(i => onApprove(i.id));
+            }}
+            leftIcon={<Zap className="h-3.5 w-3.5" />}
+          >
+            Fix All
+          </Button>
+        </div>
+      )}
 
       {/* Issues List */}
       {issues.length > 0 ? (

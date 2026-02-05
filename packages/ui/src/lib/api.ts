@@ -521,6 +521,13 @@ export const api = {
     },
   },
 
+  // Detection
+  detect: {
+    /** Detect which providers have API keys set in the environment */
+    providers: (): Promise<{ detectedProviders: Record<string, boolean> }> =>
+      request<{ detectedProviders: Record<string, boolean> }>('/detect/providers'),
+  },
+
   // GitHub
   github: {
     /** Get GitHub connection status */

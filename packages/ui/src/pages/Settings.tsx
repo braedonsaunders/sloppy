@@ -99,6 +99,14 @@ function ProvidersTab(): JSX.Element {
     queryFn: () => api.providers.list(),
   });
 
+  // Fetch detected env providers
+  const { data: envProviders } = useQuery({
+    queryKey: ['detect', 'providers'],
+    queryFn: () => fetch('/api/detect/providers').then(r => r.json()).then(d => d.data?.detectedProviders as Record<string, boolean>),
+  });
+
+  const detectedKeys = envProviders ? Object.entries(envProviders).filter(([_, v]) => v).map(([k]) => k) : [];
+
   const configureMutation = useMutation({
     mutationFn: (config: ProviderConfig) => api.providers.configure(config),
     onSuccess: (): void => {
@@ -172,6 +180,22 @@ function ProvidersTab(): JSX.Element {
 
   return (
     <div className="space-y-6">
+      {/* Environment Detection Banner */}
+      {detectedKeys.length > 0 && (
+        <div className="rounded-xl border border-success/30 bg-success/5 p-4 flex items-start gap-3">
+          <CheckCircle className="h-5 w-5 text-success flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-medium text-dark-200">
+              API keys detected from environment
+            </p>
+            <p className="text-xs text-dark-400 mt-1">
+              Found keys for: {detectedKeys.map(k => k.charAt(0).toUpperCase() + k.slice(1)).join(', ')}.
+              These providers are ready to use.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Provider Selector */}
       <div className="rounded-xl border border-dark-700 bg-dark-800 p-6">
         <label className="mb-3 block text-sm font-medium text-dark-200">
@@ -441,20 +465,34 @@ function ProviderCard({
         {/* Test Result */}
         {testResult && (
           <div
-            className={`flex items-center gap-2 rounded-lg p-3 ${
+            className={`rounded-lg p-3 ${
               testResult.success
                 ? 'bg-success/10 text-success'
                 : 'bg-error/10 text-error'
             }`}
           >
-            {testResult.success ? (
-              <CheckCircle className="h-4 w-4" />
-            ) : (
-              <AlertCircle className="h-4 w-4" />
+            <div className="flex items-center gap-2">
+              {testResult.success ? (
+                <CheckCircle className="h-4 w-4 flex-shrink-0" />
+              ) : (
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              )}
+              <span className="text-sm font-medium">
+                {testResult.success ? 'Connection successful' : 'Connection failed'}
+              </span>
+            </div>
+            {testResult.message && (
+              <p className="text-xs mt-1.5 ml-6 opacity-80">
+                {testResult.message}
+              </p>
             )}
-            <span className="text-sm">
-              {testResult.message ?? (testResult.success ? 'Connection successful' : 'Connection failed')}
-            </span>
+            {!testResult.success && !testResult.message && (
+              <p className="text-xs mt-1.5 ml-6 opacity-80">
+                Could not reach the provider. Please verify your API key is correct, check that the
+                base URL is reachable, and ensure your network connection is stable. If using a
+                custom endpoint, confirm the URL includes the correct path.
+              </p>
+            )}
           </div>
         )}
 

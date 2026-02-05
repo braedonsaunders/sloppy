@@ -27,7 +27,7 @@ export function parseDiff(diffString: string): DiffFile[] {
     if (line === undefined) continue;
 
     // Match diff header: diff --git a/path b/path
-    const diffHeaderMatch = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+    const diffHeaderMatch = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
     if (diffHeaderMatch) {
       // Save previous file if exists
       if (currentFile) {
@@ -289,9 +289,7 @@ export function validateDiff(diff: string): boolean {
           }
         }
 
-        // Allow some tolerance for edge cases
-        if (Math.abs(actualOldLines - hunk.oldLines) > 1 ||
-            Math.abs(actualNewLines - hunk.newLines) > 1) {
+        if (actualOldLines !== hunk.oldLines || actualNewLines !== hunk.newLines) {
           return false;
         }
       }

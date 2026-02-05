@@ -23,6 +23,7 @@
     "@fastify/websocket": "^10.0.1",
     "@sloppy/analyzers": "workspace:*",
     "@sloppy/core": "workspace:*",
+    "@sloppy/providers": "workspace:*",
     "better-sqlite3": "^12.1.0",
     "fastify": "^4.28.1",
     "nanoid": "^5.0.7",

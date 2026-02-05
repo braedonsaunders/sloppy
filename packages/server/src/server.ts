@@ -24,6 +24,7 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerFileRoutes } from './routes/files.js';
 import { registerGitHubRoutes } from './routes/github.js';
 import { registerScoreRoutes } from './routes/score.js';
+import { registerDetectRoutes } from './routes/detect.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -137,6 +138,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   await registerFileRoutes(app);
   await registerGitHubRoutes(app);
   await registerScoreRoutes(app);
+  await registerDetectRoutes(app);
 
   // Health check endpoint
   app.get('/health', async () => {
@@ -163,6 +165,8 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
         settings: '/api/settings',
         github: '/api/github',
         score: '/api/sessions/:id/score',
+        detect: '/api/detect',
+        detectProviders: '/api/detect/providers',
         websocket: '/ws',
         health: '/health',
       },

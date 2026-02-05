@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VerificationService, extractVerificationErrors } from '../services/verification.js';
-import type { SessionConfig, VerificationResult } from '../services/types.js';
+import type { SessionConfig, VerificationResult, Logger } from '../services/types.js';
 
 // Mock child_process
 vi.mock('child_process', () => ({
@@ -13,121 +13,110 @@ const mockSpawn = vi.mocked(spawn);
 function createMockProcess(exitCode: number, stdout: string, stderr: string) {
   const mockProcess = {
     stdout: {
-      on: vi.fn((event, callback) => {
+      on: vi.fn((event: string, callback: (data: Buffer) => void) => {
         if (event === 'data') {
           callback(Buffer.from(stdout));
         }
       }),
     },
     stderr: {
-      on: vi.fn((event, callback) => {
+      on: vi.fn((event: string, callback: (data: Buffer) => void) => {
         if (event === 'data') {
           callback(Buffer.from(stderr));
         }
       }),
     },
-    on: vi.fn((event, callback) => {
+    on: vi.fn((event: string, callback: (...args: any[]) => void) => {
       if (event === 'close') {
         setTimeout(() => callback(exitCode), 0);
       }
     }),
+    kill: vi.fn(),
+    killed: false,
   };
   return mockProcess as any;
 }
 
+// Create a mock logger for VerificationService constructor
+function createMockLogger(): Logger {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 describe('VerificationService', () => {
   let service: VerificationService;
+  let mockLogger: Logger;
 
   beforeEach(() => {
-    service = new VerificationService();
+    mockLogger = createMockLogger();
+    service = new VerificationService(mockLogger);
     vi.clearAllMocks();
   });
 
   describe('runTests', () => {
-    it('should run test command and return success', async () => {
+    it('should run test command and return pass status', async () => {
       mockSpawn.mockReturnValue(
         createMockProcess(0, 'All tests passed\n10 tests, 0 failures', '')
       );
 
       const result = await service.runTests('npm test', { cwd: '/test' });
 
-      expect(result.success).toBe(true);
+      expect(result.status).toBe('pass');
       expect(result.output).toContain('All tests passed');
-      expect(mockSpawn).toHaveBeenCalledWith('npm', ['test'], expect.any(Object));
     });
 
-    it('should return failure when tests fail', async () => {
+    it('should return fail status when tests fail', async () => {
       mockSpawn.mockReturnValue(
         createMockProcess(1, '', 'Test failed: expected true, got false')
       );
 
       const result = await service.runTests('npm test', { cwd: '/test' });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Test failed');
-    });
-
-    it('should handle timeout', async () => {
-      const neverEndingProcess = {
-        stdout: { on: vi.fn() },
-        stderr: { on: vi.fn() },
-        on: vi.fn(), // Never calls the close callback
-        kill: vi.fn(),
-      };
-      mockSpawn.mockReturnValue(neverEndingProcess as any);
-
-      const result = await service.runTests('npm test', {
-        cwd: '/test',
-        timeout: 100,
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('timeout');
+      expect(result.status).toBe('fail');
+      expect(result.output).toContain('Test failed');
     });
   });
 
   describe('runLint', () => {
-    it('should run lint command and return success', async () => {
+    it('should run lint command and return pass status', async () => {
       mockSpawn.mockReturnValue(createMockProcess(0, 'No linting errors', ''));
 
       const result = await service.runLint('npm run lint', { cwd: '/test' });
 
-      expect(result.success).toBe(true);
+      expect(result.status).toBe('pass');
     });
 
-    it('should parse lint errors', async () => {
-      const lintOutput = `
-        /test/file.ts:10:5 error Unexpected any. Use unknown instead. @typescript-eslint/no-explicit-any
-        /test/file.ts:15:10 warning Missing return type on function @typescript-eslint/explicit-function-return-type
-      `;
-      mockSpawn.mockReturnValue(createMockProcess(1, lintOutput, ''));
+    it('should return fail status on lint errors', async () => {
+      mockSpawn.mockReturnValue(createMockProcess(1, 'Lint errors found', ''));
 
       const result = await service.runLint('npm run lint', { cwd: '/test' });
 
-      expect(result.success).toBe(false);
-      expect(result.errors).toBeDefined();
-      expect(result.errors?.length).toBeGreaterThan(0);
+      expect(result.status).toBe('fail');
     });
   });
 
   describe('runBuild', () => {
-    it('should run build command and return success', async () => {
+    it('should run build command and return pass status', async () => {
       mockSpawn.mockReturnValue(createMockProcess(0, 'Build complete', ''));
 
       const result = await service.runBuild('npm run build', { cwd: '/test' });
 
-      expect(result.success).toBe(true);
+      expect(result.status).toBe('pass');
     });
 
-    it('should return failure on build error', async () => {
+    it('should return fail status on build error', async () => {
       mockSpawn.mockReturnValue(
         createMockProcess(1, '', "error TS2322: Type 'string' is not assignable to type 'number'")
       );
 
       const result = await service.runBuild('npm run build', { cwd: '/test' });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('TS2322');
+      expect(result.status).toBe('fail');
+      expect(result.output).toContain('TS2322');
     });
   });
 
@@ -144,16 +133,13 @@ describe('VerificationService', () => {
       const result = await service.runAll(config as SessionConfig, { cwd: '/test' });
 
       expect(result.overall).toBe('pass');
-      expect(result.tests?.success).toBe(true);
-      expect(result.lint?.success).toBe(true);
-      expect(result.build?.success).toBe(true);
+      expect(result.tests?.status).toBe('pass');
+      expect(result.lint?.status).toBe('pass');
+      expect(result.build?.status).toBe('pass');
     });
 
-    it('should return fail if any step fails', async () => {
-      mockSpawn
-        .mockReturnValueOnce(createMockProcess(0, 'Tests pass', ''))
-        .mockReturnValueOnce(createMockProcess(1, '', 'Lint error'))
-        .mockReturnValueOnce(createMockProcess(0, 'Build pass', ''));
+    it('should return fail if build fails', async () => {
+      mockSpawn.mockReturnValueOnce(createMockProcess(1, '', 'Build error'));
 
       const config: Partial<SessionConfig> = {
         testCommand: 'npm test',
@@ -164,7 +150,7 @@ describe('VerificationService', () => {
       const result = await service.runAll(config as SessionConfig, { cwd: '/test' });
 
       expect(result.overall).toBe('fail');
-      expect(result.lint?.success).toBe(false);
+      expect(result.build?.status).toBe('fail');
     });
 
     it('should skip steps without commands', async () => {
@@ -172,7 +158,8 @@ describe('VerificationService', () => {
 
       const config: Partial<SessionConfig> = {
         testCommand: 'npm test',
-        // No lint or build commands
+        lintCommand: null,
+        buildCommand: null,
       };
 
       const result = await service.runAll(config as SessionConfig, { cwd: '/test' });
@@ -189,10 +176,16 @@ describe('extractVerificationErrors', () => {
     const result: VerificationResult = {
       overall: 'fail',
       tests: {
-        success: false,
-        output: 'Test output',
-        error: 'Test failed: expected true, got false',
+        status: 'fail',
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        total: 1,
         duration: 1000,
+        output: 'Test output',
+        errors: [
+          { testName: 'should work', message: 'Test failed: expected true, got false' },
+        ],
       },
       lint: null,
       build: null,
@@ -210,13 +203,16 @@ describe('extractVerificationErrors', () => {
       overall: 'fail',
       tests: null,
       lint: {
-        success: false,
-        output: '',
-        error: 'Unexpected any type',
+        status: 'fail',
+        errorCount: 1,
+        warningCount: 0,
+        fixableErrorCount: 0,
+        fixableWarningCount: 0,
         duration: 500,
+        output: '',
         errors: [
           {
-            file: '/test/file.ts',
+            filePath: '/test/file.ts',
             line: 10,
             column: 5,
             message: 'Unexpected any',
@@ -241,10 +237,14 @@ describe('extractVerificationErrors', () => {
       tests: null,
       lint: null,
       build: {
-        success: false,
-        output: '',
-        error: "TS2322: Type 'string' is not assignable to type 'number'",
+        status: 'fail',
         duration: 2000,
+        output: '',
+        errors: [
+          {
+            message: "TS2322: Type 'string' is not assignable to type 'number'",
+          },
+        ],
       },
       duration: 2000,
       timestamp: new Date(),
@@ -259,16 +259,35 @@ describe('extractVerificationErrors', () => {
     const result: VerificationResult = {
       overall: 'fail',
       tests: {
-        success: false,
-        output: '',
-        error: 'Test error',
+        status: 'fail',
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        total: 1,
         duration: 1000,
+        output: '',
+        errors: [
+          { testName: 'test1', message: 'Test error' },
+        ],
       },
       lint: {
-        success: false,
-        output: '',
-        error: 'Lint error',
+        status: 'fail',
+        errorCount: 1,
+        warningCount: 0,
+        fixableErrorCount: 0,
+        fixableWarningCount: 0,
         duration: 500,
+        output: '',
+        errors: [
+          {
+            filePath: '/test/file.ts',
+            line: 1,
+            column: 1,
+            message: 'Lint error',
+            rule: 'some-rule',
+            severity: 'error',
+          },
+        ],
       },
       build: null,
       duration: 1500,

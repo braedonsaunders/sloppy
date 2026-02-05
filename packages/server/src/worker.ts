@@ -20,6 +20,11 @@ import {
   SloppyEvent,
   SessionStatus,
   Logger,
+  Issue,
+  IssueCategory,
+  IssueSeverity,
+  FixRequest,
+  FixResponse,
 } from './services/types.js';
 import {
   Orchestrator,
@@ -46,6 +51,17 @@ import {
   MetricsCollector,
   InMemoryMetricsDatabaseAdapter as MetricsDbAdapter,
 } from './services/metrics-collector.js';
+import {
+  createProvider,
+  autoDetectProvider,
+  type Issue as ProviderIssue,
+  type IssueSeverity as ProviderIssueSeverity,
+  type IssueCategory as ProviderIssueCategory,
+} from '@sloppy/providers';
+import {
+  AnalysisOrchestrator,
+  type Issue as AnalyzerIssue,
+} from '@sloppy/analyzers';
 
 // ============================================================================
 // Types
@@ -573,11 +589,11 @@ class WorkerRunner {
 
     const verificationService = createVerificationService(this.logger);
 
-    // Create AI provider (placeholder - would be injected)
-    const aiProvider = this.createAIProvider();
+    // Create AI provider from session config or auto-detect
+    const aiProvider = await this.createAIProvider(session);
 
-    // Create analyzer (placeholder - would be injected)
-    const analyzer = this.createAnalyzer();
+    // Create analyzer using the AnalysisOrchestrator
+    const analyzer = this.createAnalyzer(session);
 
     return {
       logger: this.logger,
@@ -613,27 +629,230 @@ class WorkerRunner {
     };
   }
 
-  private createAIProvider(): AIProvider {
-    // Placeholder AI provider - in production, would connect to real AI service
-    return {
-      async generateFix(_request: unknown) {
-        // This is a stub - real implementation would call AI service
-        return {
-          success: false,
-          error: 'AI provider not configured',
-        };
-      },
+  private async createAIProvider(session: Session): Promise<AIProvider> {
+    // Severity mapping: orchestrator IssueSeverity -> provider IssueSeverity
+    const severityToProvider: Record<string, ProviderIssueSeverity> = {
+      critical: 'error',
+      high: 'error',
+      medium: 'warning',
+      low: 'info',
+      info: 'hint',
     };
+    // Category mapping: orchestrator IssueCategory -> provider IssueCategory
+    const categoryToProvider: Record<string, ProviderIssueCategory> = {
+      error: 'bug',
+      warning: 'other',
+      style: 'style',
+      complexity: 'complexity',
+      security: 'security',
+      performance: 'performance',
+      maintainability: 'maintainability',
+    };
+
+    try {
+      const providerType = session.config.aiProvider;
+      const model = session.config.aiModel;
+
+      // Try to create provider from session config
+      let provider: Awaited<ReturnType<typeof autoDetectProvider>> | null = null;
+
+      if (providerType) {
+        try {
+          const config: Record<string, unknown> = { type: providerType };
+          if (model) {
+            config.model = model;
+          }
+          provider = createProvider(
+            config as Parameters<typeof createProvider>[0],
+          );
+          this.logger.info('AI provider created from session config', {
+            provider: providerType,
+            model,
+          });
+        } catch (configError) {
+          this.logger.warn(
+            'Failed to create provider from session config, trying auto-detection',
+            {
+              provider: providerType,
+              error:
+                configError instanceof Error
+                  ? configError.message
+                  : String(configError),
+            },
+          );
+        }
+      }
+
+      // Fallback to auto-detection based on environment variables
+      if (!provider) {
+        try {
+          provider = await autoDetectProvider();
+          this.logger.info('AI provider auto-detected', {
+            provider: provider.name,
+          });
+        } catch (autoError) {
+          this.logger.warn(
+            'Auto-detection of AI provider failed, using stub',
+            {
+              error:
+                autoError instanceof Error
+                  ? autoError.message
+                  : String(autoError),
+            },
+          );
+          return {
+            async generateFix(): Promise<FixResponse> {
+              return { success: false, error: 'AI provider not configured' };
+            },
+          };
+        }
+      }
+
+      // Create adapter bridging provider.fixIssue to orchestrator AIProvider interface
+      const activeProvider = provider;
+      const logger = this.logger;
+
+      return {
+        async generateFix(request: FixRequest): Promise<FixResponse> {
+          try {
+            // Map orchestrator issue to provider issue format
+            const providerIssue: ProviderIssue = {
+              id: request.issue.id,
+              title: request.issue.message,
+              description: request.issue.codeSnippet ?? request.issue.message,
+              severity: severityToProvider[request.issue.severity] ?? 'warning',
+              category: categoryToProvider[request.issue.category] ?? 'other',
+              location: {
+                file: request.issue.filePath,
+                startLine: request.issue.line,
+                endLine: request.issue.endLine ?? request.issue.line,
+                startColumn: request.issue.column,
+                endColumn: request.issue.endColumn,
+              },
+              suggestedFix: request.issue.suggestedFix,
+              confidence: 0.8,
+            };
+
+            const result = await activeProvider.fixIssue(
+              providerIssue,
+              request.fileContent,
+            );
+
+            return {
+              success: result.success,
+              diff: result.diff,
+              explanation: result.explanation,
+            };
+          } catch (error) {
+            logger.warn('AI provider fixIssue call failed', {
+              error:
+                error instanceof Error ? error.message : String(error),
+            });
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            };
+          }
+        },
+      };
+    } catch (error) {
+      this.logger.warn('Failed to create AI provider, using stub', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        async generateFix(): Promise<FixResponse> {
+          return { success: false, error: 'AI provider not configured' };
+        },
+      };
+    }
   }
 
-  private createAnalyzer(): CodeAnalyzer {
-    // Placeholder analyzer - in production, would use real analyzers
-    return {
-      async analyze(_repositoryPath: string, _types?: string[], _excludePatterns?: string[]) {
-        // This is a stub - real implementation would run analyzers
-        return [];
-      },
+  private createAnalyzer(session: Session): CodeAnalyzer {
+    // Severity mapping: analyzer Severity -> orchestrator IssueSeverity
+    const severityToOrchestrator: Record<string, IssueSeverity> = {
+      error: 'critical',
+      warning: 'medium',
+      info: 'low',
+      hint: 'info',
     };
+    // Category mapping: analyzer IssueCategory -> orchestrator IssueCategory
+    const categoryToOrchestrator: Record<string, IssueCategory> = {
+      stub: 'error',
+      duplicate: 'style',
+      bug: 'error',
+      type: 'error',
+      coverage: 'warning',
+      lint: 'style',
+      security: 'security',
+      'dead-code': 'maintainability',
+      llm: 'warning',
+    };
+
+    try {
+      const orchestrator = new AnalysisOrchestrator();
+      const sessionId = session.id;
+      const logger = this.logger;
+
+      return {
+        async analyze(
+          repositoryPath: string,
+          types: string[],
+          excludePatterns: string[],
+        ): Promise<Issue[]> {
+          try {
+            const result = await orchestrator.analyze(
+              {
+                rootDir: repositoryPath,
+                exclude: excludePatterns.length > 0 ? excludePatterns : undefined,
+              },
+            );
+
+            // Map analyzer issues to orchestrator issues
+            return result.issues.map((analyzerIssue: AnalyzerIssue): Issue => {
+              const now = new Date();
+              return {
+                id: analyzerIssue.id,
+                sessionId,
+                type: analyzerIssue.category,
+                category: categoryToOrchestrator[analyzerIssue.category] ?? 'warning',
+                severity: severityToOrchestrator[analyzerIssue.severity] ?? 'medium',
+                message: analyzerIssue.message,
+                filePath: analyzerIssue.location.file,
+                line: analyzerIssue.location.line,
+                column: analyzerIssue.location.column,
+                endLine: analyzerIssue.location.endLine,
+                endColumn: analyzerIssue.location.endColumn,
+                source: analyzerIssue.category,
+                codeSnippet: analyzerIssue.context,
+                suggestedFix: analyzerIssue.suggestion,
+                status: 'pending',
+                retryCount: 0,
+                createdAt: now,
+                updatedAt: now,
+              };
+            });
+          } catch (error) {
+            logger.warn('Analysis failed, returning empty results', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          }
+        },
+      };
+    } catch (error) {
+      this.logger.warn('Failed to create analyzer, using stub', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        async analyze(
+          _repositoryPath: string,
+          _types: string[],
+          _excludePatterns: string[],
+        ): Promise<Issue[]> {
+          return [];
+        },
+      };
+    }
   }
 
   private createLogger(): Logger {

@@ -51,14 +51,17 @@ const HELP = `
 ${colors.bold("Sloppy")} - AI-powered code quality tool
 
 ${colors.bold("USAGE")}
-  ${colors.cyan("sloppy")} [command]
+  ${colors.cyan("sloppy")} [command] [options]
 
 ${colors.bold("COMMANDS")}
   ${colors.cyan("start")}    Start the Sloppy server and open the browser ${colors.dim("(default)")}
+  ${colors.cyan("scan")}     Scan current directory and show results
   ${colors.cyan("stop")}     Stop the running Sloppy server
   ${colors.cyan("update")}   Pull latest changes and rebuild
 
 ${colors.bold("OPTIONS")}
+  ${colors.cyan("--fix")}       Auto-fix detected issues (with scan)
+  ${colors.cyan("--json")}      Output results as JSON (with scan)
   ${colors.cyan("--help")}      Show this help message
   ${colors.cyan("--version")}   Show version number
 `;
@@ -272,7 +275,50 @@ async function start(projectRoot: string): Promise<void> {
   console.log(`  ${colors.bold("Local:")}   ${colors.cyan(BASE_URL)}`);
   console.log();
 
-  // Open browser
+  // Auto-create session for cwd
+  const cwd = process.cwd();
+  try {
+    // Detect project
+    const detectRes = await fetch(`${BASE_URL}/api/detect?path=${encodeURIComponent(cwd)}`);
+    const detectData = await detectRes.json();
+
+    // Find a configured provider
+    const providersRes = await fetch(`${BASE_URL}/api/providers`);
+    const providersData = await providersRes.json();
+    const configuredProvider = (providersData as any)?.data?.find((p: any) => p.configured);
+
+    if (configuredProvider && (detectData as any)?.success) {
+      const d = (detectData as any).data;
+      // Create a session
+      const sessionRes = await fetch(`${BASE_URL}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repoPath: cwd,
+          provider: configuredProvider.id,
+          config: {
+            testCommand: d?.commands?.test,
+            lintCommand: d?.commands?.lint,
+            buildCommand: d?.commands?.build,
+          }
+        })
+      });
+      const sessionData = await sessionRes.json();
+      if ((sessionData as any)?.success) {
+        // Open browser directly to the session
+        const open = (await import("open")).default;
+        await open(`${BASE_URL}/session/${(sessionData as any).data.id}`);
+        console.log(colors.dim("  Browser opened to session. You can close this terminal."));
+        console.log(colors.dim(`  To stop the server, run: ${colors.cyan("sloppy stop")}`));
+        console.log();
+        return;
+      }
+    }
+  } catch {
+    // Fall through to just opening the dashboard
+  }
+
+  // Fallback: open dashboard
   const open = (await import("open")).default;
   await open(BASE_URL);
 
@@ -373,29 +419,121 @@ async function update(projectRoot: string): Promise<void> {
   console.log(colors.dim(`  Run ${colors.cyan("sloppy start")} to launch.\n`));
 }
 
+async function scan(projectRoot: string, targetDir: string, fix: boolean, json: boolean): Promise<void> {
+  if (!json) {
+    console.log(BANNER);
+    console.log(colors.dim("  Scanning ") + colors.cyan(targetDir) + colors.dim("..."));
+    console.log();
+  }
+
+  // Ensure server is running
+  let serverStarted = false;
+  const portInUse = await checkPort();
+  if (!portInUse) {
+    if (!json) console.log(colors.dim("  Starting server..."));
+    // Start server (reuse existing start logic but don't open browser)
+    const serverEntry = join(projectRoot, "packages", "server", "dist", "index.js");
+    if (!existsSync(serverEntry)) {
+      console.error(json ? JSON.stringify({ error: "Server not built" }) : colors.red("  Server not built. Run pnpm build first."));
+      process.exit(1);
+    }
+    const child = spawn("node", [serverEntry], {
+      cwd: projectRoot,
+      stdio: "ignore",
+      detached: true,
+      env: { ...process.env, NODE_ENV: "production" },
+    });
+    child.unref();
+    if (child.pid) savePid(projectRoot, child.pid);
+    const healthy = await waitForHealth();
+    if (!healthy) {
+      console.error(json ? JSON.stringify({ error: "Server failed to start" }) : colors.red("  Server failed to start."));
+      process.exit(1);
+    }
+    serverStarted = true;
+    if (!json) console.log(colors.green("  Server started."));
+    if (!json) console.log();
+  }
+
+  try {
+    // Detect project
+    const detectRes = await fetch(`${BASE_URL}/api/detect?path=${encodeURIComponent(targetDir)}`);
+    const detectData = (await detectRes.json()) as any;
+
+    if (!json && detectData?.success) {
+      const d = detectData.data;
+      console.log(`  ${colors.bold("Project:")} ${d.language}${d.framework ? ` (${d.framework})` : ""}`);
+      if (d.packageManager) console.log(`  ${colors.bold("Package Manager:")} ${d.packageManager}`);
+      console.log();
+    }
+
+    // Find provider
+    const providersRes = await fetch(`${BASE_URL}/api/providers`);
+    const providersData = (await providersRes.json()) as any;
+    const provider = providersData?.data?.find((p: any) => p.configured);
+
+    if (!provider) {
+      const msg = "No AI provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var, or configure via web UI.";
+      console.error(json ? JSON.stringify({ error: msg }) : colors.red(`  ${msg}`));
+      process.exit(1);
+    }
+
+    if (!json) {
+      console.log(`  ${colors.bold("Provider:")} ${provider.name}`);
+      console.log();
+    }
+
+    // The scan output message
+    if (!json) {
+      console.log(colors.dim("  Analysis will begin in the dashboard."));
+      console.log(`  ${colors.cyan(`${BASE_URL}`)}`);
+    }
+
+    if (json) {
+      console.log(JSON.stringify({
+        project: detectData?.data,
+        provider: provider.id,
+        status: "ready",
+        dashboardUrl: BASE_URL,
+      }));
+    }
+  } catch (err) {
+    console.error(json ? JSON.stringify({ error: String(err) }) : colors.red(`  Error: ${err}`));
+    process.exit(1);
+  }
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const command = args[0] || "start";
 
-  // Handle flags
-  if (command === "--help" || command === "-h") {
+  // Handle flags first
+  if (args.includes("--help") || args.includes("-h")) {
     console.log(HELP);
     return;
   }
 
-  if (command === "--version" || command === "-v") {
+  if (args.includes("--version") || args.includes("-v")) {
     const projectRoot = findProjectRoot();
     console.log(`sloppy v${getVersion(projectRoot)}`);
     return;
   }
+
+  // If --fix or --json is passed without an explicit command, route to scan
+  const hasFixFlag = args.includes("--fix");
+  const hasJsonFlag = args.includes("--json");
+  const positionalArgs = args.filter((a) => !a.startsWith("--"));
+  const command = positionalArgs[0] || (hasFixFlag || hasJsonFlag ? "scan" : "start");
 
   const projectRoot = findProjectRoot();
 
   switch (command) {
     case "start":
       await start(projectRoot);
+      break;
+    case "scan":
+      await scan(projectRoot, process.cwd(), hasFixFlag, hasJsonFlag);
       break;
     case "stop":
       await stop(projectRoot);
