@@ -9,6 +9,8 @@ import {
   GitCommit,
   Clock,
   AlertCircle,
+  Info,
+  CheckCircle,
   Loader2,
 } from 'lucide-react';
 import type { Activity } from '@/lib/api';
@@ -20,22 +22,26 @@ export interface ActivityLogProps {
   className?: string;
 }
 
-const activityIcons = {
+const activityIcons: Record<string, typeof Search> = {
   analyzing: Search,
   fixing: Wrench,
   testing: TestTube,
   committing: GitCommit,
   waiting: Clock,
   error: AlertCircle,
+  info: Info,
+  success: CheckCircle,
 };
 
-const activityColors = {
+const activityColors: Record<string, string> = {
   analyzing: 'text-accent bg-accent/10',
   fixing: 'text-warning bg-warning/10',
   testing: 'text-purple-400 bg-purple-400/10',
   committing: 'text-success bg-success/10',
   waiting: 'text-dark-400 bg-dark-600',
   error: 'text-error bg-error/10',
+  info: 'text-accent bg-accent/10',
+  success: 'text-success bg-success/10',
 };
 
 export default function ActivityLog({
@@ -94,8 +100,8 @@ interface ActivityItemProps {
 }
 
 function ActivityItem({ activity }: ActivityItemProps): JSX.Element {
-  const Icon = activityIcons[activity.type];
-  const colorClass = activityColors[activity.type];
+  const Icon = activityIcons[activity.type] ?? Info;
+  const colorClass = activityColors[activity.type] ?? 'text-dark-400 bg-dark-600';
 
   const time = new Date(activity.timestamp).toLocaleTimeString([], {
     hour: '2-digit',
@@ -207,8 +213,8 @@ export function ActivityIndicator({
     );
   }
 
-  const Icon = activityIcons[activity.type];
-  const colorClass = activityColors[activity.type];
+  const Icon = activityIcons[activity.type] ?? Info;
+  const colorClass = activityColors[activity.type] ?? 'text-dark-400 bg-dark-600';
 
   return (
     <div className={twMerge('flex items-center gap-2', className)}>

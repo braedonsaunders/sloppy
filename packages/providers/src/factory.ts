@@ -524,7 +524,7 @@ export async function autoDetectProvider(): Promise<BaseProvider> {
   }
 
   // Check for additional OpenAI-compatible provider API keys
-  const envProviderMap: Array<{ envKey: string; type: ProviderType }> = [
+  const envProviderMap: { envKey: string; type: ProviderType }[] = [
     { envKey: 'GOOGLE_API_KEY', type: 'gemini' },
     { envKey: 'GEMINI_API_KEY', type: 'gemini' },
     { envKey: 'OPENROUTER_API_KEY', type: 'openrouter' },
