@@ -86,7 +86,7 @@ const PROVIDER_DEFAULT_MODELS: Record<LLMProviderType, string> = {
  */
 export type AnalyzerEvent =
   | { type: 'llm_request_start'; data: { id: string; iteration: number; maxIterations: number; messageCount: number; provider: string; model: string } }
-  | { type: 'llm_request_complete'; data: { id: string; iteration: number; toolCalls?: { name: string }[]; textLength?: number; durationMs: number } }
+  | { type: 'llm_request_complete'; data: { id: string; iteration: number; toolCalls?: { name: string }[]; textLength?: number; durationMs: number; inputTokens?: number; outputTokens?: number } }
   | { type: 'tool_call'; data: { iteration: number; tool: string; resultPreview: string } }
   | { type: 'issue_found'; data: { title: string; severity: string; file: string } }
   | { type: 'analysis_complete'; data: { iterations: number; llmCalls: number; issuesFound: number; durationMs: number } };
@@ -470,6 +470,8 @@ export class LLMAnalyzer extends BaseAnalyzer {
               iteration: iterNum,
               toolCalls: response.toolCalls.map(tc => ({ name: tc.name })),
               durationMs: callDuration,
+              inputTokens: response.inputTokens,
+              outputTokens: response.outputTokens,
             },
           });
 
@@ -524,6 +526,8 @@ export class LLMAnalyzer extends BaseAnalyzer {
               iteration: iterNum,
               textLength: response.content.length,
               durationMs: callDuration,
+              inputTokens: response.inputTokens,
+              outputTokens: response.outputTokens,
             },
           });
 
@@ -671,6 +675,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
   private async callLLM(messages: Message[]): Promise<{
     content: string;
     toolCalls?: ToolCall[];
+    inputTokens?: number;
+    outputTokens?: number;
   }> {
     // Claude uses native Anthropic API
     if (this.getConfig().provider === 'claude') {
@@ -686,6 +692,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
   private async callAnthropic(messages: Message[]): Promise<{
     content: string;
     toolCalls?: ToolCall[];
+    inputTokens?: number;
+    outputTokens?: number;
   }> {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
     const client = new Anthropic({
@@ -759,7 +767,12 @@ Use the tools to explore the codebase and create issues for any problems you fin
       }
     }
 
-    return { content, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+    return {
+      content,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    };
   }
 
   /**
@@ -769,6 +782,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
   private async callOpenAICompatible(messages: Message[]): Promise<{
     content: string;
     toolCalls?: ToolCall[];
+    inputTokens?: number;
+    outputTokens?: number;
   }> {
     const { default: OpenAI } = await import('openai');
     const client = new OpenAI({
@@ -845,7 +860,12 @@ Use the tools to explore the codebase and create issues for any problems you fin
       }
     }
 
-    return { content, toolCalls: toolCalls.length > 0 ? toolCalls : undefined };
+    return {
+      content,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      inputTokens: response.usage?.prompt_tokens,
+      outputTokens: response.usage?.completion_tokens,
+    };
   }
 
   /**

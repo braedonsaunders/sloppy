@@ -212,10 +212,14 @@ export function useSessionWebSocket(sessionId: string): void {
         } else if (eventType === 'llm_request_complete') {
           const reqId = typeof details?.id === 'string' ? details.id : '';
           const durationMs = typeof details?.durationMs === 'number' ? details.durationMs : 0;
+          const inputTokens = typeof details?.inputTokens === 'number' ? details.inputTokens : undefined;
+          const outputTokens = typeof details?.outputTokens === 'number' ? details.outputTokens : undefined;
           updateLLMRequest(reqId, {
             status: 'completed',
             duration: durationMs,
             completedAt: activity.timestamp,
+            inputTokens,
+            outputTokens,
           });
           setActiveLLMRequest(undefined);
         } else if (eventType === 'analysis_complete') {

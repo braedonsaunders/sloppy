@@ -163,6 +163,11 @@ export default function IssueCard({
 
         {/* Expand Button */}
         <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleToggle();
+          }}
           className={clsx(
             'flex-shrink-0 p-2 rounded-lg transition-colors',
             isExpanded
