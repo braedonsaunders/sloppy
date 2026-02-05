@@ -67,5 +67,8 @@ export {
   createOrchestrator,
 } from './orchestrator.js';
 
+// Project Detector
+export { detectProject, type DetectedProject } from './project-detector.js';
+
 // Learnings Adapter
 export type { LearningsAdapter } from './types.js';

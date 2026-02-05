@@ -12,6 +12,10 @@ import { DuplicateAnalyzer } from './duplicates/index.js';
 import { CoverageAnalyzer } from './coverage/index.js';
 import { SecurityAnalyzer } from './security/index.js';
 import { LLMAnalyzer } from './llm/index.js';
+import { TypeAnalyzer } from './types/index.js';
+import { BugAnalyzer } from './bugs/index.js';
+import { LintAnalyzer } from './lint/index.js';
+import { DeadCodeAnalyzer } from './dead-code/index.js';
 
 /**
  * Configuration for the orchestrator
@@ -63,6 +67,10 @@ export class AnalysisOrchestrator {
     'stub',
     'duplicate',
     'coverage',
+    'bug',
+    'type',
+    'lint',
+    'dead-code',
   ];
 
   constructor() {
@@ -71,6 +79,10 @@ export class AnalysisOrchestrator {
     this.analyzers.set('duplicate', new DuplicateAnalyzer());
     this.analyzers.set('coverage', new CoverageAnalyzer());
     this.analyzers.set('security', new SecurityAnalyzer());
+    this.analyzers.set('type', new TypeAnalyzer());
+    this.analyzers.set('bug', new BugAnalyzer());
+    this.analyzers.set('lint', new LintAnalyzer());
+    this.analyzers.set('dead-code', new DeadCodeAnalyzer());
     this.llmAnalyzer = new LLMAnalyzer();
     this.analyzers.set('llm', this.llmAnalyzer);
   }

@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -15,6 +15,7 @@ import {
   Github,
   Lock,
   ExternalLink,
+  Loader2,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Input from '@/components/Input';
@@ -75,6 +76,13 @@ export default function NewSession(): JSX.Element {
   const [showGitHubSelector, setShowGitHubSelector] = useState(false);
   const [selectedGitHubRepo, setSelectedGitHubRepo] = useState<GitHubRepository | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detectedProject, setDetectedProject] = useState<{
+    language: string;
+    framework: string | null;
+    packageManager: string | null;
+    commands: { test: string | null; lint: string | null; build: string | null; typecheck: string | null };
+  } | null>(null);
+  const [isDetecting, setIsDetecting] = useState(false);
 
   // Get configured providers
   const configuredProviders = providers?.filter((p) => p.configured) ?? [];
@@ -91,6 +99,35 @@ export default function NewSession(): JSX.Element {
       if (typeof s.approvalModeDefault === 'boolean') {setApprovalMode(s.approvalModeDefault);}
     }
   });
+
+  // Auto-detect project type when local path changes
+  useEffect(() => {
+    if (repoType !== 'local' || repoPath.length < 2) {
+      setDetectedProject(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsDetecting(true);
+      try {
+        const res = await fetch(`/api/detect?path=${encodeURIComponent(repoPath)}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          setDetectedProject(data.data);
+          // Auto-fill commands if not manually set
+          if (data.data.commands.test && !testCommand) setTestCommand(data.data.commands.test);
+          if (data.data.commands.lint && !lintCommand) setLintCommand(data.data.commands.lint);
+          if (data.data.commands.build && !buildCommand) setBuildCommand(data.data.commands.build);
+        }
+      } catch {
+        // Detection failed, that's ok
+      } finally {
+        setIsDetecting(false);
+      }
+    }, 500); // debounce
+
+    return () => clearTimeout(timer);
+  }, [repoPath, repoType]);
 
   const toggleFocusArea = (area: string): void => {
     setFocusAreas((prev) =>
@@ -210,24 +247,43 @@ export default function NewSession(): JSX.Element {
           </div>
 
           {repoType === 'local' && (
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Input
-                  placeholder="/path/to/your/project"
-                  value={repoPath}
-                  onChange={(e) => { setRepoPath(e.target.value); }}
-                  leftIcon={<FolderOpen className="h-4 w-4" />}
-                />
+            <>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Input
+                    placeholder="/path/to/your/project"
+                    value={repoPath}
+                    onChange={(e) => { setRepoPath(e.target.value); }}
+                    leftIcon={<FolderOpen className="h-4 w-4" />}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => { setShowFileBrowser(true); }}
+                  leftIcon={<FolderSearch className="h-4 w-4" />}
+                >
+                  Browse
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => { setShowFileBrowser(true); }}
-                leftIcon={<FolderSearch className="h-4 w-4" />}
-              >
-                Browse
-              </Button>
-            </div>
+              {repoPath && (
+                <div className="mt-3">
+                  {isDetecting ? (
+                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Detecting project...
+                    </div>
+                  ) : detectedProject ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <Badge variant="info">{detectedProject.language}</Badge>
+                      {detectedProject.framework && <Badge variant="neutral">{detectedProject.framework}</Badge>}
+                      {detectedProject.packageManager && <Badge variant="neutral">{detectedProject.packageManager}</Badge>}
+                      <span className="text-dark-500">Auto-detected</span>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </>
           )}
 
           {repoType === 'git' && (
@@ -492,29 +548,44 @@ export default function NewSession(): JSX.Element {
                 Override auto-detected commands for your project
               </p>
 
-              <Input
-                label="Test Command"
-                placeholder="npm test"
-                value={testCommand}
-                onChange={(e) => { setTestCommand(e.target.value); }}
-                hint="Command to run tests"
-              />
+              <div>
+                <Input
+                  label="Test Command"
+                  placeholder="npm test"
+                  value={testCommand}
+                  onChange={(e) => { setTestCommand(e.target.value); }}
+                  hint="Command to run tests"
+                />
+                {detectedProject?.commands.test && testCommand === detectedProject.commands.test && (
+                  <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
+                )}
+              </div>
 
-              <Input
-                label="Lint Command"
-                placeholder="npm run lint"
-                value={lintCommand}
-                onChange={(e) => { setLintCommand(e.target.value); }}
-                hint="Command to run linting"
-              />
+              <div>
+                <Input
+                  label="Lint Command"
+                  placeholder="npm run lint"
+                  value={lintCommand}
+                  onChange={(e) => { setLintCommand(e.target.value); }}
+                  hint="Command to run linting"
+                />
+                {detectedProject?.commands.lint && lintCommand === detectedProject.commands.lint && (
+                  <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
+                )}
+              </div>
 
-              <Input
-                label="Build Command"
-                placeholder="npm run build"
-                value={buildCommand}
-                onChange={(e) => { setBuildCommand(e.target.value); }}
-                hint="Command to build the project"
-              />
+              <div>
+                <Input
+                  label="Build Command"
+                  placeholder="npm run build"
+                  value={buildCommand}
+                  onChange={(e) => { setBuildCommand(e.target.value); }}
+                  hint="Command to build the project"
+                />
+                {detectedProject?.commands.build && buildCommand === detectedProject.commands.build && (
+                  <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
+                )}
+              </div>
             </div>
           )}
         </section>

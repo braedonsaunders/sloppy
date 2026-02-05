@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import Anthropic from '@anthropic-ai/sdk';
 import {
   BaseProvider,
@@ -95,16 +96,37 @@ export class ClaudeProvider extends BaseProvider {
   ): Promise<AnalysisResult> {
     const startTime = Date.now();
 
-    // Prepare file contents (in real implementation, read from disk)
-    const fileContents = files.map(filePath => ({
-      path: filePath,
-      content: `// Content of ${filePath} would be read here`,
-      language: this.detectLanguage(filePath),
-    }));
+    // Read actual file contents from disk
+    const fileContents = await Promise.all(
+      files.map(async (filePath) => {
+        try {
+          const content = await readFile(filePath, 'utf-8');
+          return {
+            path: filePath,
+            content,
+            language: this.detectLanguage(filePath),
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    const validFiles = fileContents.filter((f): f is NonNullable<typeof f> => f !== null);
+
+    if (validFiles.length === 0) {
+      return {
+        issues: [],
+        summary: 'No files could be read for analysis.',
+        overallScore: 100,
+        analyzedFiles: [],
+        timestamp: new Date().toISOString(),
+        duration: Date.now() - startTime,
+      };
+    }
 
     const userPrompt = generateAnalysisUserPrompt({
       type: this.analysisType,
-      files: fileContents,
+      files: validFiles,
       context,
     });
 

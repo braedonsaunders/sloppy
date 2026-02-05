@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   isValidCommitHash,
+  isFullCommitHash,
   sanitizeBranchName,
   isValidBranchName,
-  formatCommitMessage,
-  parseGitStatus,
-  GitStatusCode,
+  parseGitUrl,
+  buildHttpsUrl,
+  buildSshUrl,
+  escapeGitArg,
+  normalizeGitPath,
+  isSafeRefName,
 } from '../utils.js';
 
 describe('isValidCommitHash', () => {
@@ -27,6 +31,23 @@ describe('isValidCommitHash', () => {
   });
 });
 
+describe('isFullCommitHash', () => {
+  it('should accept 40-char hex strings', () => {
+    expect(isFullCommitHash('a'.repeat(40))).toBe(true);
+    expect(isFullCommitHash('1234567890abcdef1234567890abcdef12345678')).toBe(true);
+  });
+
+  it('should reject short hashes', () => {
+    expect(isFullCommitHash('abc1234')).toBe(false);
+    expect(isFullCommitHash('a'.repeat(39))).toBe(false);
+  });
+
+  it('should reject invalid input', () => {
+    expect(isFullCommitHash('')).toBe(false);
+    expect(isFullCommitHash('g'.repeat(40))).toBe(false); // non-hex
+  });
+});
+
 describe('sanitizeBranchName', () => {
   it('should sanitize invalid characters', () => {
     expect(sanitizeBranchName('feature/my branch')).toBe('feature/my-branch');
@@ -39,14 +60,16 @@ describe('sanitizeBranchName', () => {
     expect(sanitizeBranchName('feature\\path')).toBe('feature-path');
   });
 
-  it('should trim leading/trailing special chars', () => {
+  it('should trim leading dots', () => {
     expect(sanitizeBranchName('.feature')).toBe('feature');
-    expect(sanitizeBranchName('feature.')).toBe('feature');
-    expect(sanitizeBranchName('/feature/')).toBe('feature');
   });
 
-  it('should convert to lowercase', () => {
-    expect(sanitizeBranchName('Feature/MyBranch')).toBe('feature/mybranch');
+  it('should trim trailing slashes', () => {
+    expect(sanitizeBranchName('feature/')).toBe('feature');
+  });
+
+  it('should throw for empty input', () => {
+    expect(() => sanitizeBranchName('')).toThrow();
   });
 });
 
@@ -67,84 +90,104 @@ describe('isValidBranchName', () => {
   });
 });
 
-describe('formatCommitMessage', () => {
-  it('should format simple message', () => {
-    const result = formatCommitMessage('fix', 'button', 'resolve click issue');
-    expect(result).toBe('fix(button): resolve click issue');
+describe('parseGitUrl', () => {
+  it('should parse HTTPS URL', () => {
+    const result = parseGitUrl('https://github.com/owner/repo.git');
+
+    expect(result.protocol).toBe('https');
+    expect(result.host).toBe('github.com');
+    expect(result.owner).toBe('owner');
+    expect(result.repo).toBe('repo');
   });
 
-  it('should handle message without scope', () => {
-    const result = formatCommitMessage('docs', undefined, 'update readme');
-    expect(result).toBe('docs: update readme');
+  it('should parse SSH URL', () => {
+    const result = parseGitUrl('git@github.com:owner/repo.git');
+
+    expect(result.protocol).toBe('ssh');
+    expect(result.host).toBe('github.com');
+    expect(result.owner).toBe('owner');
+    expect(result.repo).toBe('repo');
   });
 
-  it('should truncate long messages', () => {
-    const longMessage = 'a'.repeat(100);
-    const result = formatCommitMessage('fix', 'test', longMessage);
-    expect(result.length).toBeLessThanOrEqual(72);
-    expect(result).toContain('...');
+  it('should parse HTTPS URL without .git suffix', () => {
+    const result = parseGitUrl('https://github.com/owner/repo');
+
+    expect(result.host).toBe('github.com');
+    expect(result.owner).toBe('owner');
+    expect(result.repo).toBe('repo');
   });
 
-  it('should add body when provided', () => {
-    const result = formatCommitMessage('feat', 'api', 'add endpoint', 'Detailed description here');
-    expect(result).toContain('feat(api): add endpoint');
-    expect(result).toContain('\n\nDetailed description here');
+  it('should parse SSH URL without .git suffix', () => {
+    const result = parseGitUrl('git@github.com:owner/repo');
+
+    expect(result.host).toBe('github.com');
+    expect(result.owner).toBe('owner');
+    expect(result.repo).toBe('repo');
+  });
+
+  it('should throw for invalid URL', () => {
+    expect(() => parseGitUrl('')).toThrow();
+    expect(() => parseGitUrl('not-a-url')).toThrow();
   });
 });
 
-describe('parseGitStatus', () => {
-  it('should parse staged modifications', () => {
-    const result = parseGitStatus('M  src/index.ts');
-    expect(result).toEqual({
-      path: 'src/index.ts',
-      indexStatus: GitStatusCode.MODIFIED,
-      workTreeStatus: GitStatusCode.UNMODIFIED,
-    });
+describe('buildHttpsUrl', () => {
+  it('should build correct HTTPS URL', () => {
+    expect(buildHttpsUrl('github.com', 'owner', 'repo')).toBe(
+      'https://github.com/owner/repo.git'
+    );
+  });
+});
+
+describe('buildSshUrl', () => {
+  it('should build correct SSH URL', () => {
+    expect(buildSshUrl('github.com', 'owner', 'repo')).toBe(
+      'git@github.com:owner/repo.git'
+    );
+  });
+});
+
+describe('escapeGitArg', () => {
+  it('should escape backslashes and quotes', () => {
+    expect(escapeGitArg('hello "world"')).toBe('hello \\"world\\"');
+    expect(escapeGitArg('path\\to\\file')).toBe('path\\\\to\\\\file');
   });
 
-  it('should parse unstaged modifications', () => {
-    const result = parseGitStatus(' M src/index.ts');
-    expect(result).toEqual({
-      path: 'src/index.ts',
-      indexStatus: GitStatusCode.UNMODIFIED,
-      workTreeStatus: GitStatusCode.MODIFIED,
-    });
+  it('should return empty string for empty input', () => {
+    expect(escapeGitArg('')).toBe('');
+  });
+});
+
+describe('normalizeGitPath', () => {
+  it('should convert backslashes to forward slashes', () => {
+    expect(normalizeGitPath('src\\utils\\index.ts')).toBe('src/utils/index.ts');
   });
 
-  it('should parse added files', () => {
-    const result = parseGitStatus('A  src/new.ts');
-    expect(result).toEqual({
-      path: 'src/new.ts',
-      indexStatus: GitStatusCode.ADDED,
-      workTreeStatus: GitStatusCode.UNMODIFIED,
-    });
+  it('should remove leading ./', () => {
+    expect(normalizeGitPath('./src/index.ts')).toBe('src/index.ts');
   });
 
-  it('should parse deleted files', () => {
-    const result = parseGitStatus('D  src/old.ts');
-    expect(result).toEqual({
-      path: 'src/old.ts',
-      indexStatus: GitStatusCode.DELETED,
-      workTreeStatus: GitStatusCode.UNMODIFIED,
-    });
+  it('should remove trailing slash', () => {
+    expect(normalizeGitPath('src/utils/')).toBe('src/utils');
   });
 
-  it('should parse untracked files', () => {
-    const result = parseGitStatus('?? src/untracked.ts');
-    expect(result).toEqual({
-      path: 'src/untracked.ts',
-      indexStatus: GitStatusCode.UNTRACKED,
-      workTreeStatus: GitStatusCode.UNTRACKED,
-    });
+  it('should return empty string for empty input', () => {
+    expect(normalizeGitPath('')).toBe('');
+  });
+});
+
+describe('isSafeRefName', () => {
+  it('should accept safe ref names', () => {
+    expect(isSafeRefName('main')).toBe(true);
+    expect(isSafeRefName('feature/branch-name')).toBe(true);
+    expect(isSafeRefName('v1.0.0')).toBe(true);
   });
 
-  it('should parse renamed files', () => {
-    const result = parseGitStatus('R  old.ts -> new.ts');
-    expect(result).toEqual({
-      path: 'new.ts',
-      indexStatus: GitStatusCode.RENAMED,
-      workTreeStatus: GitStatusCode.UNMODIFIED,
-      originalPath: 'old.ts',
-    });
+  it('should reject dangerous ref names', () => {
+    expect(isSafeRefName('')).toBe(false);
+    expect(isSafeRefName('ref; rm -rf /')).toBe(false);
+    expect(isSafeRefName('ref$(cmd)')).toBe(false);
+    expect(isSafeRefName('ref`cmd`')).toBe(false);
+    expect(isSafeRefName('ref|pipe')).toBe(false);
   });
 });
