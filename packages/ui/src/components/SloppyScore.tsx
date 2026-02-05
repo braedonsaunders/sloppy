@@ -20,33 +20,33 @@ export interface SloppyScoreProps {
 
 /** Get color based on score range */
 function getScoreColor(score: number): string {
-  if (score >= 90) return '#22c55e';
-  if (score >= 75) return '#eab308';
-  if (score >= 50) return '#f97316';
+  if (score >= 90) { return '#22c55e'; }
+  if (score >= 75) { return '#eab308'; }
+  if (score >= 50) { return '#f97316'; }
   return '#ef4444';
 }
 
 /** Get label based on score range */
 function getScoreLabel(score: number): string {
-  if (score >= 90) return 'Excellent';
-  if (score >= 75) return 'Good';
-  if (score >= 50) return 'Needs Work';
+  if (score >= 90) { return 'Excellent'; }
+  if (score >= 75) { return 'Good'; }
+  if (score >= 50) { return 'Needs Work'; }
   return 'Poor';
 }
 
 /** Tailwind background class based on score */
 function getScoreBgClass(score: number): string {
-  if (score >= 90) return 'bg-green-500';
-  if (score >= 75) return 'bg-yellow-500';
-  if (score >= 50) return 'bg-orange-500';
+  if (score >= 90) { return 'bg-green-500'; }
+  if (score >= 75) { return 'bg-yellow-500'; }
+  if (score >= 50) { return 'bg-orange-500'; }
   return 'bg-red-500';
 }
 
 /** Tailwind text class based on score */
 function getScoreTextClass(score: number): string {
-  if (score >= 90) return 'text-green-400';
-  if (score >= 75) return 'text-yellow-400';
-  if (score >= 50) return 'text-orange-400';
+  if (score >= 90) { return 'text-green-400'; }
+  if (score >= 75) { return 'text-yellow-400'; }
+  if (score >= 50) { return 'text-orange-400'; }
   return 'text-red-400';
 }
 
@@ -94,7 +94,7 @@ function useAnimatedNumber(target: number, duration = 1200): number {
 
     frameRef.current = requestAnimationFrame(animate);
 
-    return () => {
+    return (): void => {
       cancelAnimationFrame(frameRef.current);
     };
   }, [target, duration]);
@@ -257,7 +257,7 @@ export default function SloppyScore({
           <h4 className="text-xs font-medium text-dark-400 uppercase tracking-wider mb-3">
             Breakdown
           </h4>
-          {(Object.keys(BREAKDOWN_LABELS) as Array<keyof ScoreBreakdown>).map((key) => (
+          {(Object.keys(BREAKDOWN_LABELS) as (keyof ScoreBreakdown)[]).map((key) => (
             <BreakdownBar
               key={key}
               label={BREAKDOWN_LABELS[key]}
