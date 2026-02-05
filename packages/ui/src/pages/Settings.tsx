@@ -102,7 +102,7 @@ function ProvidersTab(): JSX.Element {
   // Fetch detected env providers
   const { data: envProviders } = useQuery({
     queryKey: ['detect', 'providers'],
-    queryFn: () => fetch('/api/detect/providers').then(r => r.json()).then(d => d.data?.detectedProviders as Record<string, boolean>),
+    queryFn: () => fetch('/api/detect/providers').then(r => r.json() as Promise<{ data?: { detectedProviders?: Record<string, boolean> } }>).then(d => d.data?.detectedProviders),
   });
 
   const detectedKeys = envProviders ? Object.entries(envProviders).filter(([_, v]) => v).map(([k]) => k) : [];
@@ -481,12 +481,12 @@ function ProviderCard({
                 {testResult.success ? 'Connection successful' : 'Connection failed'}
               </span>
             </div>
-            {testResult.message && (
+            {testResult.message !== undefined && testResult.message !== '' && (
               <p className="text-xs mt-1.5 ml-6 opacity-80">
                 {testResult.message}
               </p>
             )}
-            {!testResult.success && !testResult.message && (
+            {!testResult.success && (testResult.message === undefined || testResult.message === '') && (
               <p className="text-xs mt-1.5 ml-6 opacity-80">
                 Could not reach the provider. Please verify your API key is correct, check that the
                 base URL is reachable, and ensure your network connection is stable. If using a
