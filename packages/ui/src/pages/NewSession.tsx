@@ -104,7 +104,7 @@ export default function NewSession(): JSX.Element {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pathParam = params.get('path');
-    if (pathParam) {
+    if (pathParam !== null && pathParam !== '') {
       setRepoPath(pathParam);
       if (pathParam.startsWith('http')) {
         setRepoType('git');

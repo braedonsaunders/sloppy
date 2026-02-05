@@ -9,7 +9,6 @@ import {
   RateLimitError,
   ProviderError,
   TimeoutError,
-  type ProviderConfig,
   type StreamCallbacks,
   type AnalysisResult,
   type FixResult,
@@ -64,13 +63,19 @@ export class FallbackProvider extends BaseProvider {
   }
 
   get name(): string {
-    const primary = this.getAvailableProviders()[0];
-    return primary ? `fallback(${primary.provider.name})` : 'fallback(none)';
+    const available = this.getAvailableProviders();
+    if (available.length === 0) {
+      return 'fallback(none)';
+    }
+    return `fallback(${available[0].provider.name})`;
   }
 
   get activeProviderName(): string {
-    const primary = this.getAvailableProviders()[0];
-    return primary?.provider.name ?? 'none';
+    const available = this.getAvailableProviders();
+    if (available.length === 0) {
+      return 'none';
+    }
+    return available[0].provider.name;
   }
 
   get providerCount(): number {
@@ -228,12 +233,12 @@ export class FallbackProvider extends BaseProvider {
   /**
    * Get status of all providers.
    */
-  getProviderStatus(): Array<{
+  getProviderStatus(): {
     name: string;
     available: boolean;
     failureCount: number;
     rateLimitedUntil: number | null;
-  }> {
+  }[] {
     return this.providerHealth.map(health => ({
       name: health.provider.name,
       available: health.isAvailable,

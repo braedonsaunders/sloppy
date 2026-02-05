@@ -47,7 +47,7 @@ export default function Watch(): JSX.Element {
     const unsubChange = wsClient.subscribe('watch:change', (msg) => {
       const payload = msg.payload as { files?: string[]; message?: string };
       setEvents(prev => [{
-        id: `evt-${Date.now()}`,
+        id: `evt-${String(Date.now())}`,
         type: 'change' as const,
         message: payload.message ?? 'Files changed',
         timestamp: new Date().toISOString(),
@@ -57,9 +57,9 @@ export default function Watch(): JSX.Element {
 
     const unsubActivity = wsClient.subscribe('activity:log', (msg) => {
       const payload = msg.payload as { watchSessionId?: string; type?: string; message?: string };
-      if (payload.watchSessionId) {
+      if (payload.watchSessionId !== undefined && payload.watchSessionId !== '') {
         setEvents(prev => [{
-          id: `evt-${Date.now()}`,
+          id: `evt-${String(Date.now())}`,
           type: (payload.type === 'error' ? 'error' : payload.type === 'success' ? 'fix' : 'info') as WatchEvent['type'],
           message: payload.message ?? '',
           timestamp: new Date().toISOString(),
@@ -67,7 +67,7 @@ export default function Watch(): JSX.Element {
       }
     });
 
-    return () => {
+    return (): void => {
       unsubChange();
       unsubActivity();
     };
@@ -81,7 +81,9 @@ export default function Watch(): JSX.Element {
   }, [events.length]);
 
   const handleStart = async (): Promise<void> => {
-    if (!repoPath.trim()) return;
+    if (repoPath.trim() === '') {
+      return;
+    }
     setIsStarting(true);
     try {
       const result = await api.watch.start(repoPath);
@@ -94,16 +96,16 @@ export default function Watch(): JSX.Element {
         lastActivity: result.startedAt,
       });
       setEvents(prev => [{
-        id: `evt-${Date.now()}`,
-        type: 'info',
+        id: `evt-${String(Date.now())}`,
+        type: 'info' as const,
         message: `Started watching ${repoPath}`,
         timestamp: new Date().toISOString(),
       }, ...prev]);
-    } catch (error) {
+    } catch (err) {
       setEvents(prev => [{
-        id: `evt-${Date.now()}`,
-        type: 'error',
-        message: `Failed to start: ${error instanceof Error ? error.message : String(error)}`,
+        id: `evt-${String(Date.now())}`,
+        type: 'error' as const,
+        message: `Failed to start: ${err instanceof Error ? err.message : String(err)}`,
         timestamp: new Date().toISOString(),
       }, ...prev]);
     } finally {
@@ -112,31 +114,37 @@ export default function Watch(): JSX.Element {
   };
 
   const handleStop = async (): Promise<void> => {
-    if (!activeSession) return;
+    if (activeSession === null) {
+      return;
+    }
     try {
       await api.watch.stop(activeSession.id);
       setActiveSession(null);
       setEvents(prev => [{
-        id: `evt-${Date.now()}`,
-        type: 'info',
+        id: `evt-${String(Date.now())}`,
+        type: 'info' as const,
         message: 'Watch mode stopped',
         timestamp: new Date().toISOString(),
       }, ...prev]);
-    } catch (error) {
+    } catch {
       // ignore
     }
   };
 
   const handlePause = async (): Promise<void> => {
-    if (!activeSession) return;
+    if (activeSession === null) {
+      return;
+    }
     await api.watch.pause(activeSession.id);
-    setActiveSession(prev => prev ? { ...prev, status: 'paused' } : null);
+    setActiveSession(prev => prev !== null ? { ...prev, status: 'paused' } : null);
   };
 
   const handleResume = async (): Promise<void> => {
-    if (!activeSession) return;
+    if (activeSession === null) {
+      return;
+    }
     await api.watch.resume(activeSession.id);
-    setActiveSession(prev => prev ? { ...prev, status: 'watching' } : null);
+    setActiveSession(prev => prev !== null ? { ...prev, status: 'watching' } : null);
   };
 
   const eventIcons: Record<string, typeof CheckCircle> = {
@@ -175,7 +183,7 @@ export default function Watch(): JSX.Element {
       </div>
 
       {/* Start/Control Bar */}
-      {!activeSession ? (
+      {activeSession === null ? (
         <div className="rounded-xl border border-dark-700 bg-dark-800 p-6">
           <div className="flex gap-3">
             <div className="relative flex-1">
@@ -183,8 +191,8 @@ export default function Watch(): JSX.Element {
               <input
                 type="text"
                 value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') void handleStart(); }}
+                onChange={(e) => { setRepoPath(e.target.value); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { void handleStart(); } }}
                 placeholder="/path/to/your/project"
                 className="w-full rounded-xl border border-dark-600 bg-dark-900 py-3 pl-11 pr-4 text-dark-100 placeholder-dark-500 focus:border-accent focus:outline-none"
               />
@@ -193,7 +201,7 @@ export default function Watch(): JSX.Element {
               variant="primary"
               onClick={() => { void handleStart(); }}
               isLoading={isStarting}
-              disabled={!repoPath.trim()}
+              disabled={repoPath.trim() === ''}
               leftIcon={<Play className="h-4 w-4" />}
               className="px-6"
             >
@@ -245,7 +253,7 @@ export default function Watch(): JSX.Element {
             <RefreshCw className={`h-4 w-4 text-accent ${activeSession?.status === 'watching' ? 'animate-spin' : ''}`} />
             <span className="text-sm font-medium text-dark-200">Live Feed</span>
           </div>
-          <span className="text-xs text-dark-500">{events.length} events</span>
+          <span className="text-xs text-dark-500">{String(events.length)} events</span>
         </div>
         <div
           ref={feedRef}
@@ -253,7 +261,7 @@ export default function Watch(): JSX.Element {
         >
           {events.length === 0 ? (
             <div className="p-8 text-center text-dark-500">
-              {activeSession ? 'Waiting for file changes...' : 'Start watching to see activity'}
+              {activeSession !== null ? 'Waiting for file changes...' : 'Start watching to see activity'}
             </div>
           ) : (
             <div className="space-y-0.5">

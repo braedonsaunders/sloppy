@@ -69,10 +69,12 @@ export default function Dashboard(): JSX.Element {
       latest,
       sessions: sorted,
       resolveRate,
-      trend: previous
-        ? latest.stats.issuesResolved > previous.stats.issuesResolved ? 'up' :
-          latest.stats.issuesResolved < previous.stats.issuesResolved ? 'down' : 'stable'
-        : 'stable' as 'up' | 'down' | 'stable',
+      trend: ((): 'up' | 'down' | 'stable' => {
+        if (sorted.length < 2) { return 'stable'; }
+        if (latest.stats.issuesResolved > previous.stats.issuesResolved) { return 'up'; }
+        if (latest.stats.issuesResolved < previous.stats.issuesResolved) { return 'down'; }
+        return 'stable';
+      })(),
     };
   });
 
@@ -81,7 +83,7 @@ export default function Dashboard(): JSX.Element {
   );
 
   const handleQuickClean = (): void => {
-    if (!quickPath.trim()) return;
+    if (quickPath.trim() === '') { return; }
     navigate(`/session/new?path=${encodeURIComponent(quickPath)}`);
   };
 
@@ -103,8 +105,8 @@ export default function Dashboard(): JSX.Element {
             <input
               type="text"
               value={quickPath}
-              onChange={(e) => setQuickPath(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleQuickClean(); }}
+              onChange={(e) => { setQuickPath(e.target.value); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { handleQuickClean(); } }}
               placeholder="/path/to/your/project or https://github.com/user/repo"
               className="w-full rounded-xl border border-dark-600 bg-dark-900 py-3 pl-11 pr-4 text-dark-100 placeholder-dark-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
             />
@@ -246,7 +248,7 @@ function ProjectCard({ project }: ProjectCardProps): JSX.Element {
               className={strokeColor}
               strokeWidth="8"
               strokeLinecap="round"
-              strokeDasharray={`${score * 2.64} 264`}
+              strokeDasharray={`${String(score * 2.64)} 264`}
             />
           </svg>
           <div className="absolute inset-0 flex items-center justify-center">
