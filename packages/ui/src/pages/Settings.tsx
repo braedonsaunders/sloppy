@@ -272,7 +272,7 @@ function getDefaultBaseUrl(providerId: string): string {
     ollama: 'http://localhost:11434',
     openai: 'https://api.openai.com/v1',
     claude: 'https://api.anthropic.com',
-    gemini: 'https://generativelanguage.googleapis.com',
+    gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
     openrouter: 'https://openrouter.ai/api/v1',
     deepseek: 'https://api.deepseek.com/v1',
     mistral: 'https://api.mistral.ai/v1',
