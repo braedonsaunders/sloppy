@@ -395,7 +395,7 @@ function ProviderCard({
               }
             />
             <p className="mt-1.5 text-xs text-dark-500">
-              Your API key is encrypted and stored securely.
+              Your API key is stored locally on this machine.
             </p>
           </div>
         ) : (
