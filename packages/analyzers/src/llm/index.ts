@@ -150,6 +150,7 @@ interface LLMResponse {
  * Tool call from LLM
  */
 interface ToolCall {
+  id: string;
   name: string;
   parameters: Record<string, unknown>;
 }
@@ -426,7 +427,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
             messages.push({
               role: 'tool',
               content: toolResult,
-              toolCallId: toolCall.name,
+              toolCallId: toolCall.id,
             });
           }
         } else {
@@ -605,7 +606,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
               ...(m.content !== '' ? [{ type: 'text' as const, text: m.content }] : []),
               ...m.toolCalls.map(tc => ({
                 type: 'tool_use' as const,
-                id: tc.name + '_' + String(Date.now()),
+                id: tc.id,
                 name: tc.name,
                 input: tc.parameters,
               })),
@@ -642,6 +643,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
         content += block.text;
       } else if (block.type === 'tool_use') {
         toolCalls.push({
+          id: block.id,
           name: block.name,
           parameters: block.input as Record<string, unknown>,
         });
@@ -678,8 +680,8 @@ Use the tools to explore the codebase and create issues for any problems you fin
         return {
           role: 'assistant' as const,
           content: m.content || null,
-          tool_calls: m.toolCalls.map((tc, i) => ({
-            id: `call_${String(i)}`,
+          tool_calls: m.toolCalls.map((tc) => ({
+            id: tc.id,
             type: 'function' as const,
             function: {
               name: tc.name,
@@ -719,6 +721,7 @@ Use the tools to explore the codebase and create issues for any problems you fin
     if (message.tool_calls) {
       for (const tc of message.tool_calls) {
         toolCalls.push({
+          id: tc.id,
           name: tc.function.name,
           parameters: JSON.parse(tc.function.arguments) as Record<string, unknown>,
         });
