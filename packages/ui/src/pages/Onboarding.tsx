@@ -97,7 +97,7 @@ export default function Onboarding(): JSX.Element {
 
   const configureMutation = useMutation({
     mutationFn: async () => {
-      if (!selectedProvider) return;
+      if (!selectedProvider) { return; }
 
       // Configure the provider
       await api.providers.configure({
@@ -234,7 +234,7 @@ export default function Onboarding(): JSX.Element {
             {/* Provider selection */}
             <div className="grid gap-3">
               {(providers ?? [])
-                .filter((p: Provider) => PROVIDER_INFO[p.id])
+                .filter((p: Provider) => p.id in PROVIDER_INFO)
                 .map((p: Provider) => {
                   const info = PROVIDER_INFO[p.id];
                   const isDetected = detectedProviders.includes(p.id);
@@ -266,7 +266,7 @@ export default function Onboarding(): JSX.Element {
                             </span>
                           )}
                         </div>
-                        <p className="text-sm text-dark-500">{info?.description}</p>
+                        <p className="text-sm text-dark-500">{info.description}</p>
                       </div>
                     </button>
                   );
@@ -280,7 +280,7 @@ export default function Onboarding(): JSX.Element {
                   <label className="text-sm font-medium text-dark-200">
                     API Key
                   </label>
-                  {providerInfo?.keyUrl && (
+                  {providerInfo !== null && providerInfo.keyUrl !== '' && (
                     <a
                       href={providerInfo.keyUrl}
                       target="_blank"
