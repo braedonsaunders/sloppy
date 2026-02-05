@@ -140,7 +140,7 @@ export function useWebSocketSubscription<T = unknown>(
 
 // Hook for subscribing to session-specific messages
 export function useSessionWebSocket(sessionId: string): void {
-  const { updateCurrentSession, addActivity, addMetrics } = useSessionStore();
+  const { updateCurrentSession, addActivity, addMetrics, addLLMRequest, updateLLMRequest, setActiveLLMRequest } = useSessionStore();
   const { addIssue, updateIssue, addCommit } = useIssuesStore();
 
   useEffect(() => {
@@ -180,7 +180,44 @@ export function useSessionWebSocket(sessionId: string): void {
 
     unsubscribes.push(
       wsClient.subscribeToSession<Activity>(sessionId, 'activity:log', (message): void => {
-        addActivity(message.payload);
+        const activity = message.payload;
+        addActivity(activity);
+
+        // Create/update LLM request records from analyzer events
+        const details = activity.details;
+        const eventType = details?.eventType as string | undefined;
+        if (eventType === 'llm_request_start') {
+          const reqId = details?.id as string ?? `llm-${String(Date.now())}`;
+          const provider = (details?.provider as string) ?? 'unknown';
+          const model = (details?.model as string) ?? 'unknown';
+          addLLMRequest({
+            id: reqId,
+            status: 'streaming',
+            model,
+            provider,
+            type: 'analyze',
+            startedAt: activity.timestamp,
+          });
+          setActiveLLMRequest({
+            id: reqId,
+            status: 'streaming',
+            model,
+            provider,
+            type: 'analyze',
+            startedAt: activity.timestamp,
+          });
+        } else if (eventType === 'llm_request_complete') {
+          const reqId = details?.id as string ?? '';
+          const durationMs = (details?.durationMs as number) ?? 0;
+          updateLLMRequest(reqId, {
+            status: 'completed',
+            duration: durationMs,
+            completedAt: activity.timestamp,
+          });
+          setActiveLLMRequest(undefined);
+        } else if (eventType === 'analysis_complete') {
+          setActiveLLMRequest(undefined);
+        }
       })
     );
 
@@ -193,7 +230,7 @@ export function useSessionWebSocket(sessionId: string): void {
     return (): void => {
       unsubscribes.forEach((unsub) => { unsub(); });
     };
-  }, [sessionId, updateCurrentSession, addIssue, updateIssue, addCommit, addActivity, addMetrics]);
+  }, [sessionId, updateCurrentSession, addIssue, updateIssue, addCommit, addActivity, addMetrics, addLLMRequest, updateLLMRequest, setActiveLLMRequest]);
 }
 
 export default useWebSocket;

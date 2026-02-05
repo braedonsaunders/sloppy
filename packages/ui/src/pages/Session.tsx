@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,18 +12,21 @@ import {
   RefreshCw,
   Trash2,
   AlertCircle,
-  AlertTriangle,
   Info,
   Cpu,
   Zap,
   FileCode,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  Wrench,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import Badge, { StatusBadge } from '@/components/Badge';
 import ProgressBar from '@/components/ProgressBar';
 import IssueCard from '@/components/IssueCard';
 import CommitCard from '@/components/CommitCard';
-import ActivityLog, { ActivityIndicator } from '@/components/ActivityLog';
 import MetricsChart from '@/components/MetricsChart';
 import LLMRequestPanel, { LLMStatusIndicator } from '@/components/LLMRequestPanel';
 import { ConfirmModal } from '@/components/Modal';
@@ -32,12 +35,12 @@ import Input from '@/components/Input';
 import { useSession } from '@/hooks/useSession';
 import { useSessionWebSocket } from '@/hooks/useWebSocket';
 import { useSessionStore } from '@/stores/session';
-import { useIssuesStore, selectFilteredIssues, selectIssueStats, type IssueFilter } from '@/stores/issues';
+import { useIssuesStore, selectFilteredIssues, type IssueFilter } from '@/stores/issues';
 import { api } from '@/lib/api';
-import type { ScoreData } from '@/lib/api';
+import type { ScoreData, Activity } from '@/lib/api';
 import SloppyScore from '@/components/SloppyScore';
 
-type Tab = 'issues' | 'commits' | 'activity' | 'metrics';
+type Tab = 'issues' | 'commits' | 'metrics';
 
 export default function Session(): JSX.Element {
   const { id } = useParams<{ id: string }>();
@@ -71,7 +74,6 @@ export default function Session(): JSX.Element {
   const llmRequests = useSessionStore((s) => s.llmRequests);
   const activeLLMRequest = useSessionStore((s) => s.activeLLMRequest);
   const issues = useIssuesStore(selectFilteredIssues);
-  const issueStats = useIssuesStore(selectIssueStats);
   const commits = useIssuesStore((s) => s.commits);
   const filters = useIssuesStore((s) => s.filters);
   const setFilters = useIssuesStore((s) => s.setFilters);
@@ -151,47 +153,57 @@ export default function Session(): JSX.Element {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold text-dark-100">{repoName}</h1>
-            <StatusBadge status={session.status} />
+    <div className="max-w-[1600px] mx-auto space-y-4">
+      {/* Header - Compact */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-4">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-semibold text-dark-100">{repoName}</h1>
+              <StatusBadge status={session.status} />
+            </div>
+            <p className="mt-0.5 text-sm text-dark-400">
+              {session.provider} / {session.model}
+            </p>
           </div>
-          <p className="mt-1 text-dark-400">
-            {session.provider} / {session.model} • {session.config.strictness} strictness
-          </p>
-          <p className="mt-0.5 text-xs text-dark-500 font-mono truncate max-w-md">
-            {session.repoPath}
-          </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Timer */}
-          <div className="flex items-center gap-2 rounded-lg bg-dark-800 px-4 py-2 border border-dark-700">
-            <Clock className="h-4 w-4 text-dark-400" />
-            <span className="font-mono text-dark-200">
-              {String(elapsedMinutes).padStart(2, '0')}:
-              {String(elapsedSeconds).padStart(2, '0')}
+        <div className="flex items-center gap-2">
+          {/* Compact Stats Bar */}
+          <div className="flex items-center gap-3 rounded-lg bg-dark-800 px-3 py-1.5 border border-dark-700 text-xs">
+            <span className="flex items-center gap-1 text-dark-300">
+              <Clock className="h-3.5 w-3.5 text-dark-500" />
+              <span className="font-mono">{String(elapsedMinutes).padStart(2, '0')}:{String(elapsedSeconds).padStart(2, '0')}</span>
             </span>
-          </div>
-
-          {/* LLM Status (compact) */}
-          <div className="hidden md:flex items-center gap-2 rounded-lg bg-dark-800 px-4 py-2 border border-dark-700">
-            <LLMStatusIndicator
-              activeRequest={activeLLMRequest}
-              totalRequests={llmRequests.length}
-            />
+            <span className="text-dark-600">|</span>
+            <span className="flex items-center gap-1 text-dark-300">
+              <Cpu className="h-3.5 w-3.5 text-dark-500" />
+              <span className="font-mono">{llmRequests.length} calls</span>
+            </span>
+            <span className="text-dark-600">|</span>
+            <span className="flex items-center gap-1 text-dark-300">
+              <FileCode className="h-3.5 w-3.5 text-dark-500" />
+              <span className="font-mono">{issues.length} issues</span>
+            </span>
+            {activeLLMRequest && (
+              <>
+                <span className="text-dark-600">|</span>
+                <LLMStatusIndicator
+                  activeRequest={activeLLMRequest}
+                  totalRequests={llmRequests.length}
+                />
+              </>
+            )}
           </div>
 
           {/* Action buttons */}
           {session.status === 'running' && (
             <Button
               variant="secondary"
+              size="sm"
               onClick={() => { void pauseSession(); }}
               isLoading={isPausing}
-              leftIcon={<Pause className="h-4 w-4" />}
+              leftIcon={<Pause className="h-3.5 w-3.5" />}
             >
               Pause
             </Button>
@@ -199,9 +211,10 @@ export default function Session(): JSX.Element {
           {session.status === 'paused' && (
             <Button
               variant="primary"
+              size="sm"
               onClick={() => { void resumeSession(); }}
               isLoading={isResuming}
-              leftIcon={<Play className="h-4 w-4" />}
+              leftIcon={<Play className="h-3.5 w-3.5" />}
             >
               Resume
             </Button>
@@ -209,8 +222,9 @@ export default function Session(): JSX.Element {
           {isActive && (
             <Button
               variant="danger"
+              size="sm"
               onClick={() => { setShowStopConfirm(true); }}
-              leftIcon={<Square className="h-4 w-4" />}
+              leftIcon={<Square className="h-3.5 w-3.5" />}
             >
               Stop
             </Button>
@@ -218,8 +232,9 @@ export default function Session(): JSX.Element {
           {!isActive && (
             <Button
               variant="ghost"
+              size="sm"
               onClick={() => { setShowDeleteConfirm(true); }}
-              leftIcon={<Trash2 className="h-4 w-4" />}
+              leftIcon={<Trash2 className="h-3.5 w-3.5" />}
             >
               Delete
             </Button>
@@ -227,20 +242,108 @@ export default function Session(): JSX.Element {
         </div>
       </div>
 
-      {/* Sloppy Score + Stats Overview Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Score Display */}
-        <div className="lg:col-span-1">
-          {scoreData ? (
-            <SloppyScore
-              score={scoreData.score}
-              breakdown={scoreData.breakdown}
-              issuesBefore={scoreData.issuesBefore}
-              issuesAfter={scoreData.issuesAfter}
-            />
-          ) : (
-            <div className="rounded-xl border border-dark-700 bg-dark-800 p-6 flex flex-col items-center justify-center min-h-[200px]">
-              <p className="text-dark-500 text-sm mb-3">No score computed yet</p>
+      {/* Live Activity Feed - Always Visible */}
+      <LiveActivityFeed
+        activities={activities}
+        isActive={session.status === 'running'}
+        llmRequests={llmRequests}
+        activeLLMRequest={activeLLMRequest}
+      />
+
+      {/* Stats + Progress Row */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <StatCard
+          icon={<FileCode className="h-4 w-4" />}
+          label="Issues"
+          value={String(session.stats.issuesFound)}
+          detail={
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-error">{issueBreakdown.errors} err</span>
+              <span className="text-warning">{issueBreakdown.warnings} warn</span>
+              <span className="text-accent">{issueBreakdown.info} info</span>
+            </div>
+          }
+        />
+        <StatCard
+          icon={<CheckCircle className="h-4 w-4" />}
+          label="Resolved"
+          value={String(session.stats.issuesResolved)}
+          valueColor="text-success"
+          detail={
+            <span className="text-xs text-dark-500">
+              {session.stats.issuesFound > 0
+                ? `${String(Math.round(progress))}%`
+                : '-'}
+            </span>
+          }
+        />
+        <StatCard
+          icon={<Cpu className="h-4 w-4" />}
+          label="LLM Calls"
+          value={String(llmRequests.length)}
+          detail={
+            activeLLMRequest
+              ? <span className="text-xs text-accent animate-pulse">Active</span>
+              : <span className="text-xs text-dark-500">Idle</span>
+          }
+        />
+        <StatCard
+          icon={<GitCommit className="h-4 w-4" />}
+          label="Commits"
+          value={String(session.stats.commitsCreated)}
+          valueColor="text-accent"
+        />
+        <StatCard
+          icon={<Zap className="h-4 w-4" />}
+          label="Tokens"
+          value={formatTokens(
+            llmRequests.reduce(
+              (acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0),
+              0
+            )
+          )}
+        />
+      </div>
+
+      {/* Progress Bar - Only when active or has issues */}
+      {(isActive || session.stats.issuesFound > 0) && (
+        <div className="rounded-lg border border-dark-700 bg-dark-800 p-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-dark-400">Resolution Progress</span>
+            <span className="text-xs font-medium text-dark-300">
+              {session.stats.issuesResolved} / {session.stats.issuesFound}
+            </span>
+          </div>
+          <ProgressBar
+            value={progress}
+            variant={session.status === 'running' ? 'gradient' : 'default'}
+            animated={session.status === 'running'}
+            size="md"
+          />
+        </div>
+      )}
+
+      {/* Session Complete Summary */}
+      {(session.status === 'completed' || session.status === 'stopped') && (
+        <div className="rounded-xl border border-dark-700 bg-dark-800 p-5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className={`flex h-9 w-9 items-center justify-center rounded-full ${
+              session.status === 'completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+            }`}>
+              {session.status === 'completed' ? <CheckCircle className="h-5 w-5" /> : <Square className="h-5 w-5" />}
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-dark-100">
+                Session {session.status === 'completed' ? 'Complete' : 'Stopped'}
+              </h2>
+              <p className="text-sm text-dark-400">
+                {session.stats.issuesFound} issues found, {session.stats.issuesResolved} resolved
+                {session.stats.commitsCreated > 0 && ` across ${String(session.stats.commitsCreated)} commits`}
+                {' '}in {String(elapsedMinutes)}m {String(elapsedSeconds)}s
+                {llmRequests.length > 0 && ` using ${String(llmRequests.length)} LLM calls`}
+              </p>
+            </div>
+            {!scoreData && (
               <button
                 onClick={() => {
                   if (id === undefined || id === '') { return; }
@@ -248,192 +351,35 @@ export default function Session(): JSX.Element {
                     setScoreData(data);
                   });
                 }}
-                className="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+                className="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
               >
                 Compute Score
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* Stats Grid */}
-        <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-3 gap-4">
-        {/* Issues Found */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <FileCode className="h-4 w-4" />
-            <span className="text-xs font-medium">Issues Found</span>
-          </div>
-          <p className="text-2xl font-semibold text-dark-100">{session.stats.issuesFound}</p>
-          <div className="mt-2 flex items-center gap-2 text-xs">
-            <span className="text-error flex items-center gap-1">
-              <AlertCircle className="h-3 w-3" /> {issueBreakdown.errors}
-            </span>
-            <span className="text-warning flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3" /> {issueBreakdown.warnings}
-            </span>
-            <span className="text-accent flex items-center gap-1">
-              <Info className="h-3 w-3" /> {issueBreakdown.info}
-            </span>
-          </div>
-        </div>
-
-        {/* Issues Resolved */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <CheckCircle className="h-4 w-4" />
-            <span className="text-xs font-medium">Resolved</span>
-          </div>
-          <p className="text-2xl font-semibold text-success">{session.stats.issuesResolved}</p>
-          <p className="text-xs text-dark-500 mt-2">
-            {session.stats.issuesFound > 0
-              ? `${String(Math.round(progress))}% complete`
-              : 'No issues yet'}
-          </p>
-        </div>
-
-        {/* Pending */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <Clock className="h-4 w-4" />
-            <span className="text-xs font-medium">Pending</span>
-          </div>
-          <p className="text-2xl font-semibold text-warning">{issueStats.pending}</p>
-          <p className="text-xs text-dark-500 mt-2">
-            {issueStats.inProgress > 0 ? `${String(issueStats.inProgress)} in progress` : ''}
-          </p>
-        </div>
-
-        {/* Commits */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <GitCommit className="h-4 w-4" />
-            <span className="text-xs font-medium">Commits</span>
-          </div>
-          <p className="text-2xl font-semibold text-accent">{session.stats.commitsCreated}</p>
-          <p className="text-xs text-dark-500 mt-2">{commits.length} in session</p>
-        </div>
-
-        {/* LLM Requests */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <Cpu className="h-4 w-4" />
-            <span className="text-xs font-medium">LLM Requests</span>
-          </div>
-          <p className="text-2xl font-semibold text-dark-100">{llmRequests.length}</p>
-          <p className="text-xs text-dark-500 mt-2">
-            {activeLLMRequest ? (
-              <span className="text-accent">Processing...</span>
-            ) : (
-              'Idle'
             )}
-          </p>
-        </div>
-
-        {/* Token Usage */}
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-          <div className="flex items-center gap-2 text-dark-400 mb-2">
-            <Zap className="h-4 w-4" />
-            <span className="text-xs font-medium">Tokens Used</span>
           </div>
-          <p className="text-2xl font-semibold text-dark-100">
-            {formatTokens(
-              llmRequests.reduce(
-                (acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0),
-                0
-              )
-            )}
-          </p>
-          <p className="text-xs text-dark-500 mt-2">
-            Total input + output
-          </p>
-        </div>
-        </div>
-      </div>
-
-      {/* Progress Bar */}
-      <div className="rounded-xl border border-dark-700 bg-dark-800 p-5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-dark-400">Overall Progress</span>
-          <span className="text-sm font-medium text-dark-200">
-            {session.stats.issuesResolved} / {session.stats.issuesFound} issues resolved
-          </span>
-        </div>
-        <ProgressBar
-          value={progress}
-          variant={session.status === 'running' ? 'gradient' : 'default'}
-          animated={session.status === 'running'}
-          size="lg"
-        />
-
-        {/* Current Activity */}
-        {activities.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-dark-700">
-            <ActivityIndicator
-              activity={activities[0]}
-              isActive={session.status === 'running'}
+          {scoreData && (
+            <SloppyScore
+              score={scoreData.score}
+              breakdown={scoreData.breakdown}
+              issuesBefore={scoreData.issuesBefore}
+              issuesAfter={scoreData.issuesAfter}
             />
-          </div>
-        )}
-      </div>
-
-      {/* Session Complete Summary */}
-      {(session.status === 'completed' || session.status === 'stopped') && (
-        <div className="rounded-xl border border-dark-700 bg-dark-800 p-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`flex h-10 w-10 items-center justify-center rounded-full ${
-              session.status === 'completed' ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-            }`}>
-              {session.status === 'completed' ? <CheckCircle className="h-5 w-5" /> : <Square className="h-5 w-5" />}
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-dark-100">
-                Session {session.status === 'completed' ? 'Complete' : 'Stopped'}
-              </h2>
-              <p className="text-sm text-dark-400">
-                {session.stats.issuesResolved} of {session.stats.issuesFound} issues resolved
-                {session.stats.commitsCreated > 0 && ` across ${String(session.stats.commitsCreated)} commits`}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="text-center p-3 rounded-lg bg-dark-700/50">
-              <p className="text-2xl font-bold text-success">{session.stats.issuesResolved}</p>
-              <p className="text-xs text-dark-400 mt-1">Fixed</p>
-            </div>
-            <div className="text-center p-3 rounded-lg bg-dark-700/50">
-              <p className="text-2xl font-bold text-dark-200">{session.stats.commitsCreated}</p>
-              <p className="text-xs text-dark-400 mt-1">Commits</p>
-            </div>
-            <div className="text-center p-3 rounded-lg bg-dark-700/50">
-              <p className="text-2xl font-bold text-dark-200">
-                {String(elapsedMinutes).padStart(2, '0')}:{String(elapsedSeconds).padStart(2, '0')}
-              </p>
-              <p className="text-xs text-dark-400 mt-1">Duration</p>
-            </div>
-            <div className="text-center p-3 rounded-lg bg-dark-700/50">
-              <p className="text-2xl font-bold text-dark-200">
-                {formatTokens(llmRequests.reduce((acc, r) => acc + (r.inputTokens ?? 0) + (r.outputTokens ?? 0), 0))}
-              </p>
-              <p className="text-xs text-dark-400 mt-1">Tokens</p>
-            </div>
-          </div>
+          )}
         </div>
       )}
 
-      {/* Main Content Area - Two Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Tabs and Content */}
+      {/* Main Content - Two Column: Issues/Commits + LLM Panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Left Column - Issues, Commits, Metrics */}
         <div className="lg:col-span-2 space-y-4">
           {/* Tabs */}
           <div className="border-b border-dark-700">
             <nav className="flex gap-1">
-              {(['issues', 'commits', 'activity', 'metrics'] as Tab[]).map((tab) => (
+              {(['issues', 'commits', 'metrics'] as Tab[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => { setActiveTab(tab); }}
-                  className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
                     activeTab === tab
                       ? 'border-accent text-accent'
                       : 'border-transparent text-dark-400 hover:text-dark-200'
@@ -476,10 +422,6 @@ export default function Session(): JSX.Element {
                 onRevert={(commitId) => { revertCommitMutation.mutate(commitId); }}
                 isReverting={revertCommitMutation.isPending}
               />
-            )}
-
-            {activeTab === 'activity' && (
-              <ActivityLog activities={activities} maxHeight="600px" />
             )}
 
             {activeTab === 'metrics' && (
@@ -531,6 +473,140 @@ export default function Session(): JSX.Element {
         variant="danger"
         isLoading={isDeleting}
       />
+    </div>
+  );
+}
+
+// Stat card component
+interface StatCardProps {
+  icon: JSX.Element;
+  label: string;
+  value: string;
+  valueColor?: string;
+  detail?: JSX.Element;
+}
+
+function StatCard({ icon, label, value, valueColor = 'text-dark-100', detail }: StatCardProps): JSX.Element {
+  return (
+    <div className="rounded-lg border border-dark-700 bg-dark-800 p-3">
+      <div className="flex items-center gap-1.5 text-dark-400 mb-1">
+        {icon}
+        <span className="text-xs font-medium">{label}</span>
+      </div>
+      <p className={`text-xl font-semibold ${valueColor}`}>{value}</p>
+      {detail !== undefined && <div className="mt-1">{detail}</div>}
+    </div>
+  );
+}
+
+// Live activity feed - terminal-style, always visible
+interface LiveActivityFeedProps {
+  activities: Activity[];
+  isActive: boolean;
+  llmRequests: { id: string; status: string }[];
+  activeLLMRequest?: { id: string; status: string; model: string; provider: string };
+}
+
+function LiveActivityFeed({ activities, isActive, llmRequests, activeLLMRequest }: LiveActivityFeedProps): JSX.Element {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [isExpanded, setIsExpanded] = useState(true);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (isExpanded && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [activities.length, isExpanded]);
+
+  const activityIcons: Record<string, typeof Search> = {
+    analyzing: Search,
+    fixing: Wrench,
+    error: AlertCircle,
+    info: Info,
+    success: CheckCircle,
+  };
+
+  const activityColors: Record<string, string> = {
+    analyzing: 'text-accent',
+    fixing: 'text-warning',
+    error: 'text-error',
+    info: 'text-dark-400',
+    success: 'text-success',
+  };
+
+  return (
+    <div className="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
+      {/* Feed Header */}
+      <button
+        type="button"
+        onClick={() => { setIsExpanded(!isExpanded); }}
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-dark-800/50 border-b border-dark-700 hover:bg-dark-800 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Terminal className="h-4 w-4 text-accent" />
+          <span className="text-sm font-medium text-dark-200">Live Analysis Feed</span>
+          {isActive && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+              <span className="text-xs text-success">Live</span>
+            </span>
+          )}
+          {activeLLMRequest && (
+            <span className="text-xs text-dark-400 ml-2">
+              {activeLLMRequest.provider}/{activeLLMRequest.model}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-dark-500">{activities.length} events</span>
+          {isExpanded ? <ChevronUp className="h-4 w-4 text-dark-500" /> : <ChevronDown className="h-4 w-4 text-dark-500" />}
+        </div>
+      </button>
+
+      {/* Feed Content */}
+      {isExpanded && (
+        <div
+          ref={scrollRef}
+          className="overflow-y-auto font-mono text-xs leading-relaxed"
+          style={{ maxHeight: '280px' }}
+        >
+          {activities.length === 0 ? (
+            <div className="p-6 text-center">
+              {isActive ? (
+                <div className="flex items-center justify-center gap-2 text-dark-500">
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <span>Waiting for analysis events...</span>
+                </div>
+              ) : (
+                <span className="text-dark-500">No activity yet</span>
+              )}
+            </div>
+          ) : (
+            <div className="p-2 space-y-0.5">
+              {[...activities].reverse().map((activity, i) => {
+                const Icon = activityIcons[activity.type] ?? Info;
+                const color = activityColors[activity.type] ?? 'text-dark-400';
+                const time = new Date(activity.timestamp).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                });
+
+                return (
+                  <div
+                    key={activity.id ?? `activity-${String(i)}`}
+                    className="flex items-start gap-2 px-2 py-1 rounded hover:bg-dark-800/50 group"
+                  >
+                    <span className="text-dark-600 flex-shrink-0 pt-0.5">{time}</span>
+                    <Icon className={`h-3.5 w-3.5 flex-shrink-0 mt-0.5 ${color}`} />
+                    <span className={`${color} break-all`}>{activity.message}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

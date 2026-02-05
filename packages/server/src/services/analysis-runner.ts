@@ -306,6 +306,9 @@ export class AnalysisRunner {
             llm: {
               ...llmConfig,
               focusAreas: issueTypes,
+              onEvent: (event: { type: string; data: Record<string, unknown> }) => {
+                this.handleAnalyzerEvent(session.id, event, wsHandler);
+              },
             },
           },
         },
@@ -362,21 +365,22 @@ export class AnalysisRunner {
         },
       });
 
-      // If no issues found, mark session as completed
-      if (result.issues.length === 0) {
-        this.db.updateSession(session.id, {
-          status: 'completed',
-          ended_at: new Date().toISOString(),
-        });
+      // Mark session as completed
+      this.db.updateSession(session.id, {
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+      });
 
-        wsHandler.broadcastToSession(session.id, {
-          type: 'session:completed',
-          data: {
-            session: this.db.getSession(session.id),
-            reason: 'No issues found',
-          },
-        });
-      }
+      const completedSession = this.db.getSession(session.id);
+      wsHandler.broadcastToSession(session.id, {
+        type: 'session:completed',
+        data: {
+          session: completedSession,
+          reason: result.issues.length === 0
+            ? 'No issues found'
+            : `Analysis complete: ${result.issues.length} issues found`,
+        },
+      });
       } finally {
         // Clean up temp directory if we cloned
         if (tempDir) {
@@ -650,6 +654,74 @@ export class AnalysisRunner {
   private mapIssueTypesToCategories(_focusAreas: string[], _isJsTs: boolean = true): string[] {
     // The LLM orchestrates everything -- static analyzers are tools it invokes
     return ['llm'];
+  }
+
+  /**
+   * Handle real-time events from the LLM analyzer and broadcast to WebSocket clients.
+   * Converts analyzer events into activity:log events for the frontend.
+   */
+  private handleAnalyzerEvent(
+    sessionId: string,
+    event: { type: string; data: Record<string, unknown> },
+    wsHandler: ReturnType<typeof getWebSocketHandler>
+  ): void {
+    const timestamp = new Date().toISOString();
+    let activityType = 'info';
+    let message = '';
+    const details: Record<string, unknown> = { ...event.data, eventType: event.type };
+
+    switch (event.type) {
+      case 'llm_request_start': {
+        const d = event.data as { iteration: number; maxIterations: number; provider: string; model: string };
+        activityType = 'analyzing';
+        message = `LLM iteration ${String(d.iteration)}/${String(d.maxIterations)} — sending to ${String(d.provider)}/${String(d.model)}`;
+        break;
+      }
+      case 'llm_request_complete': {
+        const d = event.data as { iteration: number; toolCalls?: { name: string }[]; textLength?: number; durationMs: number };
+        activityType = 'analyzing';
+        if (d.toolCalls && d.toolCalls.length > 0) {
+          const tools = d.toolCalls.map((tc: { name: string }) => tc.name).join(', ');
+          message = `Iteration ${String(d.iteration)} complete (${(d.durationMs / 1000).toFixed(1)}s) — called ${String(d.toolCalls.length)} tools: ${tools}`;
+        } else {
+          message = `Iteration ${String(d.iteration)} complete (${(d.durationMs / 1000).toFixed(1)}s) — text response (${String(d.textLength ?? 0)} chars)`;
+        }
+        break;
+      }
+      case 'tool_call': {
+        const d = event.data as { tool: string; resultPreview: string };
+        activityType = 'analyzing';
+        message = `Tool ${d.tool}: ${d.resultPreview}`;
+        break;
+      }
+      case 'issue_found': {
+        const d = event.data as { title: string; severity: string; file: string };
+        activityType = 'success';
+        message = `Issue found [${d.severity}]: ${d.title} in ${d.file}`;
+        break;
+      }
+      case 'analysis_complete': {
+        const d = event.data as { iterations: number; llmCalls: number; issuesFound: number; durationMs: number };
+        activityType = 'success';
+        message = `Analysis complete: ${String(d.issuesFound)} issues in ${String(d.llmCalls)} LLM calls (${(d.durationMs / 1000).toFixed(1)}s)`;
+        break;
+      }
+      default:
+        message = `Analyzer event: ${event.type}`;
+        break;
+    }
+
+    wsHandler.broadcastToSession(sessionId, {
+      type: 'activity:log',
+      data: {
+        sessionId,
+        type: activityType,
+        message,
+        timestamp,
+        details,
+      },
+    });
+    this.storeActivity(sessionId, activityType, message);
   }
 
   private storeActivity(sessionId: string, type: string, message: string): void {

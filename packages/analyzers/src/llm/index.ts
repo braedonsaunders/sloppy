@@ -81,6 +81,17 @@ const PROVIDER_DEFAULT_MODELS: Record<LLMProviderType, string> = {
 };
 
 /**
+ * Real-time events emitted during LLM analysis.
+ * Consumers (e.g. the server) can use these to pipe live updates to the frontend.
+ */
+export type AnalyzerEvent =
+  | { type: 'llm_request_start'; data: { id: string; iteration: number; maxIterations: number; messageCount: number; provider: string; model: string } }
+  | { type: 'llm_request_complete'; data: { id: string; iteration: number; toolCalls?: { name: string }[]; textLength?: number; durationMs: number } }
+  | { type: 'tool_call'; data: { iteration: number; tool: string; resultPreview: string } }
+  | { type: 'issue_found'; data: { title: string; severity: string; file: string } }
+  | { type: 'analysis_complete'; data: { iterations: number; llmCalls: number; issuesFound: number; durationMs: number } };
+
+/**
  * Configuration for the LLM analyzer
  */
 export interface LLMAnalyzerConfig {
@@ -120,6 +131,8 @@ export interface LLMAnalyzerConfig {
   sessionId?: string;
   /** Database path for learnings (optional, enables SQLite persistence) */
   databasePath?: string;
+  /** Real-time event callback for streaming analysis progress to consumers */
+  onEvent?: (event: AnalyzerEvent) => void;
 }
 
 /**
@@ -209,6 +222,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
 
   private readonly config: Required<LLMAnalyzerConfig>;
   private activeConfig: Required<LLMAnalyzerConfig> | null = null; // Config used during current analysis run
+  private onEvent: ((event: AnalyzerEvent) => void) | null = null; // Event callback for current run
   private fileBrowser: FileBrowser | null = null;
   private toolExecutor: ToolExecutor | null = null;
 
@@ -225,7 +239,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       baseUrl: config.baseUrl ?? PROVIDER_BASE_URLS[provider],
       maxTokens: config.maxTokens ?? 8192,
       temperature: config.temperature ?? 0,
-      maxIterations: config.maxIterations ?? 10,
+      maxIterations: config.maxIterations ?? 25,
       batchSize: config.batchSize ?? 5,
       runLint: config.runLint ?? true,
       runTypeCheck: config.runTypeCheck ?? true,
@@ -237,6 +251,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
       focusAreas: config.focusAreas ?? [],
       sessionId: config.sessionId ?? '',
       databasePath: config.databasePath ?? '',
+      onEvent: undefined,
     };
   }
 
@@ -261,6 +276,9 @@ export class LLMAnalyzer extends BaseAnalyzer {
     // Merge runtime config from options.config with constructor config
     // This allows the orchestrator to pass provider config at analysis time
     const runtimeConfig = options.config as Partial<LLMAnalyzerConfig> | undefined;
+
+    // Extract event callback (not stored in config since it's a function)
+    this.onEvent = runtimeConfig?.onEvent ?? null;
 
     // When the provider changes at runtime, update the baseUrl to match
     // unless an explicit baseUrl was provided in the runtime config
@@ -331,6 +349,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
     } finally {
       this.fileBrowser.clearCache();
       this.activeConfig = null; // Clear runtime config after analysis
+      this.onEvent = null;
     }
 
     return this.deduplicateIssues(issues);
@@ -398,6 +417,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
   ): Promise<Issue[]> {
     const issues: Issue[] = [];
     const messages: Message[] = [];
+    const analysisStart = Date.now();
 
     // Build system prompt
     const systemPrompt = this.getConfig().systemPrompt || this.buildSystemPrompt();
@@ -412,19 +432,47 @@ export class LLMAnalyzer extends BaseAnalyzer {
 
     // Run agentic loop
     for (let iteration = 0; iteration < this.getConfig().maxIterations; iteration++) {
-      console.log(`[${this.name}] Iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)} - sending ${String(messages.length)} messages to ${this.getConfig().provider}/${this.getConfig().model}`);
+      const iterNum = iteration + 1;
+      const maxIter = this.getConfig().maxIterations;
+      const requestId = `llm-${String(iterNum)}-${String(Date.now())}`;
+
+      console.log(`[${this.name}] Iteration ${String(iterNum)}/${String(maxIter)} - sending ${String(messages.length)} messages to ${this.getConfig().provider}/${this.getConfig().model}`);
+
+      this.onEvent?.({
+        type: 'llm_request_start',
+        data: {
+          id: requestId,
+          iteration: iterNum,
+          maxIterations: maxIter,
+          messageCount: messages.length,
+          provider: this.getConfig().provider,
+          model: this.getConfig().model,
+        },
+      });
 
       try {
+        const callStart = Date.now();
         const response = await this.callLLM(messages);
+        const callDuration = Date.now() - callStart;
         llmCallCount++;
 
         // Check if response contains tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
           const toolNames = response.toolCalls.map(tc => tc.name).join(', ');
-          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM called ${String(response.toolCalls.length)} tools: ${toolNames}`);
+          console.log(`[${this.name}] Iteration ${String(iterNum)} - LLM called ${String(response.toolCalls.length)} tools: ${toolNames}`);
           if (response.content) {
-            console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM reasoning: ${response.content.slice(0, 200)}${response.content.length > 200 ? '...' : ''}`);
+            console.log(`[${this.name}] Iteration ${String(iterNum)} - LLM reasoning: ${response.content.slice(0, 200)}${response.content.length > 200 ? '...' : ''}`);
           }
+
+          this.onEvent?.({
+            type: 'llm_request_complete',
+            data: {
+              id: requestId,
+              iteration: iterNum,
+              toolCalls: response.toolCalls.map(tc => ({ name: tc.name })),
+              durationMs: callDuration,
+            },
+          });
 
           messages.push({
             role: 'assistant',
@@ -435,7 +483,31 @@ export class LLMAnalyzer extends BaseAnalyzer {
           // Execute each tool call
           for (const toolCall of response.toolCalls) {
             const toolResult = await this.executeToolCall(toolCall, issues);
-            console.log(`[${this.name}]   Tool ${toolCall.name}: ${toolResult.slice(0, 150).replace(/\n/g, ' ')}${toolResult.length > 150 ? '...' : ''}`);
+            const preview = toolResult.slice(0, 150).replace(/\n/g, ' ');
+            console.log(`[${this.name}]   Tool ${toolCall.name}: ${preview}${toolResult.length > 150 ? '...' : ''}`);
+
+            this.onEvent?.({
+              type: 'tool_call',
+              data: {
+                iteration: iterNum,
+                tool: toolCall.name,
+                resultPreview: preview,
+              },
+            });
+
+            // Emit events for issues created via tool calls
+            if (toolCall.name === 'create_issue') {
+              const params = toolCall.parameters;
+              this.onEvent?.({
+                type: 'issue_found',
+                data: {
+                  title: (params.title as string) ?? 'Unknown issue',
+                  severity: (params.severity as string) ?? 'warning',
+                  file: (params.file as string) ?? 'unknown',
+                },
+              });
+            }
+
             messages.push({
               role: 'tool',
               content: toolResult,
@@ -444,7 +516,17 @@ export class LLMAnalyzer extends BaseAnalyzer {
           }
         } else {
           // No tool calls - LLM responded with text only
-          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM text response (${String(response.content.length)} chars): ${response.content.slice(0, 300).replace(/\n/g, ' ')}${response.content.length > 300 ? '...' : ''}`);
+          console.log(`[${this.name}] Iteration ${String(iterNum)} - LLM text response (${String(response.content.length)} chars): ${response.content.slice(0, 300).replace(/\n/g, ' ')}${response.content.length > 300 ? '...' : ''}`);
+
+          this.onEvent?.({
+            type: 'llm_request_complete',
+            data: {
+              id: requestId,
+              iteration: iterNum,
+              textLength: response.content.length,
+              durationMs: callDuration,
+            },
+          });
 
           const parsedIssues = this.parseIssuesFromResponse(response.content, options);
           if (parsedIssues.length > 0) {
@@ -456,17 +538,27 @@ export class LLMAnalyzer extends BaseAnalyzer {
           if (response.content.includes('[ANALYSIS_COMPLETE]') ||
               !response.content.includes('create_issue') ||
               iteration >= this.getConfig().maxIterations - 1) {
-            console.log(`[${this.name}] Agentic loop complete after ${String(iteration + 1)} iterations, ${String(llmCallCount)} LLM calls, ${String(issues.length)} issues found`);
+            console.log(`[${this.name}] Agentic loop complete after ${String(iterNum)} iterations, ${String(llmCallCount)} LLM calls, ${String(issues.length)} issues found`);
             break;
           }
 
           messages.push({ role: 'assistant', content: response.content });
         }
       } catch (error) {
-        this.logError(`Iteration ${String(iteration + 1)} failed`, error);
+        this.logError(`Iteration ${String(iterNum)} failed`, error);
         break;
       }
     }
+
+    this.onEvent?.({
+      type: 'analysis_complete',
+      data: {
+        iterations: llmCallCount,
+        llmCalls: llmCallCount,
+        issuesFound: issues.length,
+        durationMs: Date.now() - analysisStart,
+      },
+    });
 
     return issues;
   }
