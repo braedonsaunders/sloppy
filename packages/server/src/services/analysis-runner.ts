@@ -5,7 +5,7 @@
 
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -338,34 +338,146 @@ export class AnalysisRunner {
       // Store issues in database
       await this.storeIssues(session.id, result);
 
-      // Broadcast completion
+      // Broadcast initial analysis completion
       const duration = ((Date.now() - runningAnalysis.startTime) / 1000).toFixed(1);
-      wsHandler.broadcastToSession(session.id, {
-        type: 'activity:log',
-        data: {
-          sessionId: session.id,
-          type: 'success',
-          message: `Analysis complete: ${result.issues.length} issues found in ${duration}s`,
-          timestamp: new Date().toISOString(),
-        },
-      });
-      this.storeActivity(session.id, 'success', `Analysis complete: ${result.issues.length} issues found in ${duration}s`);
+      this.broadcastActivity(session.id, wsHandler, 'success',
+        `Analysis complete: ${result.issues.length} issues found in ${duration}s`);
 
       this.logger.info(`[analysis-runner] Analysis complete for session ${session.id}: ${result.issues.length} issues`);
       this.logger.info(`[analysis-runner] Analyzers run: ${result.analyzersRun.join(', ')}`);
       this.logger.info(`[analysis-runner] Summary: ${JSON.stringify(result.summary)}`);
 
       // Broadcast session update with new issue counts
-      const stats = this.db.getSessionStats(session.id);
+      let stats = this.db.getSessionStats(session.id);
       wsHandler.broadcastToSession(session.id, {
         type: 'session:updated',
-        data: {
-          session: { ...session, stats },
-          action: 'analysis_complete',
-        },
+        data: { session: { ...session, stats }, action: 'analysis_complete' },
       });
 
+      // If issues were found, enter fix-and-reanalyze cycle
+      if (result.issues.length > 0 && !abortController.signal.aborted) {
+        const maxFixCycles = 5;
+        let currentIssues = result.issues;
+
+        for (let cycle = 0; cycle < maxFixCycles; cycle++) {
+          if (abortController.signal.aborted || currentIssues.length === 0) break;
+
+          const cycleNum = cycle + 1;
+          this.broadcastActivity(session.id, wsHandler, 'fixing',
+            `Fix cycle ${String(cycleNum)}/${String(maxFixCycles)}: attempting to fix ${String(currentIssues.length)} issues`);
+
+          // Fix each issue
+          let fixedCount = 0;
+          for (const issue of currentIssues) {
+            if (abortController.signal.aborted) break;
+            if (!issue.location?.file) continue;
+
+            const filePath = join(localPath, issue.location.file);
+            try {
+              const fileContent = await readFile(filePath, 'utf-8');
+              const fixResult = await this.generateFix(issue, fileContent, llmConfig);
+
+              if (fixResult !== null) {
+                await writeFile(filePath, fixResult, 'utf-8');
+                fixedCount++;
+
+                // Update issue status in DB
+                const dbIssues = this.db.listIssuesBySession(session.id);
+                const matchingIssue = dbIssues.find(
+                  (di: { file_path: string; description: string }) =>
+                    di.file_path === issue.location.file && di.description === issue.message
+                );
+                if (matchingIssue) {
+                  this.db.updateIssue(matchingIssue.id, { status: 'fixed', resolved_at: new Date().toISOString() });
+                  wsHandler.broadcastToSession(session.id, {
+                    type: 'issue:updated',
+                    data: { ...matchingIssue, status: 'fixed' },
+                  });
+                }
+
+                this.broadcastActivity(session.id, wsHandler, 'success',
+                  `Fixed: ${issue.message.slice(0, 80)} in ${issue.location.file}`);
+              }
+            } catch (fixErr) {
+              const errMsg = fixErr instanceof Error ? fixErr.message : String(fixErr);
+              this.logger.warn(`[analysis-runner] Failed to fix issue: ${errMsg}`);
+            }
+          }
+
+          this.broadcastActivity(session.id, wsHandler, 'success',
+            `Fix cycle ${String(cycleNum)} complete: fixed ${String(fixedCount)}/${String(currentIssues.length)} issues`);
+
+          // Update stats
+          stats = this.db.getSessionStats(session.id);
+          wsHandler.broadcastToSession(session.id, {
+            type: 'session:updated',
+            data: { session: { ...session, stats }, action: 'fix_cycle_complete' },
+          });
+
+          if (fixedCount === 0) {
+            this.broadcastActivity(session.id, wsHandler, 'info',
+              'No issues could be fixed in this cycle, stopping');
+            break;
+          }
+
+          // Re-analyze to find remaining/new issues
+          if (cycle < maxFixCycles - 1 && !abortController.signal.aborted) {
+            this.broadcastActivity(session.id, wsHandler, 'analyzing',
+              `Re-analyzing after fixes (cycle ${String(cycleNum + 1)})...`);
+
+            const reResult = await analyze(
+              localPath,
+              {
+                include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs',
+                  '**/*.html', '**/*.htm', '**/*.vue', '**/*.svelte',
+                  '**/*.py', '**/*.go', '**/*.rs', '**/*.java', '**/*.kt',
+                  '**/*.c', '**/*.cpp', '**/*.h', '**/*.cs', '**/*.rb', '**/*.php',
+                  '**/*.swift', '**/*.sh', '**/*.sql', '**/*.md'],
+                exclude: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**',
+                  '**/coverage/**', '**/__pycache__/**', '**/venv/**', '**/target/**',
+                  '**/vendor/**', '**/*.min.js', '**/*.min.css', '**/*.lock'],
+              },
+              {
+                analyzers: analyzerCategories as any[],
+                concurrency: 4,
+                deduplicate: true,
+                sortBySeverity: true,
+                analyzerConfigs: {
+                  llm: {
+                    ...llmConfig,
+                    focusAreas: issueTypes,
+                    onEvent: (event: { type: string; data: Record<string, unknown> }) => {
+                      this.handleAnalyzerEvent(session.id, event, wsHandler);
+                    },
+                  },
+                },
+              },
+              (progress) => {
+                const progressType = progress.status === 'failed' ? 'error' : 'info';
+                const progressMessage = `Analyzer ${progress.analyzer}: ${progress.status}${progress.issueCount !== undefined ? ` (${progress.issueCount} issues)` : ''}`;
+                this.broadcastActivity(session.id, wsHandler, progressType, progressMessage);
+              }
+            );
+
+            // Store new issues
+            await this.storeIssues(session.id, reResult);
+
+            this.broadcastActivity(session.id, wsHandler, 'analyzing',
+              `Re-analysis found ${String(reResult.issues.length)} remaining issues`);
+
+            currentIssues = reResult.issues;
+
+            if (reResult.issues.length === 0) {
+              this.broadcastActivity(session.id, wsHandler, 'success',
+                'All issues resolved! Repository is clean.');
+              break;
+            }
+          }
+        }
+      }
+
       // Mark session as completed
+      stats = this.db.getSessionStats(session.id);
       this.db.updateSession(session.id, {
         status: 'completed',
         ended_at: new Date().toISOString(),
@@ -376,9 +488,9 @@ export class AnalysisRunner {
         type: 'session:completed',
         data: {
           session: completedSession,
-          reason: result.issues.length === 0
+          reason: stats.issuesFound === 0
             ? 'No issues found'
-            : `Analysis complete: ${result.issues.length} issues found`,
+            : `Complete: ${String(stats.issuesResolved)} fixed, ${String(stats.issuesFound - stats.issuesResolved)} remaining`,
         },
       });
       } finally {
@@ -733,6 +845,110 @@ export class AnalysisRunner {
       });
     } catch {
       // Don't let activity storage failures block analysis
+    }
+  }
+
+  /**
+   * Broadcast an activity event and persist it
+   */
+  private broadcastActivity(
+    sessionId: string,
+    wsHandler: ReturnType<typeof getWebSocketHandler>,
+    type: string,
+    message: string,
+    details?: Record<string, unknown>
+  ): void {
+    wsHandler.broadcastToSession(sessionId, {
+      type: 'activity:log',
+      data: {
+        sessionId,
+        type,
+        message,
+        timestamp: new Date().toISOString(),
+        ...(details && { details }),
+      },
+    });
+    this.storeActivity(sessionId, type, message);
+  }
+
+  /**
+   * Generate a fix for an issue using the LLM.
+   * Returns the fixed file content, or null if the fix couldn't be generated.
+   */
+  private async generateFix(
+    issue: { message: string; suggestion?: string; location: { file: string; line: number } },
+    fileContent: string,
+    llmConfig: Record<string, unknown>
+  ): Promise<string | null> {
+    const provider = (llmConfig.provider as string) ?? 'openai';
+    const model = (llmConfig.model as string) ?? 'gpt-4o';
+    const apiKey = (llmConfig.apiKey as string) ?? '';
+    const baseUrl = (llmConfig.baseUrl as string) ?? '';
+
+    if (!apiKey) return null;
+
+    // Number file lines for context
+    const lines = fileContent.split('\n');
+    const numberedContent = lines.map((l, i) => `${String(i + 1).padStart(4)} | ${l}`).join('\n');
+
+    const systemPrompt = [
+      'You are an expert code fixer. You fix code issues precisely and minimally.',
+      'Return ONLY the complete fixed file content. No explanations, no markdown fences, no commentary.',
+      'Make the minimum change necessary to fix the issue. Preserve formatting, style, and structure.',
+    ].join('\n');
+
+    const userPrompt = [
+      `Fix this issue in ${issue.location.file}:`,
+      '',
+      `Issue (line ${String(issue.location.line)}): ${issue.message}`,
+      issue.suggestion ? `Suggestion: ${issue.suggestion}` : '',
+      '',
+      'File content:',
+      numberedContent,
+      '',
+      'Return the complete fixed file content only:',
+    ].filter(Boolean).join('\n');
+
+    try {
+      // Use OpenAI SDK for all providers (same as analyzer)
+      const { default: OpenAI } = await import('openai');
+      const client = new OpenAI({ apiKey, baseURL: baseUrl || undefined });
+
+      const response = await client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0,
+        max_tokens: 16384,
+      });
+
+      const fixedContent = response.choices[0]?.message?.content?.trim();
+      if (!fixedContent || fixedContent.length < 10) return null;
+
+      // Strip markdown fences if the LLM wrapped it anyway
+      let cleaned = fixedContent;
+      if (cleaned.startsWith('```')) {
+        const firstNewline = cleaned.indexOf('\n');
+        cleaned = cleaned.slice(firstNewline + 1);
+        if (cleaned.endsWith('```')) {
+          cleaned = cleaned.slice(0, -3).trimEnd();
+        }
+      }
+
+      // Sanity check: the fix shouldn't be drastically different in size
+      const ratio = cleaned.length / fileContent.length;
+      if (ratio < 0.3 || ratio > 3.0) {
+        this.logger.warn(`[analysis-runner] Fix rejected: size ratio ${ratio.toFixed(2)} too extreme`);
+        return null;
+      }
+
+      return cleaned;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[analysis-runner] LLM fix generation failed: ${errMsg}`);
+      return null;
     }
   }
 
