@@ -473,6 +473,43 @@ export class SessionManager {
   }
 
   /**
+   * Recover sessions that were interrupted (e.g., server crash).
+   * Any session in 'running' status at startup was interrupted.
+   */
+  async recoverInterruptedSessions(): Promise<number> {
+    const sessions = this.db.listSessions('running' as any);
+    let recovered = 0;
+
+    for (const session of sessions) {
+      this.logger.warn(`[session-manager] Found interrupted session: ${session.id}`);
+
+      // Mark as paused so it can be manually resumed
+      this.db.updateSession(session.id, {
+        status: 'paused',
+      });
+
+      // Broadcast recovery event
+      const wsHandler = getWebSocketHandler();
+      wsHandler.broadcastToAll({
+        type: 'session:updated',
+        data: {
+          session: this.enrichSession(this.db.getSession(session.id)!),
+          action: 'recovered',
+          message: 'Session was interrupted and can be resumed',
+        },
+      });
+
+      recovered++;
+    }
+
+    if (recovered > 0) {
+      this.logger.info(`[session-manager] Recovered ${recovered} interrupted session(s)`);
+    }
+
+    return recovered;
+  }
+
+  /**
    * Cleanup - stop all active sessions
    */
   async shutdown(): Promise<void> {

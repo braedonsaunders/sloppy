@@ -10,3 +10,5 @@ export { registerProviderRoutes } from './providers.js';
 export { registerSettingsRoutes } from './settings.js';
 export { registerFileRoutes } from './files.js';
 export { registerDetectRoutes } from './detect.js';
+export { registerWatchRoutes } from './watch.js';
+export { registerFileTreeRoutes } from './file-tree.js';

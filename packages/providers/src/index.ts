@@ -114,6 +114,16 @@ export {
 } from './cli/codex.js';
 
 // ============================================================================
+// Fallback Provider
+// ============================================================================
+
+export {
+  FallbackProvider,
+  createFallbackProvider,
+  type FallbackProviderConfig,
+} from './fallback.js';
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -125,6 +135,7 @@ export {
   createClaudeCodeCLIProvider,
   createCodexCLIProvider,
   autoDetectProvider,
+  createFallbackChain,
   registerProvider,
   getRegisteredProvider,
   listRegisteredProviders,

@@ -1,13 +1,17 @@
 import type { JSX } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Zap,
   TrendingUp,
+  TrendingDown,
   Clock,
   CheckCircle,
   AlertCircle,
-  ArrowRight,
+  Sparkles,
+  FolderOpen,
+  Minus,
 } from 'lucide-react';
 import Button from '@/components/Button';
 import { StatusBadge } from '@/components/Badge';
@@ -17,6 +21,8 @@ import type { Session } from '@/lib/api';
 
 export default function Dashboard(): JSX.Element {
   const { sessions, isLoading } = useSessions();
+  const navigate = useNavigate();
+  const [quickPath, setQuickPath] = useState('');
 
   // Calculate stats
   const stats = {
@@ -38,63 +44,105 @@ export default function Dashboard(): JSX.Element {
     ),
   };
 
+  // Group sessions by repo
+  const projectMap = new Map<string, Session[]>();
+  for (const session of sessions) {
+    const repoName = session.repoPath.split('/').pop() ?? session.repoPath;
+    const existing = projectMap.get(repoName) ?? [];
+    existing.push(session);
+    projectMap.set(repoName, existing);
+  }
+
+  const projects = Array.from(projectMap.entries()).map(([name, projectSessions]) => {
+    const sorted = [...projectSessions].sort(
+      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
+    );
+    const latest = sorted[0];
+    const previous = sorted[1];
+    const resolveRate = latest.stats.issuesFound > 0
+      ? Math.round((latest.stats.issuesResolved / latest.stats.issuesFound) * 100)
+      : 0;
+
+    return {
+      name,
+      repoPath: latest.repoPath,
+      latest,
+      sessions: sorted,
+      resolveRate,
+      trend: previous
+        ? latest.stats.issuesResolved > previous.stats.issuesResolved ? 'up' :
+          latest.stats.issuesResolved < previous.stats.issuesResolved ? 'down' : 'stable'
+        : 'stable' as 'up' | 'down' | 'stable',
+    };
+  });
+
   const activeSessions = sessions.filter(
     (s) => s.status === 'running' || s.status === 'paused'
   );
 
-  const recentSessions = sessions
-    .sort(
-      (a, b) =>
-        new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()
-    )
-    .slice(0, 10);
+  const handleQuickClean = (): void => {
+    if (!quickPath.trim()) return;
+    navigate(`/session/new?path=${encodeURIComponent(quickPath)}`);
+  };
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-dark-100">Dashboard</h1>
-          <p className="mt-1 text-dark-400">
-            Monitor your code quality improvement sessions
-          </p>
+      {/* Quick Start - Hero Section */}
+      <div className="rounded-2xl border border-dark-700 bg-gradient-to-br from-dark-800 via-dark-800 to-accent/5 p-8">
+        <div className="flex items-center gap-3 mb-2">
+          <Sparkles className="h-6 w-6 text-accent" />
+          <h1 className="text-2xl font-bold text-dark-100">Clean This Project</h1>
         </div>
-        <Link to="/session/new">
+        <p className="text-dark-400 mb-6 max-w-xl">
+          Point Sloppy at any codebase and it will find and fix issues automatically.
+          Each fix is an atomic, revertible git commit.
+        </p>
+        <div className="flex gap-3 max-w-2xl">
+          <div className="relative flex-1">
+            <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-dark-500" />
+            <input
+              type="text"
+              value={quickPath}
+              onChange={(e) => setQuickPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleQuickClean(); }}
+              placeholder="/path/to/your/project or https://github.com/user/repo"
+              className="w-full rounded-xl border border-dark-600 bg-dark-900 py-3 pl-11 pr-4 text-dark-100 placeholder-dark-500 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
           <Button
             variant="primary"
-            leftIcon={<Plus className="h-4 w-4" />}
+            onClick={handleQuickClean}
+            disabled={!quickPath.trim()}
+            className="px-8 rounded-xl"
+            leftIcon={<Zap className="h-5 w-5" />}
           >
+            Clean
+          </Button>
+        </div>
+        <div className="flex items-center gap-1 mt-3 text-xs text-dark-500">
+          <span>or</span>
+          <Link to="/session/new" className="text-accent hover:text-accent-hover underline">
+            configure a session
+          </Link>
+          <span>with advanced options</span>
+        </div>
+      </div>
+
+      {/* Compact Stats Bar */}
+      <div className="flex items-center gap-6 rounded-xl border border-dark-700 bg-dark-800 px-6 py-3">
+        <StatPill icon={Zap} label="Active" value={stats.activeSessions} color="text-accent" />
+        <div className="h-4 w-px bg-dark-700" />
+        <StatPill icon={CheckCircle} label="Resolved" value={stats.totalIssuesResolved} color="text-success" />
+        <div className="h-4 w-px bg-dark-700" />
+        <StatPill icon={AlertCircle} label="Found" value={stats.totalIssuesFound} color="text-warning" />
+        <div className="h-4 w-px bg-dark-700" />
+        <StatPill icon={TrendingUp} label="Commits" value={stats.totalCommits} color="text-blue-400" />
+        <div className="flex-1" />
+        <Link to="/session/new">
+          <Button variant="secondary" size="sm" leftIcon={<Plus className="h-4 w-4" />}>
             New Session
           </Button>
         </Link>
-      </div>
-
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatCard
-          icon={Zap}
-          label="Active Sessions"
-          value={stats.activeSessions}
-          color="accent"
-        />
-        <StatCard
-          icon={CheckCircle}
-          label="Issues Resolved"
-          value={stats.totalIssuesResolved}
-          color="success"
-        />
-        <StatCard
-          icon={AlertCircle}
-          label="Issues Found"
-          value={stats.totalIssuesFound}
-          color="warning"
-        />
-        <StatCard
-          icon={TrendingUp}
-          label="Total Commits"
-          value={stats.totalCommits}
-          color="info"
-        />
       </div>
 
       {/* Active Sessions */}
@@ -111,33 +159,19 @@ export default function Dashboard(): JSX.Element {
         </section>
       )}
 
-      {/* Recent Sessions */}
+      {/* Projects Grid */}
       <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-medium text-dark-200">Recent Sessions</h2>
-          {sessions.length > 10 && (
-            <Link
-              to="/sessions"
-              className="text-sm text-accent hover:text-accent-hover flex items-center gap-1"
-            >
-              View all <ArrowRight className="h-4 w-4" />
-            </Link>
-          )}
-        </div>
-
+        <h2 className="mb-4 text-lg font-medium text-dark-200">Your Projects</h2>
         {isLoading ? (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-32 animate-pulse rounded-lg bg-dark-800"
-              />
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-48 animate-pulse rounded-xl bg-dark-800" />
             ))}
           </div>
-        ) : recentSessions.length > 0 ? (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {recentSessions.map((session) => (
-              <SessionCard key={session.id} session={session} />
+        ) : projects.length > 0 ? (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {projects.map((project) => (
+              <ProjectCard key={project.name} project={project} />
             ))}
           </div>
         ) : (
@@ -148,31 +182,85 @@ export default function Dashboard(): JSX.Element {
   );
 }
 
-interface StatCardProps {
+interface StatPillProps {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: number;
-  color: 'accent' | 'success' | 'warning' | 'info';
+  color: string;
 }
 
-function StatCard({ icon: Icon, label, value, color }: StatCardProps): JSX.Element {
-  const colorStyles = {
-    accent: 'bg-accent/10 text-accent',
-    success: 'bg-success/10 text-success',
-    warning: 'bg-warning/10 text-warning',
-    info: 'bg-blue-500/10 text-blue-400',
+function StatPill({ icon: Icon, label, value, color }: StatPillProps): JSX.Element {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon className={`h-4 w-4 ${color}`} />
+      <span className="text-sm font-medium text-dark-100">{value}</span>
+      <span className="text-xs text-dark-500">{label}</span>
+    </div>
+  );
+}
+
+interface ProjectCardProps {
+  project: {
+    name: string;
+    repoPath: string;
+    latest: Session;
+    sessions: Session[];
+    resolveRate: number;
+    trend: 'up' | 'down' | 'stable';
   };
+}
+
+function ProjectCard({ project }: ProjectCardProps): JSX.Element {
+  const TrendIcon = project.trend === 'up' ? TrendingUp : project.trend === 'down' ? TrendingDown : Minus;
+  const trendColor = project.trend === 'up' ? 'text-success' : project.trend === 'down' ? 'text-error' : 'text-dark-500';
+
+  // Score approximation based on resolve rate
+  const score = project.resolveRate;
+  const scoreColor = score >= 80 ? 'text-success' : score >= 60 ? 'text-warning' : 'text-error';
+  const strokeColor = score >= 80 ? 'stroke-success' : score >= 60 ? 'stroke-warning' : 'stroke-error';
 
   return (
-    <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
-      <div
-        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg ${colorStyles[color]}`}
-      >
-        <Icon className="h-5 w-5" />
+    <Link
+      to={`/session/${project.latest.id}`}
+      className="group rounded-xl border border-dark-700 bg-dark-800 p-5 transition-all hover:border-dark-600 hover:bg-dark-750"
+    >
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex-1 min-w-0">
+          <h3 className="font-semibold text-dark-100 truncate">{project.name}</h3>
+          <p className="text-xs text-dark-500 mt-0.5">
+            {project.sessions.length} session{project.sessions.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          <TrendIcon className={`h-4 w-4 ${trendColor}`} />
+        </div>
       </div>
-      <p className="mt-3 text-2xl font-semibold text-dark-100">{value}</p>
-      <p className="mt-1 text-sm text-dark-400">{label}</p>
-    </div>
+
+      {/* Score Circle */}
+      <div className="flex items-center justify-center mb-4">
+        <div className="relative w-24 h-24">
+          <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="42" fill="none" className="stroke-dark-700" strokeWidth="8" />
+            <circle
+              cx="50" cy="50" r="42" fill="none"
+              className={strokeColor}
+              strokeWidth="8"
+              strokeLinecap="round"
+              strokeDasharray={`${score * 2.64} 264`}
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className={`text-2xl font-bold ${scoreColor}`}>{score}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="flex items-center justify-between text-xs text-dark-400">
+        <span>{project.latest.stats.issuesResolved}/{project.latest.stats.issuesFound} resolved</span>
+        <StatusBadge status={project.latest.status} size="sm" />
+      </div>
+    </Link>
   );
 }
 
@@ -181,12 +269,9 @@ interface ActiveSessionCardProps {
 }
 
 function ActiveSessionCard({ session }: ActiveSessionCardProps): JSX.Element {
-  const repoPath = session.repoPath;
-  const repoName = repoPath.split('/').pop() ?? repoPath;
-  const issuesFound = session.stats.issuesFound;
-  const issuesResolved = session.stats.issuesResolved;
-  const progress = issuesFound > 0 ? (issuesResolved / issuesFound) * 100 : 0;
-  const elapsedMinutes = Math.floor((session.stats.elapsedTime) / 60);
+  const repoName = session.repoPath.split('/').pop() ?? session.repoPath;
+  const progress = session.stats.issuesFound > 0 ? (session.stats.issuesResolved / session.stats.issuesFound) * 100 : 0;
+  const elapsedMinutes = Math.floor(session.stats.elapsedTime / 60);
 
   return (
     <Link
@@ -208,12 +293,11 @@ function ActiveSessionCard({ session }: ActiveSessionCardProps): JSX.Element {
           <span>{elapsedMinutes}m</span>
         </div>
       </div>
-
       <div className="mt-4">
         <div className="flex items-center justify-between text-sm mb-2">
           <span className="text-dark-400">Progress</span>
           <span className="text-dark-200">
-            {issuesResolved}/{issuesFound} issues
+            {session.stats.issuesResolved}/{session.stats.issuesFound} issues
           </span>
         </div>
         <ProgressBar
@@ -222,57 +306,6 @@ function ActiveSessionCard({ session }: ActiveSessionCardProps): JSX.Element {
           animated={session.status === 'running'}
         />
       </div>
-    </Link>
-  );
-}
-
-interface SessionCardProps {
-  session: Session;
-}
-
-function SessionCard({ session }: SessionCardProps): JSX.Element {
-  const repoPath = session.repoPath;
-  const repoName = repoPath.split('/').pop() ?? repoPath;
-  const date = session.startedAt
-    ? new Date(session.startedAt).toLocaleDateString()
-    : 'N/A';
-  const issuesResolved = session.stats.issuesResolved;
-  const issuesFound = session.stats.issuesFound;
-
-  return (
-    <Link
-      to={`/session/${session.id}`}
-      className="flex items-center gap-4 rounded-xl border border-dark-700 bg-dark-800 p-4 transition-all hover:border-dark-600 hover:bg-dark-750"
-    >
-      <div
-        className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-          session.status === 'completed'
-            ? 'bg-success/10 text-success'
-            : session.status === 'failed'
-            ? 'bg-error/10 text-error'
-            : 'bg-dark-700 text-dark-400'
-        }`}
-      >
-        {session.status === 'completed' ? (
-          <CheckCircle className="h-5 w-5" />
-        ) : session.status === 'failed' ? (
-          <AlertCircle className="h-5 w-5" />
-        ) : (
-          <Clock className="h-5 w-5" />
-        )}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <h3 className="font-medium text-dark-200 truncate">{repoName}</h3>
-          <StatusBadge status={session.status} size="sm" />
-        </div>
-        <p className="text-sm text-dark-500">
-          {date} • {issuesResolved}/{issuesFound} resolved
-        </p>
-      </div>
-
-      <ArrowRight className="h-4 w-4 text-dark-500" />
     </Link>
   );
 }
@@ -287,8 +320,7 @@ function EmptyState(): JSX.Element {
         No sessions yet
       </h3>
       <p className="mt-2 text-sm text-dark-400 max-w-sm">
-        Start your first code quality improvement session to automatically fix
-        issues in your codebase.
+        Enter a project path above and click Clean to get started, or create a session with custom options.
       </p>
       <Link to="/session/new" className="mt-6">
         <Button variant="primary" leftIcon={<Plus className="h-4 w-4" />}>

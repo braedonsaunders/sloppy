@@ -16,6 +16,7 @@ import { TypeAnalyzer } from './types/index.js';
 import { BugAnalyzer } from './bugs/index.js';
 import { LintAnalyzer } from './lint/index.js';
 import { DeadCodeAnalyzer } from './dead-code/index.js';
+import { PluginRegistry } from './plugin.js';
 
 /**
  * Configuration for the orchestrator
@@ -85,6 +86,12 @@ export class AnalysisOrchestrator {
     this.analyzers.set('dead-code', new DeadCodeAnalyzer());
     this.llmAnalyzer = new LLMAnalyzer();
     this.analyzers.set('llm', this.llmAnalyzer);
+
+    // Load plugins from registry
+    const registry = PluginRegistry.getInstance();
+    for (const plugin of registry.getAnalyzers()) {
+      this.analyzers.set(plugin.category as IssueCategory, plugin);
+    }
   }
 
   /**

@@ -40,6 +40,18 @@ export {
   type AnalysisLoopResult,
 } from './llm/index.js';
 
+// Plugin system
+export {
+  PluginRegistry,
+  type AnalyzerPlugin,
+  type AnalyzerPluginManifest,
+  PluginValidationError,
+  validatePlugin,
+  loadPluginFromPath,
+  loadPluginsFromDirectory,
+  createPlugin,
+} from './plugin.js';
+
 // Orchestrator
 export {
   AnalysisOrchestrator,
