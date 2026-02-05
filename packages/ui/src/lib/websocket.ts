@@ -145,7 +145,7 @@ export class WebSocketClient {
    * Join a session room on the server so broadcastToSession events are received
    */
   joinSession(sessionId: string): void {
-    if (this.joinedSessions.has(sessionId)) return;
+    if (this.joinedSessions.has(sessionId)) { return; }
     this.joinedSessions.add(sessionId);
     this.send({ type: 'subscribe', sessionId, payload: {} });
   }
@@ -154,7 +154,7 @@ export class WebSocketClient {
    * Leave a session room on the server
    */
   leaveSession(sessionId: string): void {
-    if (!this.joinedSessions.has(sessionId)) return;
+    if (!this.joinedSessions.has(sessionId)) { return; }
     this.joinedSessions.delete(sessionId);
     this.send({ type: 'unsubscribe', sessionId, payload: {} });
   }

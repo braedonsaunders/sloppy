@@ -653,14 +653,15 @@ export class AnalysisRunner {
     const rawDb = this.db.getRawDb();
 
     // Check if session has provider_config (stored as JSON string in database)
-    let sessionConfig: { providerId?: string; model?: string } | null = null;
+    // The session manager stores { provider, model } (not { providerId })
+    let sessionConfig: { provider?: string; providerId?: string; model?: string } | null = null;
     try {
       const parsed = JSON.parse(session.provider_config || '{}');
       sessionConfig = parsed;
     } catch {
       // Ignore parse errors
     }
-    let providerId = sessionConfig?.providerId;
+    let providerId = sessionConfig?.provider ?? sessionConfig?.providerId;
 
     // Fallback to default provider from settings
     if (!providerId) {

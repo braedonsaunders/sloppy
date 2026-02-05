@@ -190,9 +190,9 @@ export function useSessionWebSocket(sessionId: string): void {
         const details = activity.details;
         const eventType = details?.eventType as string | undefined;
         if (eventType === 'llm_request_start') {
-          const reqId = details?.id as string ?? `llm-${String(Date.now())}`;
-          const provider = (details?.provider as string) ?? 'unknown';
-          const model = (details?.model as string) ?? 'unknown';
+          const reqId = typeof details?.id === 'string' ? details.id : `llm-${String(Date.now())}`;
+          const provider = typeof details?.provider === 'string' ? details.provider : 'unknown';
+          const model = typeof details?.model === 'string' ? details.model : 'unknown';
           addLLMRequest({
             id: reqId,
             status: 'streaming',
@@ -210,12 +210,16 @@ export function useSessionWebSocket(sessionId: string): void {
             startedAt: activity.timestamp,
           });
         } else if (eventType === 'llm_request_complete') {
-          const reqId = details?.id as string ?? '';
-          const durationMs = (details?.durationMs as number) ?? 0;
+          const reqId = typeof details?.id === 'string' ? details.id : '';
+          const durationMs = typeof details?.durationMs === 'number' ? details.durationMs : 0;
+          const inputTokens = typeof details?.inputTokens === 'number' ? details.inputTokens : undefined;
+          const outputTokens = typeof details?.outputTokens === 'number' ? details.outputTokens : undefined;
           updateLLMRequest(reqId, {
             status: 'completed',
             duration: durationMs,
             completedAt: activity.timestamp,
+            inputTokens,
+            outputTokens,
           });
           setActiveLLMRequest(undefined);
         } else if (eventType === 'analysis_complete') {

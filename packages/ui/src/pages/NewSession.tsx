@@ -66,7 +66,7 @@ export default function NewSession(): JSX.Element {
   const [model, setModel] = useState('');
   const [maxTime, setMaxTime] = useState<string>('');
   const [strictness, setStrictness] = useState<'low' | 'medium' | 'high'>('medium');
-  const [focusAreas, setFocusAreas] = useState<string[]>(['lint', 'type', 'security', 'bugs']);
+  const [focusAreas, setFocusAreas] = useState<string[]>(FOCUS_AREAS.map(a => a.id));
   const [approvalMode, setApprovalMode] = useState(false);
   const [testCommand, setTestCommand] = useState('');
   const [lintCommand, setLintCommand] = useState('');

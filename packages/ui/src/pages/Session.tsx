@@ -594,7 +594,7 @@ function LiveActivityFeed({ activities, isActive, llmRequests: _llmRequests, act
 
                 return (
                   <div
-                    key={activity.id ?? `activity-${String(i)}`}
+                    key={activity.id || `activity-${String(i)}`}
                     className="flex items-start gap-2 px-2 py-1 rounded hover:bg-dark-800/50 group"
                   >
                     <span className="text-dark-600 flex-shrink-0 pt-0.5">{time}</span>
