@@ -301,7 +301,10 @@ export class AnalysisRunner {
           deduplicate: true,
           sortBySeverity: true,
           analyzerConfigs: {
-            llm: llmConfig,
+            llm: {
+              ...llmConfig,
+              focusAreas: issueTypes,
+            },
           },
         },
         (progress) => {
@@ -628,53 +631,18 @@ export class AnalysisRunner {
   }
 
   /**
-   * Map UI focus areas to analyzer categories
-   * LLM is ALWAYS included - it orchestrates the entire analysis
-   * Focus areas tell the LLM what to prioritize
-   * Language-aware: only includes static analyzers that support the detected language
+   * Map UI focus areas to analyzer categories.
+   *
+   * The LLM is now the sole orchestrator -- it decides which static analysis tools
+   * to invoke internally. So we always return ['llm'] as the analyzer category.
+   * The focus areas are passed to the LLM config so it knows what to prioritize.
+   *
+   * Fallback: if no LLM API key is available, the orchestrator itself will
+   * fall back to running universal static analyzers directly.
    */
-  private mapIssueTypesToCategories(focusAreas: string[], isJsTs: boolean = true): string[] {
-    // LLM is always the primary orchestrator - works on ALL languages
-    const categories: Set<string> = new Set(['llm']);
-
-    // Language-agnostic analyzers (work on any codebase)
-    const universalAnalyzers: Record<string, string[]> = {
-      security: ['security'],     // Regex patterns work on any language
-      stubs: ['stub'],            // Regex patterns work on any language
-      maintainability: ['duplicate'], // jscpd supports many languages
-      test: ['coverage'],         // LCOV format is universal
-    };
-
-    // JS/TS-only analyzers
-    const jsTsAnalyzers: Record<string, string[]> = {
-      lint: ['lint'],              // ESLint
-      type: ['type'],              // TypeScript compiler
-      maintainability: ['dead-code'], // TypeScript AST
-    };
-
-    // Always add universal analyzers
-    for (const area of focusAreas) {
-      const mapped = universalAnalyzers[area];
-      if (mapped) {
-        for (const cat of mapped) {
-          categories.add(cat);
-        }
-      }
-    }
-
-    // Only add JS/TS analyzers if the codebase is JS/TS
-    if (isJsTs) {
-      for (const area of focusAreas) {
-        const mapped = jsTsAnalyzers[area];
-        if (mapped) {
-          for (const cat of mapped) {
-            categories.add(cat);
-          }
-        }
-      }
-    }
-
-    return Array.from(categories);
+  private mapIssueTypesToCategories(_focusAreas: string[], _isJsTs: boolean = true): string[] {
+    // The LLM orchestrates everything -- static analyzers are tools it invokes
+    return ['llm'];
   }
 
   /**

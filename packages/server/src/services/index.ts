@@ -66,3 +66,6 @@ export {
   SessionDatabaseAdapter,
   createOrchestrator,
 } from './orchestrator.js';
+
+// Learnings Adapter
+export type { LearningsAdapter } from './types.js';

@@ -17,6 +17,7 @@ import { spawn, SpawnOptions } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { glob } from 'glob';
+import type { Issue, AnalyzerOptions } from '../base.js';
 
 /**
  * Learning entry for persistence
@@ -480,6 +481,132 @@ export const TOOL_DEFINITIONS = [
       required: ['query'],
     },
   },
+  {
+    name: 'run_stub_analysis',
+    description: 'Run the stubs analyzer to detect TODO, FIXME, HACK, and other stub comments in the codebase. Works on all languages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_duplicate_analysis',
+    description: 'Run the duplicate code analyzer to detect copy-pasted or duplicated code blocks. Uses jscpd and supports many languages.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_security_analysis',
+    description: 'Run the security analyzer to detect potential vulnerabilities: injection flaws, hardcoded secrets, insecure patterns. Works on all languages via regex patterns.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_dead_code_analysis',
+    description: 'Run the dead code analyzer to detect unused exports, unreachable code, and unused variables. JS/TS only (uses TypeScript AST).',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_bug_analysis',
+    description: 'Run the bug pattern analyzer to detect common logic bugs: off-by-one errors, incorrect comparisons, missing null checks. JS/TS only.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_type_analysis',
+    description: 'Run the type analyzer to detect type safety issues: unsafe any usage, missing return types, implicit type coercions. JS/TS only.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
+  {
+    name: 'run_coverage_analysis',
+    description: 'Run the coverage analyzer to detect untested code by analyzing existing coverage reports (LCOV format). Works on all languages that produce LCOV output.',
+    parameters: {
+      type: 'object',
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific files to analyze (optional, defaults to all discovered files)',
+        },
+        rootDir: {
+          type: 'string',
+          description: 'Project root directory (optional, defaults to current project root)',
+        },
+      },
+    },
+  },
 ];
 
 /**
@@ -623,6 +750,20 @@ export class ToolExecutor {
         return this.readLearnings(undefined, params.category as string | undefined);
       case 'search_learnings':
         return this.searchLearnings(params.query as string);
+      case 'run_stub_analysis':
+        return this.runStaticAnalyzer('stub', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_duplicate_analysis':
+        return this.runStaticAnalyzer('duplicate', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_security_analysis':
+        return this.runStaticAnalyzer('security', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_dead_code_analysis':
+        return this.runStaticAnalyzer('dead-code', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_bug_analysis':
+        return this.runStaticAnalyzer('bug', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_type_analysis':
+        return this.runStaticAnalyzer('type', params.files as string[] | undefined, params.rootDir as string | undefined);
+      case 'run_coverage_analysis':
+        return this.runStaticAnalyzer('coverage', params.files as string[] | undefined, params.rootDir as string | undefined);
       default:
         throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -1526,6 +1667,94 @@ export class ToolExecutor {
       return {
         result: [],
         output: `Search failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  /**
+   * Run a static analyzer by category and return formatted results
+   */
+  async runStaticAnalyzer(
+    category: string,
+    files?: string[],
+    rootDir?: string
+  ): Promise<{ result: Issue[]; output: string }> {
+    const effectiveRootDir = rootDir ?? this.rootDir;
+    const options: AnalyzerOptions = { rootDir: effectiveRootDir };
+
+    try {
+      let analyzer: { analyze(files: string[], options: AnalyzerOptions): Promise<Issue[]> };
+
+      switch (category) {
+        case 'stub': {
+          const { StubAnalyzer } = await import('../stubs/index.js');
+          analyzer = new StubAnalyzer();
+          break;
+        }
+        case 'duplicate': {
+          const { DuplicateAnalyzer } = await import('../duplicates/index.js');
+          analyzer = new DuplicateAnalyzer();
+          break;
+        }
+        case 'security': {
+          const { SecurityAnalyzer } = await import('../security/index.js');
+          analyzer = new SecurityAnalyzer();
+          break;
+        }
+        case 'dead-code': {
+          const { DeadCodeAnalyzer } = await import('../dead-code/index.js');
+          analyzer = new DeadCodeAnalyzer();
+          break;
+        }
+        case 'bug': {
+          const { BugAnalyzer } = await import('../bugs/index.js');
+          analyzer = new BugAnalyzer();
+          break;
+        }
+        case 'type': {
+          const { TypeAnalyzer } = await import('../types/index.js');
+          analyzer = new TypeAnalyzer();
+          break;
+        }
+        case 'coverage': {
+          const { CoverageAnalyzer } = await import('../coverage/index.js');
+          analyzer = new CoverageAnalyzer();
+          break;
+        }
+        default:
+          throw new Error(`Unknown analyzer category: ${category}`);
+      }
+
+      // If no files specified, discover files in the project
+      let targetFiles = files ?? [];
+      if (targetFiles.length === 0) {
+        const patterns = ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx', '**/*.py', '**/*.go', '**/*.rs', '**/*.java', '**/*.rb', '**/*.php', '**/*.c', '**/*.cpp', '**/*.h'];
+        for (const pattern of patterns) {
+          const matches = await glob(pattern, {
+            cwd: effectiveRootDir,
+            absolute: true,
+            ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/.git/**', '**/*.d.ts'],
+            nodir: true,
+          });
+          targetFiles.push(...matches);
+        }
+        targetFiles = [...new Set(targetFiles)].sort();
+      }
+
+      const issues = await analyzer.analyze(targetFiles, options);
+
+      const output = issues.length > 0
+        ? `Found ${String(issues.length)} ${category} issues:\n${issues.map(i =>
+            `  ${path.relative(effectiveRootDir, i.location.file)}:${String(i.location.line)} [${i.severity}] ${i.message}`
+          ).join('\n')}`
+        : `No ${category} issues found`;
+
+      return { result: issues, output };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      return {
+        result: [],
+        output: `Failed to run ${category} analyzer: ${errorMsg}`,
       };
     }
   }

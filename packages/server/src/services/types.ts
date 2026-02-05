@@ -51,6 +51,8 @@ export interface SessionConfig {
   excludePatterns: string[];
   commitAfterEachFix: boolean;
   runVerificationAfterEachFix: boolean;
+  reAnalysisInterval: number;
+  maxReAnalysisCycles: number;
 }
 
 export type AnalysisType =
@@ -188,6 +190,7 @@ export interface VerifyResult {
   success: boolean;
   verification: VerificationResult;
   feedback?: string;
+  diagnosticFeedback?: string;
 }
 
 // ============================================================================
@@ -486,6 +489,8 @@ export interface FixRequest {
     previousAttempts: FixAttempt[];
     verificationErrors?: string;
     relatedFiles?: FileContext[];
+    learnings?: string;
+    diagnosticPrompt?: string;
   };
 }
 
@@ -494,6 +499,7 @@ export interface FixAttempt {
   diff: string;
   verificationResult?: VerificationResult;
   feedback?: string;
+  diagnosticFeedback?: string;
 }
 
 export interface FileContext {
@@ -595,6 +601,33 @@ export interface Logger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
   error(message: string, meta?: Record<string, unknown>): void;
+}
+
+// ============================================================================
+// Learnings Adapter Interface
+// ============================================================================
+
+export interface LearningsAdapter {
+  saveLearning(learning: {
+    sessionId: string;
+    category: string;
+    pattern: string;
+    description: string;
+    filePatterns?: string[];
+    confidence?: number;
+  }): void;
+  getLearnings(sessionId: string): Array<{
+    pattern: string;
+    description: string;
+    category: string;
+    confidence: number;
+  }>;
+  getGlobalLearnings(): Array<{
+    pattern: string;
+    description: string;
+    category: string;
+    confidence: number;
+  }>;
 }
 
 // ============================================================================

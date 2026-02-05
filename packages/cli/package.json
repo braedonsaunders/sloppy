@@ -1,0 +1,26 @@
+{
+  "name": "@sloppy/cli",
+  "version": "1.0.0",
+  "description": "CLI launcher for Sloppy - AI-powered code quality tool",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "sloppy": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}

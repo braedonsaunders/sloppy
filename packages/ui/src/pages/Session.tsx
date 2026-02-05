@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -34,6 +34,8 @@ import { useSessionWebSocket } from '@/hooks/useWebSocket';
 import { useSessionStore } from '@/stores/session';
 import { useIssuesStore, selectFilteredIssues, selectIssueStats, type IssueFilter } from '@/stores/issues';
 import { api } from '@/lib/api';
+import type { ScoreData } from '@/lib/api';
+import SloppyScore from '@/components/SloppyScore';
 
 type Tab = 'issues' | 'commits' | 'activity' | 'metrics';
 
@@ -44,6 +46,7 @@ export default function Session(): JSX.Element {
   const [activeTab, setActiveTab] = useState<Tab>('issues');
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [scoreData, setScoreData] = useState<ScoreData | null>(null);
 
   // Hooks
   const {
@@ -73,6 +76,16 @@ export default function Session(): JSX.Element {
   const filters = useIssuesStore((s) => s.filters);
   const setFilters = useIssuesStore((s) => s.setFilters);
   const clearFilters = useIssuesStore((s) => s.clearFilters);
+
+  // Fetch score data
+  useEffect(() => {
+    if (!id) return;
+    void api.scores.get(id).then((data) => {
+      setScoreData(data);
+    }).catch(() => {
+      // Score not yet computed, that's fine
+    });
+  }, [id, session?.status]);
 
   // Mutations
   const approveIssueMutation = useMutation({
@@ -214,8 +227,37 @@ export default function Session(): JSX.Element {
         </div>
       </div>
 
-      {/* Stats Overview Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+      {/* Sloppy Score + Stats Overview Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Score Display */}
+        <div className="lg:col-span-1">
+          {scoreData ? (
+            <SloppyScore
+              score={scoreData.score}
+              breakdown={scoreData.breakdown}
+              issuesBefore={scoreData.issuesBefore}
+              issuesAfter={scoreData.issuesAfter}
+            />
+          ) : (
+            <div className="rounded-xl border border-dark-700 bg-dark-800 p-6 flex flex-col items-center justify-center min-h-[200px]">
+              <p className="text-dark-500 text-sm mb-3">No score computed yet</p>
+              <button
+                onClick={() => {
+                  if (!id) return;
+                  void api.scores.compute(id).then((data) => {
+                    setScoreData(data);
+                  });
+                }}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+              >
+                Compute Score
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Stats Grid */}
+        <div className="lg:col-span-3 grid grid-cols-2 md:grid-cols-3 gap-4">
         {/* Issues Found */}
         <div className="rounded-xl border border-dark-700 bg-dark-800 p-4">
           <div className="flex items-center gap-2 text-dark-400 mb-2">
@@ -305,6 +347,7 @@ export default function Session(): JSX.Element {
           <p className="text-xs text-dark-500 mt-2">
             Total input + output
           </p>
+        </div>
         </div>
       </div>
 

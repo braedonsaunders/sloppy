@@ -23,6 +23,7 @@ import {
   FixResponse,
   FixAttempt,
   Logger,
+  LearningsAdapter,
   OrchestratorConfig,
   DEFAULT_ORCHESTRATOR_CONFIG,
 } from './types.js';
@@ -45,6 +46,7 @@ export interface OrchestratorDependencies {
   metricsCollector: MetricsCollector;
   aiProvider: AIProvider;
   analyzer: CodeAnalyzer;
+  learningsAdapter?: LearningsAdapter;
 }
 
 export interface AIProvider {
@@ -87,6 +89,8 @@ export class Orchestrator {
   private startTime: Date | null = null;
   private commits: CommitSummary[] = [];
   private fixAttempts: Map<string, FixAttempt[]> = new Map();
+  private successfulFixCount = 0;
+  private reAnalysisCycleCount = 0;
 
   constructor(
     session: Session,
@@ -400,6 +404,9 @@ export class Orchestrator {
     this.logger.info('Starting fix loop', { totalIssues: issues.length });
 
     let processedCount = 0;
+    const reAnalysisInterval = this.session.config.reAnalysisInterval ?? 5;
+    const maxReAnalysisCycles = this.session.config.maxReAnalysisCycles ?? 3;
+    let fixesSinceLastReAnalysis = 0;
 
     while (!this.isStopped) {
       // Check timeout
@@ -430,8 +437,17 @@ export class Orchestrator {
         progress: `${processedCount}/${issues.length}`,
       });
 
+      // Track whether this fix succeeds (check count before processing)
+      const fixCountBefore = this.successfulFixCount;
+
       // Process the issue
       await this.processIssue(issue);
+
+      // Check if this fix was successful
+      const fixSucceeded = this.successfulFixCount > fixCountBefore;
+      if (fixSucceeded) {
+        fixesSinceLastReAnalysis++;
+      }
 
       // Update session progress
       const stats = await this.deps.issueTracker.getStats();
@@ -442,11 +458,29 @@ export class Orchestrator {
         currentIssueId: null,
         updatedAt: new Date(),
       });
+
+      // Check if it's time for re-analysis
+      if (
+        fixesSinceLastReAnalysis >= reAnalysisInterval &&
+        this.reAnalysisCycleCount < maxReAnalysisCycles &&
+        !this.isStopped
+      ) {
+        this.logger.info('Triggering post-fix re-analysis', {
+          fixesSinceLastReAnalysis,
+          reAnalysisCycle: this.reAnalysisCycleCount + 1,
+          maxReAnalysisCycles,
+        });
+
+        await this.runReAnalysis();
+        fixesSinceLastReAnalysis = 0;
+      }
     }
 
     this.logger.info('Fix loop completed', {
       processed: processedCount,
       stopped: this.isStopped,
+      successfulFixes: this.successfulFixCount,
+      reAnalysisCycles: this.reAnalysisCycleCount,
     });
   }
 
@@ -499,6 +533,7 @@ export class Orchestrator {
 
         if (success) {
           await this.deps.issueTracker.markResolved(issue.id);
+          this.successfulFixCount++;
 
           // Commit if configured
           if (this.session.config.commitAfterEachFix) {
@@ -513,6 +548,9 @@ export class Orchestrator {
               });
             }
           }
+
+          // Auto-persist learning after successful fix+commit
+          this.saveLearningFromFix(issue, attempt);
 
           // Emit resolved event
           await this.emit({
@@ -591,8 +629,12 @@ export class Orchestrator {
     const filePath = path.join(this.session.repositoryPath, issue.filePath);
     const fileContent = await readFile(filePath, 'utf-8');
 
-    // Get previous attempts for context
-    const previousAttempts = this.fixAttempts.get(issue.id) ?? [];
+    // Get previous attempts for context (limit to last 2 for fresh context)
+    const allPreviousAttempts = this.fixAttempts.get(issue.id) ?? [];
+    const previousAttempts = allPreviousAttempts.slice(-2);
+
+    // Fetch learnings from DB for accumulated wisdom
+    const learningsContext = this.buildLearningsContext();
 
     // Build fix request
     const request: FixRequest = {
@@ -600,6 +642,7 @@ export class Orchestrator {
       fileContent,
       context: {
         previousAttempts,
+        learnings: learningsContext || undefined,
       },
     };
 
@@ -647,22 +690,23 @@ export class Orchestrator {
     // Phase 5: Verification
     const verifyResult = await this.verifyFix(issue, response.diff);
 
-    // Store attempt
-    const attempt: FixAttempt = {
-      attempt: previousAttempts.length + 1,
+    // Store attempt (always append to full list, not the truncated view)
+    const fixAttempt: FixAttempt = {
+      attempt: allPreviousAttempts.length + 1,
       diff: response.diff,
       verificationResult: verifyResult.verification,
       feedback: verifyResult.feedback,
+      diagnosticFeedback: verifyResult.diagnosticFeedback,
     };
-    previousAttempts.push(attempt);
-    this.fixAttempts.set(issue.id, previousAttempts);
+    allPreviousAttempts.push(fixAttempt);
+    this.fixAttempts.set(issue.id, allPreviousAttempts);
 
     if (!verifyResult.success) {
       // Revert the change
       await this.revertChanges(issue.filePath);
 
       // Record failed retry if not first attempt
-      if (previousAttempts.length > 1) {
+      if (allPreviousAttempts.length > 1) {
         this.deps.metricsCollector.recordRetry(false);
       }
 
@@ -673,7 +717,7 @@ export class Orchestrator {
     this.deps.metricsCollector.recordVerification(true);
 
     // Record successful retry if not first attempt
-    if (previousAttempts.length > 1) {
+    if (allPreviousAttempts.length > 1) {
       this.deps.metricsCollector.recordRetry(true);
     }
 
@@ -737,10 +781,29 @@ export class Orchestrator {
 
     const success = result.overall === 'pass' || result.overall === 'skipped';
 
+    if (!success) {
+      // Run semantic diagnosis on the failed fix
+      const rawErrors = extractVerificationErrors(result);
+      const filePath = path.join(this.session.repositoryPath, issue.filePath);
+      let fileContent: string;
+      try {
+        fileContent = await readFile(filePath, 'utf-8');
+      } catch {
+        fileContent = '';
+      }
+      const diagnosticFeedback = await this.diagnoseFix(issue, diff, fileContent, result);
+
+      return {
+        success,
+        verification: result,
+        feedback: rawErrors,
+        diagnosticFeedback,
+      };
+    }
+
     return {
       success,
       verification: result,
-      feedback: success ? undefined : extractVerificationErrors(result),
     };
   }
 
@@ -759,6 +822,238 @@ export class Orchestrator {
         filePath: issue.filePath,
       });
       return false;
+    }
+  }
+
+  /**
+   * Run post-fix re-analysis to discover new or resolved issues
+   */
+  private async runReAnalysis(): Promise<void> {
+    this.reAnalysisCycleCount++;
+
+    this.logger.info('Running post-fix re-analysis', {
+      cycle: this.reAnalysisCycleCount,
+    });
+
+    try {
+      // Save current progress checkpoint
+      const metrics = await this.deps.metricsCollector.collectMetrics();
+      await this.deps.checkpointService.createFinalCheckpoint(metrics);
+
+      // Run fresh analysis
+      const newIssues = await this.deps.analyzer.analyze(
+        this.session.repositoryPath,
+        this.session.config.analysisTypes,
+        this.session.config.excludePatterns
+      );
+
+      // Get currently tracked issues for comparison
+      const currentStats = await this.deps.issueTracker.getStats();
+      const existingIssues = await this.deps.issueTracker.getIssues();
+
+      // Build a set of existing issue fingerprints for comparison
+      const existingFingerprints = new Set(
+        existingIssues.map((i) => `${i.filePath}:${i.line}:${i.rule ?? i.type}`)
+      );
+
+      // Find genuinely new issues (not already tracked)
+      const genuinelyNewIssues = newIssues.filter((newIssue) => {
+        const fingerprint = `${newIssue.filePath}:${newIssue.line}:${newIssue.rule ?? newIssue.type}`;
+        return !existingFingerprints.has(fingerprint);
+      });
+
+      // Build fingerprints from new analysis to detect resolved issues
+      const newFingerprints = new Set(
+        newIssues.map((i) => `${i.filePath}:${i.line}:${i.rule ?? i.type}`)
+      );
+
+      // Mark pending issues that no longer appear in re-analysis as skipped
+      for (const existing of existingIssues) {
+        if (existing.status === 'pending') {
+          const fingerprint = `${existing.filePath}:${existing.line}:${existing.rule ?? existing.type}`;
+          if (!newFingerprints.has(fingerprint)) {
+            await this.deps.issueTracker.markSkipped(
+              existing.id,
+              'Issue no longer detected after re-analysis'
+            );
+          }
+        }
+      }
+
+      // Add genuinely new issues to the tracker
+      if (genuinelyNewIssues.length > 0) {
+        const sessionIssues = genuinelyNewIssues.map((issue) => ({
+          ...issue,
+          sessionId: this.session.id,
+          status: 'pending' as IssueStatus,
+          retryCount: 0,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }));
+
+        await this.deps.issueTracker.addIssues(sessionIssues);
+
+        this.logger.info('Re-analysis found new issues', {
+          newIssuesCount: genuinelyNewIssues.length,
+        });
+      }
+
+      // Emit analysis completed event
+      const updatedStats = await this.deps.issueTracker.getStats();
+      await this.emit({
+        type: 'analysis:completed',
+        sessionId: this.session.id,
+        timestamp: new Date(),
+        totalIssues: updatedStats.total,
+        byCategory: updatedStats.byCategory,
+        bySeverity: updatedStats.bySeverity,
+      });
+
+      this.logger.info('Post-fix re-analysis completed', {
+        cycle: this.reAnalysisCycleCount,
+        newIssuesFound: genuinelyNewIssues.length,
+        previousTotal: currentStats.total,
+        updatedTotal: updatedStats.total,
+      });
+    } catch (error) {
+      this.logger.error('Re-analysis failed', {
+        cycle: this.reAnalysisCycleCount,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Non-fatal: continue with existing issues
+    }
+  }
+
+  /**
+   * Diagnose a failed fix using the AI provider for semantic understanding
+   * Returns enriched diagnostic feedback instead of just raw error strings
+   */
+  private async diagnoseFix(
+    issue: Issue,
+    diff: string,
+    fileContent: string,
+    verificationResult: VerificationResult
+  ): Promise<string> {
+    try {
+      const rawErrors = extractVerificationErrors(verificationResult);
+
+      const diagnosticRequest: FixRequest = {
+        issue,
+        fileContent,
+        context: {
+          previousAttempts: [],
+          verificationErrors: rawErrors,
+          diagnosticPrompt: [
+            'DIAGNOSTIC MODE: Do not generate a fix. Instead, analyze why the previous fix attempt failed.',
+            '',
+            'The following diff was applied:',
+            '```',
+            diff,
+            '```',
+            '',
+            'The verification produced these errors:',
+            rawErrors,
+            '',
+            'Please provide:',
+            '1. ROOT CAUSE: Why did this fix fail? What was wrong with the approach?',
+            '2. SUGGESTED APPROACH: What different strategy should be used instead?',
+            '3. RELEVANT CONTEXT: Any important details about the codebase or issue that should inform the next attempt.',
+          ].join('\n'),
+        },
+      };
+
+      const response = await this.deps.aiProvider.generateFix(diagnosticRequest);
+
+      if (response.success && response.explanation) {
+        this.logger.debug('Diagnostic feedback generated', {
+          issueId: issue.id,
+        });
+        return response.explanation;
+      }
+
+      // Fall back to raw errors if diagnosis fails
+      return rawErrors;
+    } catch (error) {
+      this.logger.warn('Failed to generate diagnostic feedback, using raw errors', {
+        issueId: issue.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return extractVerificationErrors(verificationResult);
+    }
+  }
+
+  /**
+   * Build learnings context string from session and global learnings
+   */
+  private buildLearningsContext(): string {
+    if (!this.deps.learningsAdapter) {
+      return '';
+    }
+
+    try {
+      const sessionLearnings = this.deps.learningsAdapter.getLearnings(this.session.id);
+      const globalLearnings = this.deps.learningsAdapter.getGlobalLearnings();
+
+      const allLearnings = [...globalLearnings, ...sessionLearnings];
+
+      if (allLearnings.length === 0) {
+        return '';
+      }
+
+      const lines: string[] = ['ACCUMULATED LEARNINGS (from previous fixes):'];
+
+      for (const learning of allLearnings) {
+        const confidence = learning.confidence !== undefined
+          ? ` (confidence: ${learning.confidence})`
+          : '';
+        lines.push(`- [${learning.category}] ${learning.pattern}: ${learning.description}${confidence}`);
+      }
+
+      return lines.join('\n');
+    } catch (error) {
+      this.logger.warn('Failed to fetch learnings', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return '';
+    }
+  }
+
+  /**
+   * Save a learning after a successful fix
+   */
+  private saveLearningFromFix(issue: Issue, attemptCount: number): void {
+    if (!this.deps.learningsAdapter) {
+      return;
+    }
+
+    try {
+      const lastAttempts = this.fixAttempts.get(issue.id) ?? [];
+      const successfulAttempt = lastAttempts[lastAttempts.length - 1];
+
+      const description = attemptCount > 1
+        ? `Fixed ${issue.type} issue after ${attemptCount} attempts. Previous approaches failed; the successful approach was applied in attempt ${attemptCount}.`
+        : `Fixed ${issue.type} issue on first attempt.`;
+
+      this.deps.learningsAdapter.saveLearning({
+        sessionId: this.session.id,
+        category: issue.category,
+        pattern: `${issue.source}:${issue.rule ?? issue.type}`,
+        description,
+        filePatterns: [issue.filePath],
+        confidence: attemptCount === 1 ? 0.9 : 0.7,
+      });
+
+      this.logger.debug('Learning saved after successful fix', {
+        issueId: issue.id,
+        category: issue.category,
+        pattern: `${issue.source}:${issue.rule ?? issue.type}`,
+      });
+    } catch (error) {
+      this.logger.warn('Failed to save learning', {
+        issueId: issue.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Non-fatal: continue without saving learning
     }
   }
 
