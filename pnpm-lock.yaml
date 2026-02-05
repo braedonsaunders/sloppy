@@ -157,6 +157,9 @@ importers:
       nanoid:
         specifier: ^5.0.7
         version: 5.1.6
+      openai:
+        specifier: ^4.77.0
+        version: 4.104.0(ws@8.19.0)(zod@3.25.76)
       pino-pretty:
         specifier: ^13.1.3
         version: 13.1.3

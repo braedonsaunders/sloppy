@@ -507,7 +507,7 @@ interface LiveActivityFeedProps {
   activeLLMRequest?: { id: string; status: string; model: string; provider: string };
 }
 
-function LiveActivityFeed({ activities, isActive, llmRequests, activeLLMRequest }: LiveActivityFeedProps): JSX.Element {
+function LiveActivityFeed({ activities, isActive, llmRequests: _llmRequests, activeLLMRequest }: LiveActivityFeedProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(true);
 

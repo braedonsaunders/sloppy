@@ -220,8 +220,8 @@ export class LLMAnalyzer extends BaseAnalyzer {
   readonly description = 'AI-powered deep code analysis for logic bugs, security issues, and code smells';
   readonly category: IssueCategory = 'llm';
 
-  private readonly config: Required<LLMAnalyzerConfig>;
-  private activeConfig: Required<LLMAnalyzerConfig> | null = null; // Config used during current analysis run
+  private readonly config: Required<Omit<LLMAnalyzerConfig, 'onEvent'>>;
+  private activeConfig: Required<Omit<LLMAnalyzerConfig, 'onEvent'>> | null = null; // Config used during current analysis run
   private onEvent: ((event: AnalyzerEvent) => void) | null = null; // Event callback for current run
   private fileBrowser: FileBrowser | null = null;
   private toolExecutor: ToolExecutor | null = null;
@@ -251,7 +251,6 @@ export class LLMAnalyzer extends BaseAnalyzer {
       focusAreas: config.focusAreas ?? [],
       sessionId: config.sessionId ?? '',
       databasePath: config.databasePath ?? '',
-      onEvent: undefined,
     };
   }
 
@@ -265,7 +264,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
   /**
    * Get the active config (runtime config during analysis, or default config)
    */
-  private getConfig(): Required<LLMAnalyzerConfig> {
+  private getConfig(): Required<Omit<LLMAnalyzerConfig, 'onEvent'>> {
     return this.activeConfig ?? this.config;
   }
 
@@ -306,7 +305,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
     }
 
     // Store effective config for use throughout this analysis run
-    this.activeConfig = effectiveConfig as Required<LLMAnalyzerConfig>;
+    this.activeConfig = effectiveConfig as Required<Omit<LLMAnalyzerConfig, 'onEvent'>>;
 
     const issues: Issue[] = [];
 
