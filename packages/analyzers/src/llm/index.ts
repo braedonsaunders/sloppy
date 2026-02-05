@@ -406,15 +406,24 @@ export class LLMAnalyzer extends BaseAnalyzer {
     messages.push({ role: 'system', content: systemPrompt });
     messages.push({ role: 'user', content: userMessage });
 
+    let llmCallCount = 0;
+
     // Run agentic loop
     for (let iteration = 0; iteration < this.getConfig().maxIterations; iteration++) {
-      this.log(options, `Agentic iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)}`);
+      console.log(`[${this.name}] Iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)} - sending ${String(messages.length)} messages to ${this.getConfig().provider}/${this.getConfig().model}`);
 
       try {
         const response = await this.callLLM(messages);
+        llmCallCount++;
 
         // Check if response contains tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
+          const toolNames = response.toolCalls.map(tc => tc.name).join(', ');
+          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM called ${String(response.toolCalls.length)} tools: ${toolNames}`);
+          if (response.content) {
+            console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM reasoning: ${response.content.slice(0, 200)}${response.content.length > 200 ? '...' : ''}`);
+          }
+
           messages.push({
             role: 'assistant',
             content: response.content,
@@ -424,6 +433,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
           // Execute each tool call
           for (const toolCall of response.toolCalls) {
             const toolResult = await this.executeToolCall(toolCall, issues);
+            console.log(`[${this.name}]   Tool ${toolCall.name}: ${toolResult.slice(0, 150).replace(/\n/g, ' ')}${toolResult.length > 150 ? '...' : ''}`);
             messages.push({
               role: 'tool',
               content: toolResult,
@@ -431,14 +441,20 @@ export class LLMAnalyzer extends BaseAnalyzer {
             });
           }
         } else {
-          // No tool calls - extract issues from response
+          // No tool calls - LLM responded with text only
+          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM text response (${String(response.content.length)} chars): ${response.content.slice(0, 300).replace(/\n/g, ' ')}${response.content.length > 300 ? '...' : ''}`);
+
           const parsedIssues = this.parseIssuesFromResponse(response.content, options);
+          if (parsedIssues.length > 0) {
+            console.log(`[${this.name}] Parsed ${String(parsedIssues.length)} issues from response`);
+          }
           issues.push(...parsedIssues);
 
           // Check if LLM wants to continue or is done
           if (response.content.includes('[ANALYSIS_COMPLETE]') ||
               !response.content.includes('create_issue') ||
               iteration >= this.getConfig().maxIterations - 1) {
+            console.log(`[${this.name}] Agentic loop complete after ${String(iteration + 1)} iterations, ${String(llmCallCount)} LLM calls, ${String(issues.length)} issues found`);
             break;
           }
 
