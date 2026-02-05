@@ -56,12 +56,14 @@ ${colors.bold("USAGE")}
 ${colors.bold("COMMANDS")}
   ${colors.cyan("start")}    Start the Sloppy server and open the browser ${colors.dim("(default)")}
   ${colors.cyan("scan")}     Scan current directory and show results
+  ${colors.cyan("watch")}    Watch for file changes and re-analyze
+  ${colors.cyan("report")}   Generate a report for the latest session
   ${colors.cyan("stop")}     Stop the running Sloppy server
   ${colors.cyan("update")}   Pull latest changes and rebuild
 
 ${colors.bold("OPTIONS")}
   ${colors.cyan("--fix")}       Auto-fix detected issues (with scan)
-  ${colors.cyan("--json")}      Output results as JSON (with scan)
+  ${colors.cyan("--json")}      Output results as JSON (with scan/report)
   ${colors.cyan("--help")}      Show this help message
   ${colors.cyan("--version")}   Show version number
 `;
@@ -287,6 +289,16 @@ async function start(projectRoot: string): Promise<void> {
     const providersData = await providersRes.json();
     const configuredProvider = (providersData as any)?.data?.find((p: any) => p.configured);
 
+    if (!configuredProvider) {
+      // No provider configured - open onboarding
+      const open = (await import("open")).default;
+      await open(`${BASE_URL}/setup`);
+      console.log(colors.dim("  Opening setup wizard in browser."));
+      console.log(colors.dim(`  To stop the server, run: ${colors.cyan("sloppy stop")}`));
+      console.log();
+      return;
+    }
+
     if (configuredProvider && (detectData as any)?.success) {
       const d = (detectData as any).data;
       // Create a session
@@ -419,6 +431,51 @@ async function update(projectRoot: string): Promise<void> {
   console.log(colors.dim(`  Run ${colors.cyan("sloppy start")} to launch.\n`));
 }
 
+async function ensureServer(projectRoot: string, json: boolean): Promise<boolean> {
+  const portInUse = await checkPort();
+  if (portInUse) return false;
+
+  if (!json) console.log(colors.dim("  Starting server..."));
+  const serverEntry = join(projectRoot, "packages", "server", "dist", "index.js");
+  if (!existsSync(serverEntry)) {
+    console.error(json ? JSON.stringify({ error: "Server not built" }) : colors.red("  Server not built. Run pnpm build first."));
+    process.exit(1);
+  }
+  const child = spawn("node", [serverEntry], {
+    cwd: projectRoot,
+    stdio: "ignore",
+    detached: true,
+    env: { ...process.env, NODE_ENV: "production" },
+  });
+  child.unref();
+  if (child.pid) savePid(projectRoot, child.pid);
+  const healthy = await waitForHealth();
+  if (!healthy) {
+    console.error(json ? JSON.stringify({ error: "Server failed to start" }) : colors.red("  Server failed to start."));
+    process.exit(1);
+  }
+  if (!json) console.log(colors.green("  Server started."));
+  if (!json) console.log();
+  return true;
+}
+
+function severityIcon(severity: string): string {
+  switch (severity) {
+    case "error": return colors.red("●");
+    case "warning": return colors.yellow("●");
+    case "info": return colors.cyan("●");
+    default: return colors.dim("●");
+  }
+}
+
+function scoreBar(score: number): string {
+  const width = 30;
+  const filled = Math.round((score / 100) * width);
+  const empty = width - filled;
+  const color = score >= 80 ? colors.green : score >= 60 ? colors.yellow : colors.red;
+  return color("█".repeat(filled)) + colors.dim("░".repeat(empty)) + ` ${score}/100`;
+}
+
 async function scan(projectRoot: string, targetDir: string, fix: boolean, json: boolean): Promise<void> {
   if (!json) {
     console.log(BANNER);
@@ -426,34 +483,7 @@ async function scan(projectRoot: string, targetDir: string, fix: boolean, json: 
     console.log();
   }
 
-  // Ensure server is running
-  let serverStarted = false;
-  const portInUse = await checkPort();
-  if (!portInUse) {
-    if (!json) console.log(colors.dim("  Starting server..."));
-    // Start server (reuse existing start logic but don't open browser)
-    const serverEntry = join(projectRoot, "packages", "server", "dist", "index.js");
-    if (!existsSync(serverEntry)) {
-      console.error(json ? JSON.stringify({ error: "Server not built" }) : colors.red("  Server not built. Run pnpm build first."));
-      process.exit(1);
-    }
-    const child = spawn("node", [serverEntry], {
-      cwd: projectRoot,
-      stdio: "ignore",
-      detached: true,
-      env: { ...process.env, NODE_ENV: "production" },
-    });
-    child.unref();
-    if (child.pid) savePid(projectRoot, child.pid);
-    const healthy = await waitForHealth();
-    if (!healthy) {
-      console.error(json ? JSON.stringify({ error: "Server failed to start" }) : colors.red("  Server failed to start."));
-      process.exit(1);
-    }
-    serverStarted = true;
-    if (!json) console.log(colors.green("  Server started."));
-    if (!json) console.log();
-  }
+  await ensureServer(projectRoot, json);
 
   try {
     // Detect project
@@ -473,8 +503,16 @@ async function scan(projectRoot: string, targetDir: string, fix: boolean, json: 
     const provider = providersData?.data?.find((p: any) => p.configured);
 
     if (!provider) {
-      const msg = "No AI provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var, or configure via web UI.";
-      console.error(json ? JSON.stringify({ error: msg }) : colors.red(`  ${msg}`));
+      if (!json) {
+        console.log(colors.yellow("  No AI provider configured."));
+        console.log(colors.dim("  Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var,"));
+        console.log(colors.dim("  or configure via the web UI:"));
+        console.log();
+        console.log(`  ${colors.cyan(`${BASE_URL}/setup`)}`);
+        console.log();
+      } else {
+        console.log(JSON.stringify({ error: "No AI provider configured", setupUrl: `${BASE_URL}/setup` }));
+      }
       process.exit(1);
     }
 
@@ -483,19 +521,262 @@ async function scan(projectRoot: string, targetDir: string, fix: boolean, json: 
       console.log();
     }
 
-    // The scan output message
-    if (!json) {
-      console.log(colors.dim("  Analysis will begin in the dashboard."));
-      console.log(`  ${colors.cyan(`${BASE_URL}`)}`);
+    // Create a session and wait for analysis
+    const sessionRes = await fetch(`${BASE_URL}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        repoPath: targetDir,
+        provider: provider.id,
+        config: {
+          strictness: 'medium',
+          issueTypes: ['lint', 'type', 'security', 'bugs'],
+          testCommand: detectData?.data?.commands?.test,
+          lintCommand: detectData?.data?.commands?.lint,
+          buildCommand: detectData?.data?.commands?.build,
+        }
+      })
+    });
+    const sessionData = (await sessionRes.json()) as any;
+
+    if (!sessionData?.success) {
+      console.error(json ? JSON.stringify({ error: "Failed to create session" }) : colors.red("  Failed to create session."));
+      process.exit(1);
     }
+
+    const sessionId = sessionData.data.id;
+
+    // Start the session
+    await fetch(`${BASE_URL}/api/sessions/${sessionId}/start`, { method: 'POST' });
+
+    if (!json) {
+      process.stdout.write(colors.dim("  Analyzing"));
+    }
+
+    // Poll for completion
+    let status = "running";
+    const dotInterval = !json ? setInterval(() => {
+      process.stdout.write(colors.dim("."));
+    }, 1000) : null;
+
+    for (let i = 0; i < 360; i++) { // Max 30 min
+      await new Promise((r) => setTimeout(r, 5000));
+      const statusRes = await fetch(`${BASE_URL}/api/sessions/${sessionId}`);
+      const statusData = (await statusRes.json()) as any;
+      status = statusData?.data?.session?.status ?? statusData?.data?.status ?? "unknown";
+      if (status === "completed" || status === "failed" || status === "stopped") break;
+    }
+
+    if (dotInterval) clearInterval(dotInterval);
+    if (!json) console.log();
+    if (!json) console.log();
+
+    // Compute score
+    await fetch(`${BASE_URL}/api/sessions/${sessionId}/score`, { method: 'POST' });
+
+    // Get results
+    const issuesRes = await fetch(`${BASE_URL}/api/sessions/${sessionId}/issues`);
+    const issuesData = (await issuesRes.json()) as any;
+    const issues = issuesData?.data?.issues ?? [];
+    const summary = issuesData?.data?.summary ?? {};
+
+    const scoreRes = await fetch(`${BASE_URL}/api/sessions/${sessionId}/score`);
+    const scoreData = (await scoreRes.json()) as any;
+    const score = scoreData?.data?.score?.score ?? 0;
 
     if (json) {
       console.log(JSON.stringify({
-        project: detectData?.data,
-        provider: provider.id,
-        status: "ready",
-        dashboardUrl: BASE_URL,
+        sessionId,
+        score,
+        status,
+        summary,
+        issues: issues.slice(0, 100).map((i: any) => ({
+          type: i.type,
+          severity: i.severity,
+          file: i.file_path,
+          line: i.line_start,
+          description: i.description,
+          status: i.status,
+        })),
+        reportUrl: `${BASE_URL}/api/sessions/${sessionId}/report`,
+        badgeUrl: `${BASE_URL}/api/sessions/${sessionId}/badge`,
       }));
+      return;
+    }
+
+    // Beautiful CLI output
+    console.log(`  ${colors.bold("Sloppy Score")}`);
+    console.log(`  ${scoreBar(score)}`);
+    console.log();
+
+    console.log(`  ${colors.bold("Summary")}`);
+    console.log(`  Issues found:    ${summary.total ?? issues.length}`);
+    console.log(`  ${colors.red("Errors:")}         ${summary.bySeverity?.error ?? 0}`);
+    console.log(`  ${colors.yellow("Warnings:")}       ${summary.bySeverity?.warning ?? 0}`);
+    console.log(`  ${colors.cyan("Info:")}            ${summary.bySeverity?.info ?? 0}`);
+    console.log();
+
+    // Show top issues (max 15)
+    const topIssues = issues
+      .sort((a: any, b: any) => {
+        const sev = { error: 0, warning: 1, info: 2, hint: 3 };
+        return (sev[a.severity as keyof typeof sev] ?? 3) - (sev[b.severity as keyof typeof sev] ?? 3);
+      })
+      .slice(0, 15);
+
+    if (topIssues.length > 0) {
+      console.log(`  ${colors.bold("Top Issues")}`);
+      for (const issue of topIssues) {
+        const file = (issue.file_path as string).split("/").slice(-2).join("/");
+        const line = issue.line_start ? `:${issue.line_start}` : "";
+        console.log(`  ${severityIcon(issue.severity)} ${colors.dim(`${file}${line}`)} ${issue.description}`);
+      }
+      if (issues.length > 15) {
+        console.log(colors.dim(`  ...and ${issues.length - 15} more`));
+      }
+      console.log();
+    }
+
+    // Report and badge links
+    console.log(`  ${colors.bold("Links")}`);
+    console.log(`  Report:    ${colors.cyan(`${BASE_URL}/api/sessions/${sessionId}/report`)}`);
+    console.log(`  Badge:     ${colors.cyan(`${BASE_URL}/api/sessions/${sessionId}/badge`)}`);
+    console.log(`  Dashboard: ${colors.cyan(`${BASE_URL}/session/${sessionId}`)}`);
+    console.log();
+
+  } catch (err) {
+    console.error(json ? JSON.stringify({ error: String(err) }) : colors.red(`  Error: ${err}`));
+    process.exit(1);
+  }
+}
+
+async function watch(projectRoot: string, targetDir: string): Promise<void> {
+  console.log(BANNER);
+  console.log(colors.dim("  Watching ") + colors.cyan(targetDir) + colors.dim(" for changes..."));
+  console.log(colors.dim("  Press Ctrl+C to stop."));
+  console.log();
+
+  await ensureServer(projectRoot, false);
+
+  // Dynamically import chokidar or fall back to fs.watch
+  let watcher: { close: () => void } | null = null;
+  let debounceTimer: NodeJS.Timeout | null = null;
+  let isAnalyzing = false;
+
+  const runAnalysis = async (): Promise<void> => {
+    if (isAnalyzing) return;
+    isAnalyzing = true;
+
+    console.log(colors.dim(`  [${new Date().toLocaleTimeString()}] Changes detected, re-analyzing...`));
+
+    try {
+      // Find provider
+      const providersRes = await fetch(`${BASE_URL}/api/providers`);
+      const providersData = (await providersRes.json()) as any;
+      const provider = providersData?.data?.find((p: any) => p.configured);
+
+      if (!provider) {
+        console.log(colors.yellow("  No AI provider configured. Skipping analysis."));
+        isAnalyzing = false;
+        return;
+      }
+
+      // Create session
+      const sessionRes = await fetch(`${BASE_URL}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repoPath: targetDir,
+          provider: provider.id,
+          config: {
+            strictness: 'medium',
+            issueTypes: ['lint', 'type', 'security', 'bugs'],
+          }
+        })
+      });
+      const sessionData = (await sessionRes.json()) as any;
+      if (sessionData?.success) {
+        await fetch(`${BASE_URL}/api/sessions/${sessionData.data.id}/start`, { method: 'POST' });
+        console.log(`  ${colors.green("●")} Session started: ${colors.cyan(`${BASE_URL}/session/${sessionData.data.id}`)}`);
+      }
+    } catch (err) {
+      console.log(colors.red(`  Error: ${err}`));
+    } finally {
+      isAnalyzing = false;
+    }
+  };
+
+  const onChange = (): void => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      void runAnalysis();
+    }, 2000); // 2 second debounce
+  };
+
+  // Use Node.js fs.watch recursively
+  const { watch: fsWatch } = await import("node:fs");
+  try {
+    watcher = fsWatch(targetDir, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+      // Skip common noise
+      if (filename.includes("node_modules") || filename.includes(".git") || filename.includes("dist/") || filename.includes(".sloppy")) return;
+      onChange();
+    });
+    console.log(colors.green("  Watcher started."));
+    console.log();
+  } catch {
+    console.error(colors.red("  Failed to start file watcher."));
+    process.exit(1);
+  }
+
+  // Run initial analysis
+  await runAnalysis();
+
+  // Keep process alive
+  await new Promise<void>((resolve) => {
+    process.on("SIGINT", () => {
+      console.log();
+      console.log(colors.dim("  Stopping watcher..."));
+      if (watcher) watcher.close();
+      resolve();
+    });
+  });
+}
+
+async function report(projectRoot: string, json: boolean): Promise<void> {
+  await ensureServer(projectRoot, json);
+
+  try {
+    // Get the latest session
+    const sessionsRes = await fetch(`${BASE_URL}/api/sessions`);
+    const sessionsData = (await sessionsRes.json()) as any;
+    const sessions = sessionsData?.data ?? [];
+
+    if (sessions.length === 0) {
+      console.error(json ? JSON.stringify({ error: "No sessions found" }) : colors.red("  No sessions found. Run 'sloppy scan' first."));
+      process.exit(1);
+    }
+
+    // Find the most recent completed session
+    const latest = sessions
+      .filter((s: any) => s.status === "completed" || s.status === "stopped")
+      .sort((a: any, b: any) => new Date(b.created_at ?? b.createdAt ?? 0).getTime() - new Date(a.created_at ?? a.createdAt ?? 0).getTime())[0]
+      ?? sessions[0];
+
+    const sessionId = latest.id;
+    const format = json ? "json" : "html";
+    const reportRes = await fetch(`${BASE_URL}/api/sessions/${sessionId}/report?format=${format}`);
+
+    if (json) {
+      const data = await reportRes.json();
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      const html = await reportRes.text();
+      // Write to file
+      const reportPath = join(process.cwd(), "sloppy-report.html");
+      writeFileSync(reportPath, html, "utf-8");
+      console.log(colors.green(`  Report saved to ${reportPath}`));
+      console.log(colors.dim(`  Open in browser to view.`));
     }
   } catch (err) {
     console.error(json ? JSON.stringify({ error: String(err) }) : colors.red(`  Error: ${err}`));
@@ -534,6 +815,12 @@ async function main(): Promise<void> {
       break;
     case "scan":
       await scan(projectRoot, process.cwd(), hasFixFlag, hasJsonFlag);
+      break;
+    case "watch":
+      await watch(projectRoot, process.cwd());
+      break;
+    case "report":
+      await report(projectRoot, hasJsonFlag);
       break;
     case "stop":
       await stop(projectRoot);

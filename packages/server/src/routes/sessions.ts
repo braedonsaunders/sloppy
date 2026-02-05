@@ -5,6 +5,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { getSessionManager, CreateSessionSchema } from '../services/session-manager.js';
+import { getDatabase } from '../db/database.js';
 
 // Request schemas
 const SessionIdParamsSchema = z.object({
@@ -281,9 +282,9 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         return;
       }
 
-      // Return empty activity array - activity is streamed via WebSocket
-      // Historical activity storage could be added later
-      sendSuccess(reply, []);
+      const db = getDatabase();
+      const activities = db.listActivitiesBySession(params.id);
+      sendSuccess(reply, activities);
     } catch (error) {
       if (error instanceof z.ZodError) {
         sendError(reply, `Validation error: ${error.errors.map((e) => e.message).join(', ')}`, 400);

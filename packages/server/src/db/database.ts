@@ -73,6 +73,22 @@ export interface Metric {
   custom_metrics: string | null;
 }
 
+export interface Activity {
+  id: string;
+  session_id: string;
+  type: string;
+  message: string;
+  timestamp: string;
+  metadata: string | null;
+}
+
+export interface CreateActivityInput {
+  session_id: string;
+  type?: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+}
+
 // Input types for creating entities
 export interface CreateSessionInput {
   repo_path: string;
@@ -391,6 +407,20 @@ export class SloppyDatabase {
       'listScoresBySession',
       this.db.prepare('SELECT * FROM scores WHERE session_id = ? ORDER BY computed_at DESC')
     );
+
+    // Activity statements
+    this.statements.set(
+      'insertActivity',
+      this.db.prepare(`
+        INSERT INTO activities (id, session_id, type, message, metadata)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+    );
+
+    this.statements.set(
+      'listActivitiesBySession',
+      this.db.prepare('SELECT * FROM activities WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?')
+    );
   }
 
   /**
@@ -681,6 +711,27 @@ export class SloppyDatabase {
 
   listScoresBySession(sessionId: string): Score[] {
     return this.stmt('listScoresBySession').all(sessionId) as Score[];
+  }
+
+  // ==================== Activity CRUD ====================
+
+  createActivity(input: CreateActivityInput): Activity {
+    const id = nanoid();
+    const metadata = input.metadata ? JSON.stringify(input.metadata) : null;
+
+    this.stmt('insertActivity').run(
+      id,
+      input.session_id,
+      input.type ?? 'info',
+      input.message,
+      metadata
+    );
+
+    return this.db.prepare('SELECT * FROM activities WHERE id = ?').get(id) as Activity;
+  }
+
+  listActivitiesBySession(sessionId: string, limit = 100): Activity[] {
+    return this.stmt('listActivitiesBySession').all(sessionId, limit) as Activity[];
   }
 
   // ==================== Utility Methods ====================

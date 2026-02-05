@@ -523,6 +523,25 @@ export async function autoDetectProvider(): Promise<BaseProvider> {
     return createOpenAIProvider();
   }
 
+  // Check for additional OpenAI-compatible provider API keys
+  const envProviderMap: Array<{ envKey: string; type: ProviderType }> = [
+    { envKey: 'GOOGLE_API_KEY', type: 'gemini' },
+    { envKey: 'GEMINI_API_KEY', type: 'gemini' },
+    { envKey: 'OPENROUTER_API_KEY', type: 'openrouter' },
+    { envKey: 'DEEPSEEK_API_KEY', type: 'deepseek' },
+    { envKey: 'MISTRAL_API_KEY', type: 'mistral' },
+    { envKey: 'GROQ_API_KEY', type: 'groq' },
+    { envKey: 'TOGETHER_API_KEY', type: 'together' },
+    { envKey: 'COHERE_API_KEY', type: 'cohere' },
+  ];
+
+  for (const { envKey, type } of envProviderMap) {
+    const key = process.env[envKey];
+    if (key !== undefined && key !== '') {
+      return createProvider({ type, apiKey: key } as ProviderConfig);
+    }
+  }
+
   // Check for local Ollama server
   try {
     const ollamaProvider = createOllamaProvider();

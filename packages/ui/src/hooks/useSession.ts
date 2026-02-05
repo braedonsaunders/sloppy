@@ -183,19 +183,22 @@ export function useSession(sessionId?: string): UseSessionReturn {
   // Mutations
   const createMutation = useMutation({
     mutationFn: async (data: CreateSessionRequest): Promise<Session> => {
-      // Create the session
       const session = await api.sessions.create(data);
-      // Auto-start the session after creation
       try {
         return await api.sessions.start(session.id);
-      } catch {
-        // If start fails, return the created session anyway
+      } catch (startError) {
+        console.error('Failed to auto-start session:', startError);
+        // Return the session but it will be in 'pending' state
+        // The UI should show this state and allow manual start
         return session;
       }
     },
     onSuccess: (session: Session): void => {
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       navigate(`/session/${session.id}`);
+    },
+    onError: (error: Error): void => {
+      console.error('Failed to create session:', error);
     },
   });
 

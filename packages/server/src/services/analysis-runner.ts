@@ -156,6 +156,7 @@ export class AnalysisRunner {
         timestamp: new Date().toISOString(),
       },
     });
+    this.storeActivity(session.id, 'info', 'Starting code analysis...');
 
     try {
       // Dynamically import @sloppy/analyzers
@@ -217,6 +218,7 @@ export class AnalysisRunner {
           timestamp: new Date().toISOString(),
         },
       });
+      this.storeActivity(session.id, 'info', `Detected language: ${detectedLanguage}. Running analyzers: ${analyzerCategories.join(', ')}`);
 
       try {
         // Run analysis with comprehensive file patterns for ALL languages
@@ -309,15 +311,18 @@ export class AnalysisRunner {
         },
         (progress) => {
           // Broadcast progress
+          const progressType = progress.status === 'failed' ? 'error' : 'info';
+          const progressMessage = `Analyzer ${progress.analyzer}: ${progress.status}${progress.issueCount !== undefined ? ` (${progress.issueCount} issues)` : ''}`;
           wsHandler.broadcastToSession(session.id, {
             type: 'activity:log',
             data: {
               sessionId: session.id,
-              type: progress.status === 'failed' ? 'error' : 'info',
-              message: `Analyzer ${progress.analyzer}: ${progress.status}${progress.issueCount !== undefined ? ` (${progress.issueCount} issues)` : ''}`,
+              type: progressType,
+              message: progressMessage,
               timestamp: new Date().toISOString(),
             },
           });
+          this.storeActivity(session.id, progressType, progressMessage);
         }
       );
 
@@ -341,6 +346,7 @@ export class AnalysisRunner {
           timestamp: new Date().toISOString(),
         },
       });
+      this.storeActivity(session.id, 'success', `Analysis complete: ${result.issues.length} issues found in ${duration}s`);
 
       this.logger.info(`[analysis-runner] Analysis complete for session ${session.id}: ${result.issues.length} issues`);
       this.logger.info(`[analysis-runner] Analyzers run: ${result.analyzersRun.join(', ')}`);
@@ -396,6 +402,7 @@ export class AnalysisRunner {
           timestamp: new Date().toISOString(),
         },
       });
+      this.storeActivity(session.id, 'error', `Analysis failed: ${errorMessage}`);
 
       // Mark session as failed
       this.db.updateSession(session.id, {
@@ -643,6 +650,18 @@ export class AnalysisRunner {
   private mapIssueTypesToCategories(_focusAreas: string[], _isJsTs: boolean = true): string[] {
     // The LLM orchestrates everything -- static analyzers are tools it invokes
     return ['llm'];
+  }
+
+  private storeActivity(sessionId: string, type: string, message: string): void {
+    try {
+      this.db.createActivity({
+        session_id: sessionId,
+        type,
+        message,
+      });
+    } catch {
+      // Don't let activity storage failures block analysis
+    }
   }
 
   /**

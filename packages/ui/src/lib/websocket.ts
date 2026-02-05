@@ -67,6 +67,7 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isConnecting = false;
   private intentionalClose = false;
+  private messageQueue: Array<Omit<WebSocketMessage, 'timestamp'>> = [];
 
   constructor(options: WebSocketClientOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -137,7 +138,7 @@ export class WebSocketClient {
 
   send(message: Omit<WebSocketMessage, 'timestamp'>): void {
     if (this.ws?.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket is not connected. Message not sent:', message);
+      this.messageQueue.push(message);
       return;
     }
 
@@ -168,6 +169,7 @@ export class WebSocketClient {
       this.isConnecting = false;
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      this.flushQueue();
     };
 
     this.ws.onmessage = (event: MessageEvent): void => {
@@ -231,6 +233,15 @@ export class WebSocketClient {
           console.error('Error in WebSocket handler:', error);
         }
       });
+    }
+  }
+
+  private flushQueue(): void {
+    while (this.messageQueue.length > 0) {
+      const message = this.messageQueue.shift();
+      if (message) {
+        this.send(message);
+      }
     }
   }
 
