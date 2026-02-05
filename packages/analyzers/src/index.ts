@@ -29,6 +29,7 @@ export { DeadCodeAnalyzer, type DeadCodeAnalyzerConfig } from './dead-code/index
 export {
   LLMAnalyzer,
   type LLMAnalyzerConfig,
+  type AnalyzerEvent,
   FileBrowser,
   ToolExecutor,
   TOOL_DEFINITIONS,
