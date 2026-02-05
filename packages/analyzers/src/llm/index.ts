@@ -153,6 +153,8 @@ interface ToolCall {
   id: string;
   name: string;
   parameters: Record<string, unknown>;
+  /** Provider-specific metadata (e.g. Gemini thought_signature) passed through on tool_calls */
+  extraContent?: Record<string, unknown>;
 }
 
 /**
@@ -406,15 +408,24 @@ export class LLMAnalyzer extends BaseAnalyzer {
     messages.push({ role: 'system', content: systemPrompt });
     messages.push({ role: 'user', content: userMessage });
 
+    let llmCallCount = 0;
+
     // Run agentic loop
     for (let iteration = 0; iteration < this.getConfig().maxIterations; iteration++) {
-      this.log(options, `Agentic iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)}`);
+      console.log(`[${this.name}] Iteration ${String(iteration + 1)}/${String(this.getConfig().maxIterations)} - sending ${String(messages.length)} messages to ${this.getConfig().provider}/${this.getConfig().model}`);
 
       try {
         const response = await this.callLLM(messages);
+        llmCallCount++;
 
         // Check if response contains tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
+          const toolNames = response.toolCalls.map(tc => tc.name).join(', ');
+          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM called ${String(response.toolCalls.length)} tools: ${toolNames}`);
+          if (response.content) {
+            console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM reasoning: ${response.content.slice(0, 200)}${response.content.length > 200 ? '...' : ''}`);
+          }
+
           messages.push({
             role: 'assistant',
             content: response.content,
@@ -424,6 +435,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
           // Execute each tool call
           for (const toolCall of response.toolCalls) {
             const toolResult = await this.executeToolCall(toolCall, issues);
+            console.log(`[${this.name}]   Tool ${toolCall.name}: ${toolResult.slice(0, 150).replace(/\n/g, ' ')}${toolResult.length > 150 ? '...' : ''}`);
             messages.push({
               role: 'tool',
               content: toolResult,
@@ -431,14 +443,20 @@ export class LLMAnalyzer extends BaseAnalyzer {
             });
           }
         } else {
-          // No tool calls - extract issues from response
+          // No tool calls - LLM responded with text only
+          console.log(`[${this.name}] Iteration ${String(iteration + 1)} - LLM text response (${String(response.content.length)} chars): ${response.content.slice(0, 300).replace(/\n/g, ' ')}${response.content.length > 300 ? '...' : ''}`);
+
           const parsedIssues = this.parseIssuesFromResponse(response.content, options);
+          if (parsedIssues.length > 0) {
+            console.log(`[${this.name}] Parsed ${String(parsedIssues.length)} issues from response`);
+          }
           issues.push(...parsedIssues);
 
           // Check if LLM wants to continue or is done
           if (response.content.includes('[ANALYSIS_COMPLETE]') ||
               !response.content.includes('create_issue') ||
               iteration >= this.getConfig().maxIterations - 1) {
+            console.log(`[${this.name}] Agentic loop complete after ${String(iteration + 1)} iterations, ${String(llmCallCount)} LLM calls, ${String(issues.length)} issues found`);
             break;
           }
 
@@ -654,61 +672,6 @@ Use the tools to explore the codebase and create issues for any problems you fin
   }
 
   /**
-   * Flatten tool interaction messages into regular messages.
-   * Converts assistant(tool_calls) + tool(results) sequences into
-   * regular assistant + user messages. This is needed for Gemini because:
-   * 1. Gemini 3 models require a thought_signature to be echoed back on
-   *    tool_calls, which the OpenAI SDK doesn't expose (causes 400 errors)
-   * 2. Gemini's OpenAI-compatible endpoint has limited multi-turn function
-   *    calling support in general
-   * By flattening to plain text, we avoid both issues while preserving
-   * the conversation context for the LLM.
-   */
-  private flattenToolMessages(messages: Message[]): Message[] {
-    const result: Message[] = [];
-
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-
-      if (msg.toolCalls && msg.toolCalls.length > 0) {
-        // Convert assistant message with tool calls to regular text
-        const toolDescriptions = msg.toolCalls.map(tc =>
-          `- ${tc.name}(${JSON.stringify(tc.parameters)})`
-        ).join('\n');
-
-        result.push({
-          role: 'assistant',
-          content: `${msg.content !== '' ? msg.content + '\n\n' : ''}I called the following tools:\n${toolDescriptions}`,
-        });
-
-        // Collect all following tool result messages
-        const toolResults: string[] = [];
-        while (i + 1 < messages.length && messages[i + 1].role === 'tool') {
-          i++;
-          toolResults.push(messages[i].content);
-        }
-
-        if (toolResults.length > 0) {
-          result.push({
-            role: 'user',
-            content: `Tool results:\n${toolResults.join('\n---\n')}`,
-          });
-        }
-      } else if (msg.role === 'tool') {
-        // Orphan tool message (shouldn't normally happen)
-        result.push({
-          role: 'user',
-          content: `Tool result: ${msg.content}`,
-        });
-      } else {
-        result.push(msg);
-      }
-    }
-
-    return result;
-  }
-
-  /**
    * Call OpenAI-compatible API
    * Used for OpenAI, Ollama, Gemini, OpenRouter, DeepSeek, Mistral, Groq, Together, Cohere
    */
@@ -717,21 +680,13 @@ Use the tools to explore the codebase and create issues for any problems you fin
     toolCalls?: ToolCall[];
   }> {
     const { default: OpenAI } = await import('openai');
-    const isGemini = this.getConfig().provider === 'gemini';
     const client = new OpenAI({
       apiKey: this.getConfig().apiKey || 'ollama', // Ollama doesn't require a key
       baseURL: this.getConfig().baseUrl,
     });
 
-    // For Gemini, flatten past tool interactions into regular messages.
-    // Gemini 3 models require thought_signature on tool_calls which the
-    // OpenAI SDK doesn't expose, causing 400 errors on multi-turn calls.
-    const effectiveMessages = isGemini
-      ? this.flattenToolMessages(messages)
-      : messages;
-
     // Convert messages to OpenAI format
-    const openaiMessages = effectiveMessages.map(m => {
+    const openaiMessages = messages.map(m => {
       if (m.role === 'tool') {
         return {
           role: 'tool' as const,
@@ -746,6 +701,9 @@ Use the tools to explore the codebase and create issues for any problems you fin
           tool_calls: m.toolCalls.map((tc) => ({
             id: tc.id,
             type: 'function' as const,
+            // Echo back extra_content (e.g. Gemini thought_signature) so the
+            // provider can validate multi-turn function calling continuations.
+            ...(tc.extraContent !== undefined && { extra_content: tc.extraContent }),
             function: {
               name: tc.name,
               arguments: JSON.stringify(tc.parameters),
@@ -783,10 +741,15 @@ Use the tools to explore the codebase and create issues for any problems you fin
 
     if (message.tool_calls) {
       for (const tc of message.tool_calls) {
+        // Capture extra_content (e.g. Gemini thought_signature) from the response.
+        // The OpenAI SDK passes through unknown fields at runtime even though
+        // TypeScript types don't include them.
+        const extraContent = (tc as Record<string, unknown>).extra_content as Record<string, unknown> | undefined;
         toolCalls.push({
           id: tc.id,
           name: tc.function.name,
           parameters: JSON.parse(tc.function.arguments) as Record<string, unknown>,
+          ...(extraContent !== undefined && { extraContent }),
         });
       }
     }
