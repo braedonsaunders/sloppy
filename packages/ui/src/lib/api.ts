@@ -408,6 +408,17 @@ export const api = {
       request<Issue>(`/sessions/${sessionId}/issues/${issueId}/skip`, {
         method: 'POST',
       }),
+
+    fix: (issueId: string): Promise<{ issue: Issue; message: string }> =>
+      request<{ issue: Issue; message: string }>(`/issues/${issueId}/fix`, {
+        method: 'POST',
+      }),
+
+    bulk: (sessionId: string, action: 'approve' | 'skip' | 'reject', options?: { issueIds?: string[]; status?: string }): Promise<{ action: string; affected: number }> =>
+      request<{ action: string; affected: number }>(`/sessions/${sessionId}/issues/bulk`, {
+        method: 'POST',
+        body: JSON.stringify({ action, ...options }),
+      }),
   },
 
   // Commits

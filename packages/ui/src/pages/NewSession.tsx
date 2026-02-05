@@ -89,7 +89,7 @@ export default function NewSession(): JSX.Element {
   const selectedProvider = providers?.find((p) => p.id === provider);
 
   // Apply defaults from settings
-  useState(() => {
+  useEffect(() => {
     if (settings !== undefined) {
       const s = settings;
       if (typeof s.defaultProvider === 'string' && s.defaultProvider !== '') {setProvider(s.defaultProvider);}
@@ -98,7 +98,7 @@ export default function NewSession(): JSX.Element {
       if (typeof s.defaultMaxTime === 'number') {setMaxTime(String(s.defaultMaxTime));}
       if (typeof s.approvalModeDefault === 'boolean') {setApprovalMode(s.approvalModeDefault);}
     }
-  });
+  }, [settings]);
 
   // Auto-detect project type when local path changes
   useEffect(() => {

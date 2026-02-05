@@ -1,0 +1,220 @@
+name: 'Sloppy - AI Code Quality Scanner'
+description: 'Analyze your codebase for code quality issues using AI-powered static analysis'
+author: 'braedonsaunders'
+branding:
+  icon: 'search'
+  color: 'purple'
+
+inputs:
+  provider:
+    description: 'AI provider to use (claude, openai, ollama)'
+    required: false
+    default: ''
+  api-key:
+    description: 'API key for the AI provider (use secrets!)'
+    required: false
+    default: ''
+  strictness:
+    description: 'Analysis strictness level (low, medium, high)'
+    required: false
+    default: 'medium'
+  focus-areas:
+    description: 'Comma-separated focus areas (lint,type,security,bugs,stubs,performance,maintainability,test)'
+    required: false
+    default: 'lint,type,security,bugs'
+  fail-on:
+    description: 'Fail the check if issues of this severity or higher are found (error, warning, info, none)'
+    required: false
+    default: 'none'
+  path:
+    description: 'Path to analyze (relative to repo root)'
+    required: false
+    default: '.'
+  max-issues:
+    description: 'Maximum number of issues to report (0 for unlimited)'
+    required: false
+    default: '50'
+
+outputs:
+  score:
+    description: 'The Sloppy Score (0-100)'
+  issues-count:
+    description: 'Total number of issues found'
+  issues-by-severity:
+    description: 'JSON object with issue counts by severity'
+  report-url:
+    description: 'URL to the full HTML report (if server is running)'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
+    - name: Clone Sloppy
+      shell: bash
+      run: |
+        git clone --depth 1 https://github.com/braedonsaunders/sloppy.git /tmp/sloppy
+
+    - name: Install and Build Sloppy
+      shell: bash
+      run: |
+        cd /tmp/sloppy
+        pnpm install --frozen-lockfile
+        pnpm build
+
+    - name: Run Analysis
+      id: analyze
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.api-key && contains(inputs.provider, 'claude') && inputs.api-key || '' }}
+        OPENAI_API_KEY: ${{ inputs.api-key && contains(inputs.provider, 'openai') && inputs.api-key || '' }}
+        SLOPPY_PROVIDER: ${{ inputs.provider }}
+        SLOPPY_STRICTNESS: ${{ inputs.strictness }}
+        SLOPPY_FOCUS_AREAS: ${{ inputs.focus-areas }}
+        SLOPPY_MAX_ISSUES: ${{ inputs.max-issues }}
+      run: |
+        cd /tmp/sloppy
+
+        # Start the server in background
+        node packages/server/dist/index.js &
+        SERVER_PID=$!
+
+        # Wait for server to be ready
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:7749/health > /dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+
+        # Configure provider if API key is provided
+        if [ -n "${{ inputs.api-key }}" ] && [ -n "${{ inputs.provider }}" ]; then
+          curl -sf -X POST http://localhost:7749/api/providers/configure \
+            -H 'Content-Type: application/json' \
+            -d "{\"providerId\": \"${{ inputs.provider }}\", \"apiKey\": \"${{ inputs.api-key }}\"}" || true
+        fi
+
+        # Get the target path
+        TARGET_PATH="${{ github.workspace }}/${{ inputs.path }}"
+
+        # Create and start a session
+        SESSION_RESPONSE=$(curl -sf -X POST http://localhost:7749/api/sessions \
+          -H 'Content-Type: application/json' \
+          -d "{
+            \"repoPath\": \"${TARGET_PATH}\",
+            \"provider\": \"${{ inputs.provider || 'claude' }}\",
+            \"config\": {
+              \"strictness\": \"${{ inputs.strictness }}\",
+              \"issueTypes\": [$(echo '${{ inputs.focus-areas }}' | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')],
+              \"approvalMode\": false
+            }
+          }")
+
+        SESSION_ID=$(echo "$SESSION_RESPONSE" | node -e "
+          const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+          console.log(data?.data?.id || '');
+        ")
+
+        if [ -z "$SESSION_ID" ]; then
+          echo "::warning::Failed to create analysis session"
+          echo "score=0" >> $GITHUB_OUTPUT
+          echo "issues-count=0" >> $GITHUB_OUTPUT
+          echo "issues-by-severity={}" >> $GITHUB_OUTPUT
+          kill $SERVER_PID 2>/dev/null || true
+          exit 0
+        fi
+
+        # Start the session
+        curl -sf -X POST "http://localhost:7749/api/sessions/${SESSION_ID}/start" || true
+
+        # Wait for analysis to complete (poll every 5s, max 10 min)
+        for i in $(seq 1 120); do
+          STATUS_RESPONSE=$(curl -sf "http://localhost:7749/api/sessions/${SESSION_ID}" 2>/dev/null || echo '{}')
+          STATUS=$(echo "$STATUS_RESPONSE" | node -e "
+            const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+            console.log(data?.data?.session?.status || 'unknown');
+          ")
+
+          if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "stopped" ]; then
+            break
+          fi
+          sleep 5
+        done
+
+        # Compute score
+        curl -sf -X POST "http://localhost:7749/api/sessions/${SESSION_ID}/score" || true
+
+        # Get results
+        SCORE_RESPONSE=$(curl -sf "http://localhost:7749/api/sessions/${SESSION_ID}/score" 2>/dev/null || echo '{}')
+        ISSUES_RESPONSE=$(curl -sf "http://localhost:7749/api/sessions/${SESSION_ID}/issues" 2>/dev/null || echo '{}')
+
+        SCORE=$(echo "$SCORE_RESPONSE" | node -e "
+          const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+          console.log(data?.data?.score?.score ?? 0);
+        ")
+
+        ISSUES_COUNT=$(echo "$ISSUES_RESPONSE" | node -e "
+          const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+          console.log(data?.data?.summary?.total ?? 0);
+        ")
+
+        ISSUES_BY_SEVERITY=$(echo "$ISSUES_RESPONSE" | node -e "
+          const data = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+          console.log(JSON.stringify(data?.data?.summary?.bySeverity ?? {}));
+        ")
+
+        echo "score=${SCORE}" >> $GITHUB_OUTPUT
+        echo "issues-count=${ISSUES_COUNT}" >> $GITHUB_OUTPUT
+        echo "issues-by-severity=${ISSUES_BY_SEVERITY}" >> $GITHUB_OUTPUT
+
+        # Print summary
+        echo ""
+        echo "┌─────────────────────────────────────┐"
+        echo "│         Sloppy Analysis Report       │"
+        echo "├─────────────────────────────────────┤"
+        echo "│  Score: ${SCORE}/100                       │"
+        echo "│  Issues: ${ISSUES_COUNT}                          │"
+        echo "│  Severity: ${ISSUES_BY_SEVERITY}"
+        echo "└─────────────────────────────────────┘"
+        echo ""
+
+        # Generate report as artifact
+        curl -sf "http://localhost:7749/api/sessions/${SESSION_ID}/report?format=html" > "${{ github.workspace }}/sloppy-report.html" 2>/dev/null || true
+
+        # Stop server
+        kill $SERVER_PID 2>/dev/null || true
+
+        # Check fail condition
+        FAIL_ON="${{ inputs.fail-on }}"
+        if [ "$FAIL_ON" != "none" ]; then
+          ERRORS=$(echo "$ISSUES_BY_SEVERITY" | node -e "
+            const sev = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf-8'));
+            const failOn = '${FAIL_ON}';
+            let count = 0;
+            if (failOn === 'info') count = (sev.error || 0) + (sev.warning || 0) + (sev.info || 0);
+            else if (failOn === 'warning') count = (sev.error || 0) + (sev.warning || 0);
+            else if (failOn === 'error') count = (sev.error || 0);
+            console.log(count);
+          ")
+
+          if [ "$ERRORS" -gt 0 ] 2>/dev/null; then
+            echo "::error::Sloppy found ${ERRORS} issue(s) at severity '${FAIL_ON}' or higher"
+            exit 1
+          fi
+        fi
+
+    - name: Upload Report Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sloppy-report
+        path: sloppy-report.html
+        if-no-files-found: ignore

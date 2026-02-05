@@ -214,6 +214,24 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE INDEX IF NOT EXISTS idx_scores_session_id ON scores(session_id);
     `,
   },
+  {
+    id: 7,
+    name: '007_add_activities_table',
+    sql: `
+CREATE TABLE IF NOT EXISTS activities (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'info',
+    message TEXT NOT NULL,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+    metadata TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_activities_session_id ON activities(session_id);
+CREATE INDEX IF NOT EXISTS idx_activities_timestamp ON activities(timestamp);
+    `,
+  },
 ];
 
 /**
