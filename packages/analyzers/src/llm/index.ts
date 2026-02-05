@@ -500,9 +500,9 @@ export class LLMAnalyzer extends BaseAnalyzer {
               this.onEvent?.({
                 type: 'issue_found',
                 data: {
-                  title: (params.title as string) ?? 'Unknown issue',
-                  severity: (params.severity as string) ?? 'warning',
-                  file: (params.file as string) ?? 'unknown',
+                  title: typeof params.title === 'string' ? params.title : 'Unknown issue',
+                  severity: typeof params.severity === 'string' ? params.severity : 'warning',
+                  file: typeof params.file === 'string' ? params.file : 'unknown',
                 },
               });
             }
