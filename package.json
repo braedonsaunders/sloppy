@@ -12,6 +12,7 @@
     "typecheck": "turbo run typecheck",
     "dev:server": "pnpm --filter @sloppy/server dev",
     "dev:ui": "pnpm --filter @sloppy/ui dev",
+    "cli": "pnpm --filter @sloppy/cli dev",
     "start": "pnpm --filter @sloppy/server start",
     "kill-ports": "node scripts/kill-ports.js",
     "update": "node scripts/update.js",

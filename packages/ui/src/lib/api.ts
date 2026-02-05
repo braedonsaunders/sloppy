@@ -198,6 +198,30 @@ export interface Metrics {
   lintErrors: number;
 }
 
+// Score Types
+export interface ScoreBreakdown {
+  security: number;
+  bugs: number;
+  codeQuality: number;
+  maintainability: number;
+  reliability: number;
+  improvement: number;
+}
+
+export interface ScoreData {
+  id: string;
+  sessionId: string;
+  score: number;
+  breakdown: ScoreBreakdown;
+  issuesBefore: number;
+  issuesAfter: number;
+  computedAt: string;
+}
+
+interface ScoreResponse {
+  score: ScoreData | null;
+}
+
 // GitHub Types
 export interface GitHubUser {
   id: number;
@@ -403,6 +427,21 @@ export const api = {
         method: 'POST',
       });
       return res.commit;
+    },
+  },
+
+  // Scores
+  scores: {
+    get: async (sessionId: string): Promise<ScoreData | null> => {
+      const res = await request<ScoreResponse>(`/sessions/${sessionId}/score`);
+      return res.score;
+    },
+
+    compute: async (sessionId: string): Promise<ScoreData | null> => {
+      const res = await request<ScoreResponse>(`/sessions/${sessionId}/score`, {
+        method: 'POST',
+      });
+      return res.score;
     },
   },
 

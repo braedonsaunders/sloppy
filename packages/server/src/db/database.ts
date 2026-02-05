@@ -188,6 +188,25 @@ export interface UpdateAnalysisProgressInput {
   state?: Record<string, unknown>;
 }
 
+// Score types
+export interface Score {
+  id: string;
+  session_id: string;
+  score: number;
+  breakdown: string;
+  issues_before: number;
+  issues_after: number;
+  computed_at: string;
+}
+
+export interface CreateScoreInput {
+  session_id: string;
+  score: number;
+  breakdown: Record<string, number>;
+  issues_before: number;
+  issues_after: number;
+}
+
 export interface DatabaseOptions {
   path: string;
   logger?: Console;
@@ -347,6 +366,30 @@ export class SloppyDatabase {
     this.statements.set(
       'getLatestMetric',
       this.db.prepare('SELECT * FROM metrics WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1')
+    );
+
+    // Score statements
+    this.statements.set(
+      'insertScore',
+      this.db.prepare(`
+        INSERT INTO scores (id, session_id, score, breakdown, issues_before, issues_after)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+    );
+
+    this.statements.set(
+      'getScore',
+      this.db.prepare('SELECT * FROM scores WHERE id = ?')
+    );
+
+    this.statements.set(
+      'getLatestScore',
+      this.db.prepare('SELECT * FROM scores WHERE session_id = ? ORDER BY computed_at DESC LIMIT 1')
+    );
+
+    this.statements.set(
+      'listScoresBySession',
+      this.db.prepare('SELECT * FROM scores WHERE session_id = ? ORDER BY computed_at DESC')
     );
   }
 
@@ -608,6 +651,36 @@ export class SloppyDatabase {
 
   getLatestMetric(sessionId: string): Metric | null {
     return this.stmt('getLatestMetric').get(sessionId) as Metric | null;
+  }
+
+  // ==================== Score CRUD ====================
+
+  createScore(input: CreateScoreInput): Score {
+    const id = nanoid();
+    const breakdown = JSON.stringify(input.breakdown);
+
+    this.stmt('insertScore').run(
+      id,
+      input.session_id,
+      input.score,
+      breakdown,
+      input.issues_before,
+      input.issues_after
+    );
+
+    return this.getScore(id)!;
+  }
+
+  getScore(id: string): Score | null {
+    return this.stmt('getScore').get(id) as Score | null;
+  }
+
+  getLatestScore(sessionId: string): Score | null {
+    return this.stmt('getLatestScore').get(sessionId) as Score | null;
+  }
+
+  listScoresBySession(sessionId: string): Score[] {
+    return this.stmt('listScoresBySession').all(sessionId) as Score[];
   }
 
   // ==================== Utility Methods ====================

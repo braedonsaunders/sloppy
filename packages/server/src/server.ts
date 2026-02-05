@@ -23,6 +23,7 @@ import { registerProviderRoutes } from './routes/providers.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerFileRoutes } from './routes/files.js';
 import { registerGitHubRoutes } from './routes/github.js';
+import { registerScoreRoutes } from './routes/score.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -135,6 +136,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   await registerSettingsRoutes(app);
   await registerFileRoutes(app);
   await registerGitHubRoutes(app);
+  await registerScoreRoutes(app);
 
   // Health check endpoint
   app.get('/health', async () => {
@@ -160,6 +162,7 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
         providers: '/api/providers',
         settings: '/api/settings',
         github: '/api/github',
+        score: '/api/sessions/:id/score',
         websocket: '/ws',
         health: '/health',
       },

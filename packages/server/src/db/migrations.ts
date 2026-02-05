@@ -195,6 +195,25 @@ BEGIN
 END;
     `,
   },
+  {
+    id: 6,
+    name: '006_add_scores_table',
+    sql: `
+-- Scores table: Stores computed Sloppy Scores for sessions
+CREATE TABLE IF NOT EXISTS scores (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    score INTEGER NOT NULL CHECK (score >= 0 AND score <= 100),
+    breakdown TEXT NOT NULL DEFAULT '{}',
+    issues_before INTEGER NOT NULL DEFAULT 0,
+    issues_after INTEGER NOT NULL DEFAULT 0,
+    computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scores_session_id ON scores(session_id);
+    `,
+  },
 ];
 
 /**

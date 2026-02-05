@@ -9,12 +9,8 @@ import {
 } from './base.js';
 import { StubAnalyzer } from './stubs/index.js';
 import { DuplicateAnalyzer } from './duplicates/index.js';
-import { BugAnalyzer } from './bugs/index.js';
-import { TypeAnalyzer } from './types/index.js';
 import { CoverageAnalyzer } from './coverage/index.js';
-import { LintAnalyzer } from './lint/index.js';
 import { SecurityAnalyzer } from './security/index.js';
-import { DeadCodeAnalyzer } from './dead-code/index.js';
 import { LLMAnalyzer } from './llm/index.js';
 
 /**
@@ -46,26 +42,47 @@ export type ProgressCallback = (progress: {
 }) => void;
 
 /**
- * Orchestrates running multiple analyzers in parallel
+ * Orchestrates code analysis by delegating to the LLM as the primary orchestrator.
+ *
+ * The LLM analyzer is the brain: it decides which static analysis tools to invoke,
+ * examines code directly, cross-references findings, and produces a unified result.
+ *
+ * When no LLM API key is configured, falls back to running universal static analyzers
+ * (security, stubs, duplicates, coverage) directly as a degraded mode.
  */
 export class AnalysisOrchestrator {
   private readonly analyzers: Map<IssueCategory, BaseAnalyzer>;
+  private readonly llmAnalyzer: LLMAnalyzer;
+
+  /**
+   * Universal static analyzers that work on any language.
+   * Used as fallback when LLM is unavailable.
+   */
+  private static readonly FALLBACK_ANALYZERS: IssueCategory[] = [
+    'security',
+    'stub',
+    'duplicate',
+    'coverage',
+  ];
 
   constructor() {
     this.analyzers = new Map<IssueCategory, BaseAnalyzer>();
     this.analyzers.set('stub', new StubAnalyzer());
     this.analyzers.set('duplicate', new DuplicateAnalyzer());
-    this.analyzers.set('bug', new BugAnalyzer());
-    this.analyzers.set('type', new TypeAnalyzer());
     this.analyzers.set('coverage', new CoverageAnalyzer());
-    this.analyzers.set('lint', new LintAnalyzer());
     this.analyzers.set('security', new SecurityAnalyzer());
-    this.analyzers.set('dead-code', new DeadCodeAnalyzer());
-    this.analyzers.set('llm', new LLMAnalyzer());
+    this.llmAnalyzer = new LLMAnalyzer();
+    this.analyzers.set('llm', this.llmAnalyzer);
   }
 
   /**
-   * Run analysis on the given files
+   * Run analysis on the given files.
+   *
+   * Primary path: delegates entirely to the LLM analyzer, which internally
+   * uses tools (including the static analyzers) to perform comprehensive analysis.
+   *
+   * Fallback path: if no API key is configured, runs the universal static analyzers
+   * directly (security, stubs, duplicates, coverage).
    */
   async analyze(
     options: AnalyzerOptions,
@@ -79,24 +96,27 @@ export class AnalysisOrchestrator {
     const files = await this.findFiles(options);
 
     if (files.length === 0) {
-      return this.createEmptyResult(startTime, mergedConfig);
+      return this.createEmptyResult(startTime);
     }
 
-    // Get analyzers to run
-    const analyzersToRun = this.getAnalyzersToRun(mergedConfig);
+    // Check if LLM is available (has API key configured)
+    const llmConfig = mergedConfig.analyzerConfigs.llm ?? {};
+    const hasApiKey = this.hasLLMApiKey(llmConfig);
 
-    if (analyzersToRun.length === 0) {
-      return this.createEmptyResult(startTime, mergedConfig);
+    let allIssues: Issue[];
+    let analyzersRun: string[];
+
+    if (hasApiKey) {
+      // Primary path: LLM is the orchestrator
+      allIssues = await this.runLLMOrchestrator(files, options, mergedConfig, onProgress);
+      analyzersRun = ['llm-orchestrator'];
+    } else {
+      // Degraded mode: run universal static analyzers directly
+      console.warn('[orchestrator] No LLM API key configured. Running in degraded mode with static analyzers only.');
+      const result = await this.runFallbackAnalyzers(files, options, mergedConfig, onProgress);
+      allIssues = result.issues;
+      analyzersRun = result.analyzersRun;
     }
-
-    // Run analyzers in parallel with concurrency limit
-    const allIssues = await this.runAnalyzersInParallel(
-      analyzersToRun,
-      files,
-      options,
-      mergedConfig,
-      onProgress
-    );
 
     // Process results
     let issues = allIssues;
@@ -116,12 +136,7 @@ export class AnalysisOrchestrator {
       issues = issues.slice(0, mergedConfig.maxIssues);
     }
 
-    // Create result
-    return this.createResult(
-      issues,
-      startTime,
-      analyzersToRun.map((a) => a.name)
-    );
+    return this.createResult(issues, startTime, analyzersRun);
   }
 
   /**
@@ -160,6 +175,142 @@ export class AnalysisOrchestrator {
    */
   registerAnalyzer(analyzer: BaseAnalyzer): void {
     this.analyzers.set(analyzer.category, analyzer);
+  }
+
+  /**
+   * Run the LLM as the primary orchestrator.
+   * The LLM decides which tools to invoke and produces a unified analysis.
+   */
+  private async runLLMOrchestrator(
+    files: string[],
+    options: AnalyzerOptions,
+    config: ReturnType<typeof this.getConfig>,
+    onProgress?: ProgressCallback
+  ): Promise<Issue[]> {
+    onProgress?.({
+      analyzer: 'llm-orchestrator',
+      status: 'started',
+    });
+
+    try {
+      const llmConfig = config.analyzerConfigs.llm ?? {};
+      const llmOptions: AnalyzerOptions = {
+        ...options,
+        config: llmConfig,
+      };
+
+      const issues = await this.llmAnalyzer.analyze(files, llmOptions);
+
+      onProgress?.({
+        analyzer: 'llm-orchestrator',
+        status: 'completed',
+        issueCount: issues.length,
+      });
+
+      return issues;
+    } catch (error) {
+      onProgress?.({
+        analyzer: 'llm-orchestrator',
+        status: 'failed',
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+
+      // On LLM failure, attempt fallback to static analyzers
+      console.warn('[orchestrator] LLM orchestrator failed, falling back to static analyzers:', error);
+      const fallback = await this.runFallbackAnalyzers(files, options, config, onProgress);
+      return fallback.issues;
+    }
+  }
+
+  /**
+   * Run universal static analyzers directly (degraded mode).
+   * Used when no LLM API key is configured or when LLM fails.
+   */
+  private async runFallbackAnalyzers(
+    files: string[],
+    options: AnalyzerOptions,
+    config: ReturnType<typeof this.getConfig>,
+    onProgress?: ProgressCallback
+  ): Promise<{ issues: Issue[]; analyzersRun: string[] }> {
+    const allIssues: Issue[] = [];
+    const analyzersRun: string[] = [];
+
+    const fallbackCategories = AnalysisOrchestrator.FALLBACK_ANALYZERS;
+    const { analyzerConfigs } = config;
+
+    // Run fallback analyzers in parallel
+    const promises = fallbackCategories.map(async (category) => {
+      const analyzer = this.analyzers.get(category);
+      if (!analyzer) return [];
+
+      onProgress?.({
+        analyzer: analyzer.name,
+        status: 'started',
+      });
+
+      try {
+        const analyzerConfig = analyzerConfigs[category] ?? {};
+        const analyzerOptions: AnalyzerOptions = {
+          ...options,
+          config: analyzerConfig,
+        };
+
+        const issues = await analyzer.analyze(files, analyzerOptions);
+
+        onProgress?.({
+          analyzer: analyzer.name,
+          status: 'completed',
+          issueCount: issues.length,
+        });
+
+        analyzersRun.push(analyzer.name);
+        return issues;
+      } catch (error) {
+        onProgress?.({
+          analyzer: analyzer.name,
+          status: 'failed',
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        return [];
+      }
+    });
+
+    const results = await Promise.all(promises);
+    for (const issues of results) {
+      allIssues.push(...issues);
+    }
+
+    return { issues: allIssues, analyzersRun };
+  }
+
+  /**
+   * Check if the LLM has an API key configured
+   */
+  private hasLLMApiKey(llmConfig: Record<string, unknown>): boolean {
+    // Check runtime config from analyzerConfigs
+    if (llmConfig.apiKey && typeof llmConfig.apiKey === 'string' && llmConfig.apiKey !== '') {
+      return true;
+    }
+
+    // Check environment variables
+    const envKeys = [
+      'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY', 'GEMINI_API_KEY',
+      'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY',
+      'GROQ_API_KEY', 'TOGETHER_API_KEY', 'COHERE_API_KEY', 'CO_API_KEY',
+    ];
+    for (const key of envKeys) {
+      const value = process.env[key];
+      if (value !== undefined && value !== '') {
+        return true;
+      }
+    }
+
+    // Ollama doesn't need an API key
+    if (llmConfig.provider === 'ollama') {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -256,88 +407,6 @@ export class AnalysisOrchestrator {
   }
 
   /**
-   * Get list of analyzers to run
-   */
-  private getAnalyzersToRun(
-    config: Required<OrchestratorConfig>
-  ): BaseAnalyzer[] {
-    const analyzersToRun: BaseAnalyzer[] = [];
-
-    for (const category of config.analyzers) {
-      const analyzer = this.analyzers.get(category);
-      if (analyzer) {
-        analyzersToRun.push(analyzer);
-      }
-    }
-
-    return analyzersToRun;
-  }
-
-  /**
-   * Run analyzers in parallel with concurrency limit
-   */
-  private async runAnalyzersInParallel(
-    analyzers: BaseAnalyzer[],
-    files: string[],
-    options: AnalyzerOptions,
-    config: Required<OrchestratorConfig>,
-    onProgress?: ProgressCallback
-  ): Promise<Issue[]> {
-    const allIssues: Issue[] = [];
-    const { concurrency, analyzerConfigs } = config;
-
-    // Create batches based on concurrency
-    const batches: BaseAnalyzer[][] = [];
-    for (let i = 0; i < analyzers.length; i += concurrency) {
-      batches.push(analyzers.slice(i, i + concurrency));
-    }
-
-    // Process each batch
-    for (const batch of batches) {
-      const batchPromises = batch.map(async (analyzer) => {
-        onProgress?.({
-          analyzer: analyzer.name,
-          status: 'started',
-        });
-
-        try {
-          // Get analyzer-specific config
-          const analyzerConfig = analyzerConfigs[analyzer.category] ?? {};
-          const analyzerOptions: AnalyzerOptions = {
-            ...options,
-            config: analyzerConfig,
-          };
-
-          const issues = await analyzer.analyze(files, analyzerOptions);
-
-          onProgress?.({
-            analyzer: analyzer.name,
-            status: 'completed',
-            issueCount: issues.length,
-          });
-
-          return issues;
-        } catch (error) {
-          onProgress?.({
-            analyzer: analyzer.name,
-            status: 'failed',
-            error: error instanceof Error ? error : new Error(String(error)),
-          });
-
-          return [];
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      for (const issues of batchResults) {
-        allIssues.push(...issues);
-      }
-    }
-
-    return allIssues;
-  }
-
-  /**
    * Deduplicate issues based on location and message
    */
   private deduplicateIssues(issues: Issue[]): Issue[] {
@@ -389,8 +458,7 @@ export class AnalysisOrchestrator {
    * Create an empty result
    */
   private createEmptyResult(
-    startTime: number,
-    _config: Required<OrchestratorConfig>
+    startTime: number
   ): AnalysisResult {
     return this.createResult([], startTime, []);
   }
