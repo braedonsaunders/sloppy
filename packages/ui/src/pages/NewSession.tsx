@@ -107,26 +107,36 @@ export default function NewSession(): JSX.Element {
       return;
     }
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => {
       setIsDetecting(true);
-      try {
-        const res = await fetch(`/api/detect?path=${encodeURIComponent(repoPath)}`);
-        const data = await res.json();
-        if (data.success && data.data) {
-          setDetectedProject(data.data);
-          // Auto-fill commands if not manually set
-          if (data.data.commands.test && !testCommand) setTestCommand(data.data.commands.test);
-          if (data.data.commands.lint && !lintCommand) setLintCommand(data.data.commands.lint);
-          if (data.data.commands.build && !buildCommand) setBuildCommand(data.data.commands.build);
+      void (async (): Promise<void> => {
+        try {
+          const res = await fetch(`/api/detect?path=${encodeURIComponent(repoPath)}`);
+          const data = await res.json() as {
+            success?: boolean;
+            data?: {
+              language: string;
+              framework: string | null;
+              packageManager: string | null;
+              commands: { test: string | null; lint: string | null; build: string | null; typecheck: string | null };
+            };
+          };
+          if (data.success === true && data.data !== undefined) {
+            setDetectedProject(data.data);
+            // Auto-fill commands if not manually set
+            if (data.data.commands.test !== null && data.data.commands.test !== '' && testCommand === '') { setTestCommand(data.data.commands.test); }
+            if (data.data.commands.lint !== null && data.data.commands.lint !== '' && lintCommand === '') { setLintCommand(data.data.commands.lint); }
+            if (data.data.commands.build !== null && data.data.commands.build !== '' && buildCommand === '') { setBuildCommand(data.data.commands.build); }
+          }
+        } catch {
+          // Detection failed, that's ok
+        } finally {
+          setIsDetecting(false);
         }
-      } catch {
-        // Detection failed, that's ok
-      } finally {
-        setIsDetecting(false);
-      }
+      })();
     }, 500); // debounce
 
-    return () => clearTimeout(timer);
+    return (): void => { clearTimeout(timer); };
   }, [repoPath, repoType]);
 
   const toggleFocusArea = (area: string): void => {
@@ -276,8 +286,8 @@ export default function NewSession(): JSX.Element {
                   ) : detectedProject ? (
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <Badge variant="info">{detectedProject.language}</Badge>
-                      {detectedProject.framework && <Badge variant="neutral">{detectedProject.framework}</Badge>}
-                      {detectedProject.packageManager && <Badge variant="neutral">{detectedProject.packageManager}</Badge>}
+                      {detectedProject.framework !== null && detectedProject.framework !== '' && <Badge variant="neutral">{detectedProject.framework}</Badge>}
+                      {detectedProject.packageManager !== null && detectedProject.packageManager !== '' && <Badge variant="neutral">{detectedProject.packageManager}</Badge>}
                       <span className="text-dark-500">Auto-detected</span>
                     </div>
                   ) : null}
@@ -556,7 +566,7 @@ export default function NewSession(): JSX.Element {
                   onChange={(e) => { setTestCommand(e.target.value); }}
                   hint="Command to run tests"
                 />
-                {detectedProject?.commands.test && testCommand === detectedProject.commands.test && (
+                {detectedProject !== null && detectedProject.commands.test !== null && detectedProject.commands.test !== '' && testCommand === detectedProject.commands.test && (
                   <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
                 )}
               </div>
@@ -569,7 +579,7 @@ export default function NewSession(): JSX.Element {
                   onChange={(e) => { setLintCommand(e.target.value); }}
                   hint="Command to run linting"
                 />
-                {detectedProject?.commands.lint && lintCommand === detectedProject.commands.lint && (
+                {detectedProject !== null && detectedProject.commands.lint !== null && detectedProject.commands.lint !== '' && lintCommand === detectedProject.commands.lint && (
                   <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
                 )}
               </div>
@@ -582,7 +592,7 @@ export default function NewSession(): JSX.Element {
                   onChange={(e) => { setBuildCommand(e.target.value); }}
                   hint="Command to build the project"
                 />
-                {detectedProject?.commands.build && buildCommand === detectedProject.commands.build && (
+                {detectedProject !== null && detectedProject.commands.build !== null && detectedProject.commands.build !== '' && buildCommand === detectedProject.commands.build && (
                   <span className="text-xs text-dark-500 mt-1 inline-block">Auto-detected</span>
                 )}
               </div>

@@ -392,7 +392,7 @@ export default function Session(): JSX.Element {
               </h2>
               <p className="text-sm text-dark-400">
                 {session.stats.issuesResolved} of {session.stats.issuesFound} issues resolved
-                {session.stats.commitsCreated > 0 && ` across ${session.stats.commitsCreated} commits`}
+                {session.stats.commitsCreated > 0 && ` across ${String(session.stats.commitsCreated)} commits`}
               </p>
             </div>
           </div>
@@ -631,7 +631,7 @@ function IssuesPanel({
             variant="primary"
             size="sm"
             onClick={() => {
-              issues.filter(i => i.status === 'pending').forEach(i => onApprove(i.id));
+              issues.filter(i => i.status === 'pending').forEach(i => { onApprove(i.id); });
             }}
             leftIcon={<Zap className="h-3.5 w-3.5" />}
           >
