@@ -656,9 +656,13 @@ Use the tools to explore the codebase and create issues for any problems you fin
   /**
    * Flatten tool interaction messages into regular messages.
    * Converts assistant(tool_calls) + tool(results) sequences into
-   * regular assistant + user messages. This is needed for providers
-   * like Gemini whose OpenAI-compatible endpoints don't fully support
-   * multi-turn function calling message format.
+   * regular assistant + user messages. This is needed for Gemini because:
+   * 1. Gemini 3 models require a thought_signature to be echoed back on
+   *    tool_calls, which the OpenAI SDK doesn't expose (causes 400 errors)
+   * 2. Gemini's OpenAI-compatible endpoint has limited multi-turn function
+   *    calling support in general
+   * By flattening to plain text, we avoid both issues while preserving
+   * the conversation context for the LLM.
    */
   private flattenToolMessages(messages: Message[]): Message[] {
     const result: Message[] = [];
@@ -719,9 +723,9 @@ Use the tools to explore the codebase and create issues for any problems you fin
       baseURL: this.getConfig().baseUrl,
     });
 
-    // For Gemini, flatten past tool interactions into regular messages
-    // to work around Gemini's OpenAI-compatible endpoint not fully
-    // supporting multi-turn function calling message format
+    // For Gemini, flatten past tool interactions into regular messages.
+    // Gemini 3 models require thought_signature on tool_calls which the
+    // OpenAI SDK doesn't expose, causing 400 errors on multi-turn calls.
     const effectiveMessages = isGemini
       ? this.flattenToolMessages(messages)
       : messages;
