@@ -19,6 +19,8 @@ import {
   Lightbulb,
   Code2,
   MapPin,
+  RefreshCw,
+  Terminal,
 } from 'lucide-react';
 import Button from './Button';
 import { StatusBadge, SeverityBadge, TypeBadge } from './Badge';
@@ -29,6 +31,7 @@ export interface IssueCardProps {
   onApprove?: (id: string) => void;
   onReject?: (id: string) => void;
   onSkip?: (id: string) => void;
+  onRetry?: (id: string, context?: string) => void;
   showActions?: boolean;
   isExpanded?: boolean;
   onToggleExpand?: () => void;
@@ -54,6 +57,7 @@ export default function IssueCard({
   onApprove,
   onReject,
   onSkip,
+  onRetry,
   showActions = true,
   isExpanded: controlledExpanded,
   onToggleExpand,
@@ -61,6 +65,7 @@ export default function IssueCard({
 }: IssueCardProps): JSX.Element {
   const [internalExpanded, setInternalExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
   const isExpanded = controlledExpanded ?? internalExpanded;
 
   const handleToggle = (): void => {
@@ -83,12 +88,21 @@ export default function IssueCard({
 
   const SeverityIcon = severityIcons[issue.severity] ?? Info;
   const isPending = issue.status === 'detected';
+  const isFailed = issue.status === 'rejected';
   const canApprove = isPending && onApprove !== undefined;
   const canReject = isPending && onReject !== undefined;
   const canSkip = isPending && onSkip !== undefined;
+  const canRetry = isFailed && onRetry !== undefined;
 
   // Parse context if it has suggestion
   const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
+  const hasErrorOutput = contextData?.context !== undefined && (
+    contextData.context.includes('Error') ||
+    contextData.context.includes('FAIL') ||
+    contextData.context.includes('error') ||
+    contextData.context.includes('test') ||
+    contextData.context.includes('assert')
+  );
 
   return (
     <div
@@ -232,6 +246,37 @@ export default function IssueCard({
             </div>
           )}
 
+          {/* Error Details (expandable) */}
+          {isFailed && hasErrorOutput && (
+            <div className="rounded-lg border border-error/30 bg-error/5">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowErrorDetails(!showErrorDetails);
+                }}
+                className="flex items-center justify-between w-full px-3 py-2 text-xs font-medium text-error hover:bg-error/10 transition-colors rounded-lg"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Terminal className="h-3.5 w-3.5" />
+                  Error Output
+                </span>
+                {showErrorDetails ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+              </button>
+              {showErrorDetails && (
+                <div className="px-3 pb-3">
+                  <pre className="rounded-lg bg-dark-900 p-3 text-xs font-mono text-error/80 overflow-x-auto border border-error/20 max-h-[200px] overflow-y-auto">
+                    {contextData?.context ?? issue.context}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Metadata Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
             {/* Location */}
@@ -285,7 +330,7 @@ export default function IssueCard({
           </div>
 
           {/* Actions */}
-          {showActions && (canApprove || canReject || canSkip) && (
+          {showActions && (canApprove || canReject || canSkip || canRetry) && (
             <div className="flex items-center gap-2 pt-3 border-t border-dark-700">
               {canApprove && (
                 <Button
@@ -324,6 +369,19 @@ export default function IssueCard({
                   leftIcon={<SkipForward className="h-3.5 w-3.5" />}
                 >
                   Skip for Now
+                </Button>
+              )}
+              {canRetry && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRetry(issue.id, issue.context);
+                  }}
+                  leftIcon={<RefreshCw className="h-3.5 w-3.5" />}
+                >
+                  Retry with Context
                 </Button>
               )}
             </div>
@@ -429,6 +487,7 @@ export interface IssueDetailViewProps {
   onApprove?: (id: string) => void;
   onReject?: (id: string) => void;
   onSkip?: (id: string) => void;
+  onRetry?: (id: string, context?: string) => void;
   showActions?: boolean;
   className?: string;
 }
@@ -438,13 +497,24 @@ export function IssueDetailView({
   onApprove,
   onReject,
   onSkip,
+  onRetry,
   showActions = true,
   className,
 }: IssueDetailViewProps): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const [showErrorDetails, setShowErrorDetails] = useState(false);
   const SeverityIcon = severityIcons[issue.severity] ?? Info;
   const isPending = issue.status === 'detected';
+  const isFailed = issue.status === 'rejected';
+  const canRetry = isFailed && onRetry !== undefined;
   const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
+  const hasErrorOutput = contextData?.context !== undefined && (
+    contextData.context.includes('Error') ||
+    contextData.context.includes('FAIL') ||
+    contextData.context.includes('error') ||
+    contextData.context.includes('test') ||
+    contextData.context.includes('assert')
+  );
 
   const handleCopy = (text: string): void => {
     void navigator.clipboard.writeText(text);
@@ -525,6 +595,34 @@ export function IssueDetailView({
         </div>
       )}
 
+      {/* Error Details (expandable for failed issues) */}
+      {isFailed && hasErrorOutput && (
+        <div className="rounded-lg border border-error/30 bg-error/5">
+          <button
+            type="button"
+            onClick={() => { setShowErrorDetails(!showErrorDetails); }}
+            className="flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-error hover:bg-error/10 transition-colors rounded-lg"
+          >
+            <span className="flex items-center gap-2">
+              <Terminal className="h-4 w-4" />
+              Error Output
+            </span>
+            {showErrorDetails ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+          {showErrorDetails && (
+            <div className="px-4 pb-4">
+              <pre className="rounded-lg bg-dark-900 p-4 text-sm font-mono text-error/80 overflow-x-auto border border-error/20 max-h-[300px] overflow-y-auto leading-relaxed">
+                {contextData?.context ?? issue.context}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Rule/Code Info */}
       {issue.code !== undefined && issue.code !== '' && (
         <div className="p-3 rounded-lg bg-dark-900 border border-dark-700">
@@ -560,9 +658,9 @@ export function IssueDetailView({
       </div>
 
       {/* Actions */}
-      {showActions && isPending && (
+      {showActions && (isPending || canRetry) && (
         <div className="flex items-center gap-3 pt-4 border-t border-dark-700">
-          {onApprove !== undefined && (
+          {onApprove !== undefined && isPending && (
             <Button
               variant="primary"
               onClick={() => {
@@ -573,7 +671,7 @@ export function IssueDetailView({
               Approve Fix
             </Button>
           )}
-          {onReject !== undefined && (
+          {onReject !== undefined && isPending && (
             <Button
               variant="danger"
               onClick={() => {
@@ -584,7 +682,7 @@ export function IssueDetailView({
               Reject
             </Button>
           )}
-          {onSkip !== undefined && (
+          {onSkip !== undefined && isPending && (
             <Button
               variant="ghost"
               onClick={() => {
@@ -593,6 +691,17 @@ export function IssueDetailView({
               leftIcon={<SkipForward className="h-4 w-4" />}
             >
               Skip
+            </Button>
+          )}
+          {canRetry && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                onRetry(issue.id, issue.context);
+              }}
+              leftIcon={<RefreshCw className="h-4 w-4" />}
+            >
+              Retry with Context
             </Button>
           )}
         </div>

@@ -322,5 +322,132 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
   });
 
+  /**
+   * POST /api/sessions/:id/resume-crashed - Resume a session that was interrupted
+   */
+  app.post('/api/sessions/:id/resume-crashed', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = SessionIdParamsSchema.parse(request.params);
+      const db = getDatabase();
+      const session = db.getSession(params.id);
+
+      if (!session) {
+        sendError(reply, 'Session not found', 404);
+        return;
+      }
+
+      // Only allow resuming sessions that were running when they crashed
+      if (session.status !== 'running') {
+        sendError(reply, `Cannot resume session in status: ${session.status}`, 409);
+        return;
+      }
+
+      // Reset to pending so it can be re-started
+      const updated = db.updateSession(params.id, {
+        status: 'pending',
+      });
+
+      if (!updated) {
+        sendError(reply, 'Failed to update session', 500);
+        return;
+      }
+
+      // Re-start the session
+      const started = await sessionManager.startSession(params.id);
+      sendSuccess(reply, started);
+    } catch (error) {
+      app.log.error({ error }, 'Failed to resume crashed session');
+      sendError(reply, error instanceof Error ? error.message : 'Failed to resume session', 500);
+    }
+  });
+
+  /**
+   * POST /api/sessions/:id/fix-file - Fix issues in a specific file
+   */
+  app.post('/api/sessions/:id/fix-file', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = SessionIdParamsSchema.parse(request.params);
+      const body = z.object({
+        filePath: z.string().min(1),
+      }).parse(request.body);
+
+      const db = getDatabase();
+      const issues = db.listIssuesBySession(params.id);
+      const fileIssues = issues.filter((i: { file_path: string }) => i.file_path === body.filePath);
+
+      if (fileIssues.length === 0) {
+        sendError(reply, 'No issues found in specified file', 404);
+        return;
+      }
+
+      sendSuccess(reply, {
+        filePath: body.filePath,
+        issueCount: fileIssues.length,
+        issues: fileIssues,
+        message: `Found ${fileIssues.length} issues in ${body.filePath}`,
+      });
+    } catch (error) {
+      sendError(reply, error instanceof Error ? error.message : 'Failed to fix file', 500);
+    }
+  });
+
+  /**
+   * POST /api/sessions/:id/fix-issue/:issueId - Fix a single specific issue
+   */
+  app.post('/api/sessions/:id/fix-issue/:issueId', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = z.object({
+        id: z.string().min(1),
+        issueId: z.string().min(1),
+      }).parse(request.params);
+
+      const db = getDatabase();
+      const issues = db.listIssuesBySession(params.id);
+      const issue = issues.find((i: { id: string }) => i.id === params.issueId);
+
+      if (!issue) {
+        sendError(reply, 'Issue not found', 404);
+        return;
+      }
+
+      sendSuccess(reply, {
+        issue,
+        message: `Queued fix for issue ${params.issueId}`,
+      });
+    } catch (error) {
+      sendError(reply, error instanceof Error ? error.message : 'Failed to fix issue', 500);
+    }
+  });
+
+  /**
+   * POST /api/sessions/:id/fix-type - Fix all issues of a specific type
+   */
+  app.post('/api/sessions/:id/fix-type', async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const params = SessionIdParamsSchema.parse(request.params);
+      const body = z.object({
+        type: z.string().min(1),
+      }).parse(request.body);
+
+      const db = getDatabase();
+      const issues = db.listIssuesBySession(params.id);
+      const typeIssues = issues.filter((i: { type: string }) => i.type === body.type);
+
+      if (typeIssues.length === 0) {
+        sendError(reply, `No ${body.type} issues found`, 404);
+        return;
+      }
+
+      sendSuccess(reply, {
+        type: body.type,
+        issueCount: typeIssues.length,
+        issues: typeIssues,
+        message: `Found ${typeIssues.length} ${body.type} issues to fix`,
+      });
+    } catch (error) {
+      sendError(reply, error instanceof Error ? error.message : 'Failed to fix type', 500);
+    }
+  });
+
   app.log.info('[routes] Session routes registered');
 }

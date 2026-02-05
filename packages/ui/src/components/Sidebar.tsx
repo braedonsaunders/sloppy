@@ -7,6 +7,7 @@ import {
   Home,
   Plus,
   Settings,
+  Eye,
   Clock,
   CheckCircle,
   PauseCircle,
@@ -93,6 +94,13 @@ export default function Sidebar({ className }: SidebarProps): JSX.Element {
             icon={Settings}
             label="Settings"
             isActive={location.pathname === '/settings'}
+            isCollapsed={isCollapsed}
+          />
+          <NavItem
+            to="/watch"
+            icon={Eye}
+            label="Watch"
+            isActive={location.pathname === '/watch'}
             isCollapsed={isCollapsed}
           />
         </div>

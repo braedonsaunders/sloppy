@@ -1,6 +1,6 @@
 import type { JSX } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
@@ -9,6 +9,8 @@ import Settings from './pages/Settings';
 import NewSession from './pages/NewSession';
 import Onboarding from './pages/Onboarding';
 import { wsClient } from './lib/websocket';
+
+const Watch = lazy(() => import('./pages/Watch'));
 
 function AppLayout({ children }: { children: React.ReactNode }): JSX.Element {
   return (
@@ -55,6 +57,7 @@ export default function App(): JSX.Element {
         <Route path="/session/:id" element={<Session />} />
         <Route path="/session/new" element={<NewSession />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/watch" element={<Suspense fallback={<div className="flex items-center justify-center h-full"><div className="text-dark-400">Loading...</div></div>}><Watch /></Suspense>} />
         <Route path="/setup" element={<Onboarding />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

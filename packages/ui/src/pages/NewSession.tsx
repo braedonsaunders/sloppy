@@ -67,7 +67,7 @@ export default function NewSession(): JSX.Element {
   const [maxTime, setMaxTime] = useState<string>('');
   const [strictness, setStrictness] = useState<'low' | 'medium' | 'high'>('medium');
   const [focusAreas, setFocusAreas] = useState<string[]>(FOCUS_AREAS.map(a => a.id));
-  const [approvalMode, setApprovalMode] = useState(false);
+  const [approvalMode, setApprovalMode] = useState(true);
   const [testCommand, setTestCommand] = useState('');
   const [lintCommand, setLintCommand] = useState('');
   const [buildCommand, setBuildCommand] = useState('');
@@ -99,6 +99,18 @@ export default function NewSession(): JSX.Element {
       if (typeof s.approvalModeDefault === 'boolean') {setApprovalMode(s.approvalModeDefault);}
     }
   }, [settings]);
+
+  // Check for quick-start path from URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pathParam = params.get('path');
+    if (pathParam) {
+      setRepoPath(pathParam);
+      if (pathParam.startsWith('http')) {
+        setRepoType('git');
+      }
+    }
+  }, []);
 
   // Auto-detect project type when local path changes
   useEffect(() => {
@@ -531,7 +543,7 @@ export default function NewSession(): JSX.Element {
               className="h-4 w-4 rounded border-dark-600 bg-dark-700 text-accent focus:ring-accent"
             />
             <label htmlFor="approvalMode" className="text-sm text-dark-200">
-              Enable approval mode (require manual approval for each fix)
+              Enable approval mode - review each fix before committing (recommended)
             </label>
           </div>
         </section>

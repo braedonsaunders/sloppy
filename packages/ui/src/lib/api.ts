@@ -325,6 +325,16 @@ interface MetricsResponse {
   } | null;
 }
 
+// File tree types
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  extension?: string;
+  children?: FileTreeNode[];
+}
+
 // API Client
 export const api = {
   // Sessions
@@ -607,6 +617,80 @@ export const api = {
     /** List repository branches */
     listBranches: (owner: string, repo: string): Promise<{ branches: GitHubBranch[] }> =>
       request<{ branches: GitHubBranch[] }>(`/github/repositories/${owner}/${repo}/branches`),
+  },
+
+  // Watch mode
+  watch: {
+    start: (repoPath: string): Promise<{ id: string; repoPath: string; status: string; startedAt: string }> =>
+      request<{ id: string; repoPath: string; status: string; startedAt: string }>('/watch/start', {
+        method: 'POST',
+        body: JSON.stringify({ repoPath }),
+      }),
+
+    stop: (id: string): Promise<{ stopped: boolean }> =>
+      request<{ stopped: boolean }>(`/watch/${id}/stop`, { method: 'POST' }),
+
+    pause: (id: string): Promise<{ paused: boolean }> =>
+      request<{ paused: boolean }>(`/watch/${id}/pause`, { method: 'POST' }),
+
+    resume: (id: string): Promise<{ resumed: boolean }> =>
+      request<{ resumed: boolean }>(`/watch/${id}/resume`, { method: 'POST' }),
+
+    list: (): Promise<{ sessions: Array<{ id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }> }> =>
+      request<{ sessions: Array<{ id: string; repoPath: string; status: string; startedAt: string; issuesFixed: number; lastActivity: string }> }>('/watch'),
+
+    get: (id: string): Promise<{ id: string; repoPath: string; status: string; changedFiles: string[] }> =>
+      request<{ id: string; repoPath: string; status: string; changedFiles: string[] }>(`/watch/${id}`),
+  },
+
+  // File tree and viewer
+  fileTree: {
+    get: (path: string, depth?: number): Promise<{ root: string; tree: FileTreeNode[] }> => {
+      const params = new URLSearchParams({ path });
+      if (depth !== undefined) params.set('depth', String(depth));
+      return request<{ root: string; tree: FileTreeNode[] }>(`/file-tree?${params.toString()}`);
+    },
+
+    readFile: (path: string): Promise<{
+      path: string;
+      name: string;
+      content: string;
+      language: string;
+      size: number;
+      lines: number;
+    }> => {
+      return request<{
+        path: string;
+        name: string;
+        content: string;
+        language: string;
+        size: number;
+        lines: number;
+      }>(`/file-viewer?path=${encodeURIComponent(path)}`);
+    },
+  },
+
+  // Targeted fixes
+  fixes: {
+    fixFile: (sessionId: string, filePath: string): Promise<{ filePath: string; issueCount: number; message: string }> =>
+      request<{ filePath: string; issueCount: number; message: string }>(`/sessions/${sessionId}/fix-file`, {
+        method: 'POST',
+        body: JSON.stringify({ filePath }),
+      }),
+
+    fixIssue: (sessionId: string, issueId: string): Promise<{ issue: unknown; message: string }> =>
+      request<{ issue: unknown; message: string }>(`/sessions/${sessionId}/fix-issue/${issueId}`, {
+        method: 'POST',
+      }),
+
+    fixType: (sessionId: string, issueType: string): Promise<{ type: string; issueCount: number; message: string }> =>
+      request<{ type: string; issueCount: number; message: string }>(`/sessions/${sessionId}/fix-type`, {
+        method: 'POST',
+        body: JSON.stringify({ type: issueType }),
+      }),
+
+    resumeCrashed: (sessionId: string): Promise<Session> =>
+      request<Session>(`/sessions/${sessionId}/resume-crashed`, { method: 'POST' }),
   },
 };
 

@@ -27,6 +27,8 @@ import { registerScoreRoutes } from './routes/score.js';
 import { registerDetectRoutes } from './routes/detect.js';
 import { registerBadgeRoutes } from './routes/badge.js';
 import { registerReportRoutes } from './routes/report.js';
+import { registerWatchRoutes } from './routes/watch.js';
+import { registerFileTreeRoutes } from './routes/file-tree.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -143,6 +145,8 @@ export async function createServer(options: ServerOptions = {}): Promise<SloppyS
   await registerDetectRoutes(app);
   await registerBadgeRoutes(app);
   await registerReportRoutes(app);
+  await registerWatchRoutes(app);
+  await registerFileTreeRoutes(app);
 
   // Health check endpoint
   app.get('/health', async () => {

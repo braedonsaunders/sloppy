@@ -612,3 +612,81 @@ export function getRegisteredProvider(name: string): BaseProvider | undefined {
 export function listRegisteredProviders(): string[] {
   return Array.from(providerRegistry.keys());
 }
+
+// ============================================================================
+// Fallback Chain
+// ============================================================================
+
+/**
+ * Create a fallback provider chain from all configured providers.
+ * Uses auto-detection to find all available providers and chains them.
+ */
+export async function createFallbackChain(
+  options?: {
+    onFallback?: (from: string, to: string, error: Error) => void;
+    onRateLimited?: (provider: string, retryAfterMs: number) => void;
+  },
+): Promise<BaseProvider> {
+  const { FallbackProvider } = await import('./fallback.js');
+
+  const providers: BaseProvider[] = [];
+
+  // Try all API key-based providers
+  const envProviderPairs: { envKey: string; type: ProviderType }[] = [
+    { envKey: 'ANTHROPIC_API_KEY', type: 'claude' },
+    { envKey: 'OPENAI_API_KEY', type: 'openai' },
+    { envKey: 'GOOGLE_API_KEY', type: 'gemini' },
+    { envKey: 'GEMINI_API_KEY', type: 'gemini' },
+    { envKey: 'OPENROUTER_API_KEY', type: 'openrouter' },
+    { envKey: 'DEEPSEEK_API_KEY', type: 'deepseek' },
+    { envKey: 'MISTRAL_API_KEY', type: 'mistral' },
+    { envKey: 'GROQ_API_KEY', type: 'groq' },
+    { envKey: 'TOGETHER_API_KEY', type: 'together' },
+    { envKey: 'COHERE_API_KEY', type: 'cohere' },
+  ];
+
+  const addedTypes = new Set<string>();
+
+  for (const { envKey, type } of envProviderPairs) {
+    const key = process.env[envKey];
+    if (key && !addedTypes.has(type)) {
+      try {
+        providers.push(createProvider({ type, apiKey: key } as ProviderConfig));
+        addedTypes.add(type);
+      } catch {
+        // Skip invalid provider configs
+      }
+    }
+  }
+
+  // Try Ollama
+  if (!addedTypes.has('ollama')) {
+    try {
+      const ollama = createOllamaProvider();
+      const health = await ollama.healthCheck();
+      if (health.healthy) {
+        providers.push(ollama);
+      }
+    } catch {
+      // Ollama not available
+    }
+  }
+
+  if (providers.length === 0) {
+    throw new ProviderError(
+      'No AI providers available for fallback chain',
+      'NO_PROVIDERS',
+      false,
+    );
+  }
+
+  if (providers.length === 1) {
+    return providers[0];
+  }
+
+  return new FallbackProvider({
+    providers,
+    onFallback: options?.onFallback,
+    onRateLimited: options?.onRateLimited,
+  });
+}

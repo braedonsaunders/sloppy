@@ -1031,3 +1031,10 @@ export {
   type AnalysisLoopResult,
 } from './re-analysis.js';
 export * from './prompts.js';
+export {
+  generateLanguagePrompt,
+  getLanguageProfile,
+  detectLanguageFromFiles,
+  LANGUAGE_PROFILES,
+  type LanguageProfile,
+} from './language-prompts.js';
