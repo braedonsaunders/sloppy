@@ -182,7 +182,7 @@ export interface ProviderConfig {
 export interface Activity {
   id: string;
   sessionId: string;
-  type: 'analyzing' | 'fixing' | 'testing' | 'committing' | 'waiting' | 'error';
+  type: 'analyzing' | 'fixing' | 'testing' | 'committing' | 'waiting' | 'error' | 'info' | 'success';
   message: string;
   details?: Record<string, unknown>;
   timestamp: string;

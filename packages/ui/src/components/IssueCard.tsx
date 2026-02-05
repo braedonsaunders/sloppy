@@ -35,7 +35,7 @@ export interface IssueCardProps {
   className?: string;
 }
 
-const severityIcons = {
+const severityIcons: Record<string, typeof AlertCircle> = {
   error: AlertCircle,
   warning: AlertTriangle,
   info: Info,
@@ -79,7 +79,7 @@ export default function IssueCard({
     }
   };
 
-  const SeverityIcon = severityIcons[issue.severity];
+  const SeverityIcon = severityIcons[issue.severity] ?? Info;
   const isPending = issue.status === 'pending';
   const canApprove = isPending && onApprove !== undefined;
   const canReject = isPending && onReject !== undefined;
@@ -379,7 +379,7 @@ export function IssueRow({
   isSelected = false,
   className,
 }: IssueRowProps): JSX.Element {
-  const SeverityIcon = severityIcons[issue.severity];
+  const SeverityIcon = severityIcons[issue.severity] ?? Info;
 
   return (
     <button
@@ -435,7 +435,7 @@ export function IssueDetailView({
   className,
 }: IssueDetailViewProps): JSX.Element {
   const [copied, setCopied] = useState(false);
-  const SeverityIcon = severityIcons[issue.severity];
+  const SeverityIcon = severityIcons[issue.severity] ?? Info;
   const isPending = issue.status === 'pending';
   const contextData = issue.context !== undefined && issue.context !== '' ? tryParseContext(issue.context) : null;
 

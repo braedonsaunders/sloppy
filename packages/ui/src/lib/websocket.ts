@@ -67,7 +67,7 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isConnecting = false;
   private intentionalClose = false;
-  private messageQueue: Array<Omit<WebSocketMessage, 'timestamp'>> = [];
+  private messageQueue: Omit<WebSocketMessage, 'timestamp'>[] = [];
 
   constructor(options: WebSocketClientOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };

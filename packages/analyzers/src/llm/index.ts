@@ -258,12 +258,24 @@ export class LLMAnalyzer extends BaseAnalyzer {
     // Merge runtime config from options.config with constructor config
     // This allows the orchestrator to pass provider config at analysis time
     const runtimeConfig = options.config as Partial<LLMAnalyzerConfig> | undefined;
+
+    // When the provider changes at runtime, update the baseUrl to match
+    // unless an explicit baseUrl was provided in the runtime config
+    const runtimeProvider = runtimeConfig?.provider;
+    const providerChanged = runtimeProvider !== undefined && runtimeProvider !== this.config.provider;
+    const hasExplicitBaseUrl = runtimeConfig?.baseUrl !== undefined && runtimeConfig.baseUrl !== '';
+
     const effectiveConfig = {
       ...this.config,
       ...(runtimeConfig?.apiKey !== undefined && runtimeConfig.apiKey !== '' && { apiKey: runtimeConfig.apiKey }),
-      ...(runtimeConfig?.provider !== undefined && { provider: runtimeConfig.provider }),
+      ...(runtimeProvider !== undefined && { provider: runtimeProvider }),
       ...(runtimeConfig?.model !== undefined && runtimeConfig.model !== '' && { model: runtimeConfig.model }),
-      ...(runtimeConfig?.baseUrl !== undefined && runtimeConfig.baseUrl !== '' && { baseUrl: runtimeConfig.baseUrl }),
+      // Use explicit baseUrl if provided, otherwise update to match the new provider
+      ...(hasExplicitBaseUrl
+        ? { baseUrl: runtimeConfig.baseUrl }
+        : providerChanged && runtimeProvider in PROVIDER_BASE_URLS
+          ? { baseUrl: PROVIDER_BASE_URLS[runtimeProvider as LLMProviderType] }
+          : {}),
     };
 
     if (!effectiveConfig.apiKey) {

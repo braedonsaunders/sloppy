@@ -88,9 +88,12 @@ export default function Onboarding(): JSX.Element {
   }, [configuredProvider, navigate]);
 
   // Check for env-detected providers
-  const detectedProviders = (envProviders as Array<{ id: string; detected: boolean }> | undefined)
-    ?.filter((p) => p.detected)
-    ?.map((p) => p.id) ?? [];
+  const envData = envProviders as { detectedProviders?: Record<string, boolean> } | undefined;
+  const detectedProviders = envData?.detectedProviders
+    ? Object.entries(envData.detectedProviders)
+        .filter(([, detected]) => detected)
+        .map(([id]) => id)
+    : [];
 
   const configureMutation = useMutation({
     mutationFn: async () => {
