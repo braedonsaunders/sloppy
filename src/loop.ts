@@ -6,6 +6,7 @@ import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity } from 
 import { installAgent, runAgent } from './agent';
 import { calculateScore } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
+import { loadOutputFile, writeOutputFile } from './report';
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -261,6 +262,16 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     core.info('Loaded PLAN.md for quality context');
   }
 
+  // Load preexisting issues from output file (if available and no checkpoint)
+  let seededIssues: Issue[] = [];
+  if (!checkpoint && config.outputFile) {
+    const prior = loadOutputFile(config.outputFile);
+    seededIssues = prior.filter(i => i.status === 'found');
+    if (seededIssues.length > 0) {
+      core.info(`Loaded ${seededIssues.length} preexisting issues from ${config.outputFile}`);
+    }
+  }
+
   core.info('');
 
   // --- THE RELENTLESS LOOP ---
@@ -279,20 +290,28 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       .slice(-20)
       .map(i => `[${i.type}] ${i.file}: ${i.description}`);
 
-    // SCAN
-    core.info('');
-    core.info(`Scanning repository (${config.agent})...`);
-    const scanStart = Date.now();
-    const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan), {
-      maxTurns: config.maxTurns.scan,
-      model: config.model || undefined,
-      timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
-      verbose: config.verbose,
-    });
-    const scanDuration = formatDuration(Date.now() - scanStart);
+    // SCAN (or use seeded issues from a prior scan output file)
+    let found: Issue[];
+    if (seededIssues.length > 0 && state.pass === 1) {
+      found = seededIssues;
+      seededIssues = []; // consume them so subsequent passes scan fresh
+      core.info('');
+      core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
+    } else {
+      core.info('');
+      core.info(`Scanning repository (${config.agent})...`);
+      const scanStart = Date.now();
+      const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan), {
+        maxTurns: config.maxTurns.scan,
+        model: config.model || undefined,
+        timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
+        verbose: config.verbose,
+      });
+      const scanDuration = formatDuration(Date.now() - scanStart);
 
-    const found = parseIssues(scanResult.output);
-    core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+      found = parseIssues(scanResult.output);
+      core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+    }
 
     if (found.length > 0) {
       // Log issue summary
@@ -399,6 +418,12 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     core.info('-'.repeat(50));
 
     saveCheckpoint(state);
+
+    if (config.outputFile) {
+      const remaining = state.issues.filter(i => i.status !== 'fixed');
+      const currentScore = calculateScore(remaining);
+      writeOutputFile(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || calculateScore(state.issues));
+    }
   }
 
   // Calculate scores

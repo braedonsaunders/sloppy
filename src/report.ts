@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LoopState, ScanResult, Issue, HistoryEntry } from './types';
+import { LoopState, ScanResult, Issue, HistoryEntry, SloppyConfig } from './types';
 
 // --- Helpers ---
 
@@ -307,4 +307,56 @@ export function appendHistory(entry: HistoryEntry): HistoryEntry[] {
   history.push(entry);
   fs.writeFileSync(file, JSON.stringify(history, null, 2));
   return history;
+}
+
+// --- Output File ---
+
+export interface OutputFilePayload {
+  version: 1;
+  date: string;
+  mode: 'scan' | 'fix';
+  score: number;
+  scoreBefore?: number;
+  issues: Issue[];
+}
+
+export function writeOutputFile(
+  filePath: string,
+  issues: Issue[],
+  mode: 'scan' | 'fix',
+  score: number,
+  scoreBefore?: number,
+): string {
+  const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+  const dir = path.dirname(resolved);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const payload: OutputFilePayload = {
+    version: 1,
+    date: new Date().toISOString(),
+    mode,
+    score,
+    ...(scoreBefore !== undefined && { scoreBefore }),
+    issues,
+  };
+
+  fs.writeFileSync(resolved, JSON.stringify(payload, null, 2));
+  core.info(`Issues written to ${resolved} (${issues.length} issues)`);
+  return resolved;
+}
+
+export function loadOutputFile(filePath: string): Issue[] {
+  const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+
+  if (!fs.existsSync(resolved)) return [];
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(resolved, 'utf-8')) as OutputFilePayload;
+    if (!raw.issues || !Array.isArray(raw.issues)) return [];
+    return raw.issues;
+  } catch {
+    return [];
+  }
 }
