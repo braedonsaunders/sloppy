@@ -402,17 +402,75 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     }
 
     // ================================================================
-    // LAYER 1: Fingerprint scan (compact representations, ~3-5 API calls)
+    // LAYER 1: AI scan — strategy depends on file count
+    //
+    // PR / small sets (≤15 files): deep scan with full file contents.
+    //   Accuracy matters more than speed when the set is small, and
+    //   full content fits in a handful of API calls anyway.
+    //
+    // Full repo / large sets (>15 files): fingerprint scan.
+    //   Compact representations (~100 tokens/file) let us pack 20+
+    //   files per request, cutting 33 API calls to 3-5.
     // ================================================================
-    core.info('');
-    core.info('── Layer 1: Fingerprint Scan ──');
-    const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
-    allIssues.push(...fpResult.issues);
-    totalTokens += fpResult.tokens;
-    totalApiCalls += fpResult.apiCalls;
+    const DEEP_SCAN_THRESHOLD = 15;
+    const useDeepScan = filesToScan.length <= DEEP_SCAN_THRESHOLD;
+    let aiIssues: Issue[] = [];
+
+    if (useDeepScan) {
+      core.info('');
+      core.info(`── Layer 1: Deep Scan (${filesToScan.length} files — full content) ──`);
+
+      const modelLimit = getModelInputLimit(config.githubModelsModel);
+      const codeBudget = calculateCodeBudget(modelLimit);
+      const chunks = prepareChunks(filesToScan, cwd, config.githubModelsModel);
+
+      const compressedCount = chunks.reduce(
+        (n, c) => n + c.files.filter(f => f.compressed).length, 0,
+      );
+      core.info(`  ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
+      core.info('');
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkStart = Date.now();
+        const chunkFileNames = chunks[i].files.map(f => f.relativePath);
+        const progress = Math.round(((i + 1) / chunks.length) * 100);
+        const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
+        const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+        core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
+
+        try {
+          const { issues: chunkIssues, tokens } = await scanChunk(
+            chunks[i], i + 1, chunks.length, config.githubModelsModel,
+          );
+          totalTokens += tokens;
+          totalApiCalls++;
+          aiIssues.push(...chunkIssues);
+
+          const elapsed = formatDuration(Date.now() - chunkStart);
+          if (chunkIssues.length > 0) {
+            core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+          } else {
+            core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+          }
+        } catch (e) {
+          core.warning(`         FAILED: ${e}`);
+        }
+
+        if (i < chunks.length - 1) await sleep(4500);
+      }
+    } else {
+      core.info('');
+      core.info(`── Layer 1: Fingerprint Scan (${filesToScan.length} files — compact) ──`);
+      const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
+      aiIssues = fpResult.issues;
+      totalTokens += fpResult.tokens;
+      totalApiCalls += fpResult.apiCalls;
+    }
+
+    allIssues.push(...aiIssues);
 
     // Update cache with new results
-    const newIssues = [...localIssues, ...fpResult.issues];
+    const newIssues = [...localIssues, ...aiIssues];
     updateCacheEntries(cache, newIssues, filesToScan, cwd);
     saveCache(cwd, cache);
   }
