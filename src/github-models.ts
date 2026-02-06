@@ -24,6 +24,14 @@ interface ResponseFormat {
   };
 }
 
+/** Thrown when the request body exceeds the model's input token limit (HTTP 413). */
+export class TokenLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TokenLimitError';
+  }
+}
+
 function getGitHubToken(): string {
   const token =
     process.env.GITHUB_TOKEN ||
@@ -114,6 +122,12 @@ export async function callGitHubModels(
 
     // Handle other errors
     const text = await response.text();
+    if (response.status === 413) {
+      throw new TokenLimitError(
+        `Request body too large for ${model}. The chunk exceeds the model's input token limit. ` +
+        `Response: ${text.slice(0, 200)}`,
+      );
+    }
     if (response.status === 401 || response.status === 403) {
       throw new Error(
         `GitHub Models auth failed (${response.status}). Ensure your workflow has:\n` +

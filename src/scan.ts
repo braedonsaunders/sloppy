@@ -2,8 +2,17 @@ import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as github from '@actions/github';
-import { callGitHubModels } from './github-models';
+import { callGitHubModels, TokenLimitError } from './github-models';
 import { SloppyConfig, Issue, ScanResult, IssueType, Severity } from './types';
+import {
+  prepareChunks,
+  buildSmartPrompt,
+  compressFile,
+  estimateTokens,
+  getModelInputLimit,
+  calculateCodeBudget,
+  SmartChunk,
+} from './smart-split';
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -111,79 +120,6 @@ async function collectPrFiles(cwd: string): Promise<string[] | null> {
   }
 }
 
-// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
-// Larger chunks = fewer API requests = less likely to hit rate limits.
-function chunkFiles(files: string[], maxChars: number = 32000): string[][] {
-  const chunks: string[][] = [];
-  let current: string[] = [];
-  let size = 0;
-
-  for (const file of files) {
-    try {
-      const len = fs.statSync(file).size;
-      if (len > maxChars) {
-        chunks.push([file]);
-        continue;
-      }
-      if (size + len > maxChars && current.length > 0) {
-        chunks.push(current);
-        current = [];
-        size = 0;
-      }
-      current.push(file);
-      size += len;
-    } catch {
-      continue;
-    }
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
-}
-
-function buildPrompt(files: string[], cwd: string, chunkNum: number, totalChunks: number): string {
-  const fileList = files.map(f => path.relative(cwd, f));
-  let prompt = `Analyze chunk ${chunkNum}/${totalChunks} for code quality issues.
-
-FILES IN THIS CHUNK:
-${fileList.map(f => `  - ${f}`).join('\n')}
-
-ISSUE CATEGORIES:
-  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal
-  bugs        — null derefs, off-by-one, race conditions, wrong logic, unhandled errors
-  types       — type mismatches, unsafe casts, missing generics, any-typed values
-  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
-  dead-code   — functions/classes/exports never called or imported
-  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
-  duplicates  — copy-pasted logic that should be a shared function
-  coverage    — public functions with zero test coverage, untested error paths
-
-SEVERITY GUIDE:
-  critical — exploitable in production (data loss, auth bypass, RCE)
-  high     — will cause bugs in normal usage
-  medium   — code smell, maintainability risk
-  low      — style nit, minor improvement
-
-RULES:
-- Only report REAL issues. No false positives. No style preferences.
-- Be specific: exact file, exact line number, exact description.
-- If a file looks clean, return an empty issues array.
-
-SOURCE CODE:
-
-`;
-  for (const file of files) {
-    const rel = path.relative(cwd, file);
-    try {
-      let content = fs.readFileSync(file, 'utf-8');
-      if (content.length > 12000) content = content.slice(0, 12000) + '\n...(truncated)';
-      prompt += `--- ${rel} ---\n${content}\n\n`;
-    } catch {
-      continue;
-    }
-  }
-  return prompt;
-}
-
 function parseIssues(content: string): Issue[] {
   try {
     const data = JSON.parse(content);
@@ -237,6 +173,78 @@ function formatDuration(ms: number): string {
   const m = Math.floor(s / 60);
   const rem = s % 60;
   return rem > 0 ? `${m}m${rem}s` : `${m}m`;
+}
+
+/**
+ * Scan a single chunk, with automatic retry on 413 (token limit exceeded).
+ *
+ * On 413, the chunk is split in half and each half is retried independently.
+ * Files in the oversized half are further compressed before retrying.
+ * This provides resilience against token estimation inaccuracies.
+ */
+async function scanChunk(
+  chunk: SmartChunk,
+  chunkNum: number,
+  totalChunks: number,
+  model: string,
+  depth: number = 0,
+): Promise<{ issues: Issue[]; tokens: number }> {
+  const prompt = buildSmartPrompt(chunk, chunkNum, totalChunks);
+
+  try {
+    const { content, tokens } = await callGitHubModels(
+      [
+        { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+        { role: 'user', content: prompt },
+      ],
+      model,
+      { responseFormat: ISSUES_SCHEMA },
+    );
+    return { issues: parseIssues(content), tokens };
+  } catch (e) {
+    if (!(e instanceof TokenLimitError) || depth >= 2) throw e;
+
+    // 413 recovery: split the chunk and compress files further.
+    core.info(`       Token limit hit — auto-splitting chunk and compressing (depth ${depth + 1})`);
+
+    const modelLimit = getModelInputLimit(model);
+    const halfBudget = Math.floor(calculateCodeBudget(modelLimit) * 0.45); // 45% each half for safety
+
+    const mid = Math.ceil(chunk.files.length / 2);
+    const halves = [chunk.files.slice(0, mid), chunk.files.slice(mid)];
+    let allIssues: Issue[] = [];
+    let allTokens = 0;
+
+    for (const half of halves) {
+      if (half.length === 0) continue;
+
+      // Compress each file to fit the reduced budget
+      const perFileBudget = Math.floor(halfBudget / half.length);
+      for (const f of half) {
+        if (f.content.length > perFileBudget) {
+          const ext = path.extname(f.relativePath).toLowerCase();
+          const result = compressFile(f.content, ext, perFileBudget);
+          f.content = result.content;
+          f.tokens = estimateTokens(f.content);
+          f.compressed = true;
+        }
+      }
+
+      const subChunk: SmartChunk = {
+        files: half,
+        totalCodeTokens: half.reduce((s, f) => s + f.tokens, 0),
+        manifest: chunk.manifest,
+      };
+
+      const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1);
+      allIssues.push(...result.issues);
+      allTokens += result.tokens;
+
+      if (halves.indexOf(half) === 0) await sleep(4500);
+    }
+
+    return { issues: allIssues, tokens: allTokens };
+  }
 }
 
 export async function runScan(config: SloppyConfig): Promise<ScanResult> {
@@ -295,8 +303,15 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     .join(', ');
   core.info(`File types: ${topExts}`);
 
-  const chunks = chunkFiles(files);
-  core.info(`Split into ${chunks.length} chunks for analysis`);
+  // Smart chunking: token-aware, dependency-grouped, with compression + manifest
+  const modelLimit = getModelInputLimit(config.githubModelsModel);
+  const codeBudget = calculateCodeBudget(modelLimit);
+  const chunks = prepareChunks(files, cwd, config.githubModelsModel);
+
+  const compressedCount = chunks.reduce(
+    (n, c) => n + c.files.filter(f => f.compressed).length, 0,
+  );
+  core.info(`Split into ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
   core.info('');
 
   const allIssues: Issue[] = [];
@@ -306,21 +321,17 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkStart = Date.now();
-    const chunkFileNames = chunks[i].map(f => path.relative(cwd, f));
+    const chunkFileNames = chunks[i].files.map(f => f.relativePath);
     const progress = Math.round(((i + 1) / chunks.length) * 100);
-    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}`);
+    const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
+    const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
 
     try {
-      const { content, tokens } = await callGitHubModels(
-        [
-          { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
-          { role: 'user', content: buildPrompt(chunks[i], cwd, i + 1, chunks.length) },
-        ],
-        config.githubModelsModel,
-        { responseFormat: ISSUES_SCHEMA },
+      const { issues: chunkIssues, tokens } = await scanChunk(
+        chunks[i], i + 1, chunks.length, config.githubModelsModel,
       );
       totalTokens += tokens;
-      const chunkIssues = parseIssues(content);
       allIssues.push(...chunkIssues);
       successCount++;
 
