@@ -86,6 +86,10 @@ try {
     },
   })) {
     process.stdout.write(JSON.stringify(msg) + '\\n');
+    // The SDK generator may not terminate after the result event,
+    // causing the process to hang until timeout. Break immediately
+    // once we have the result.
+    if (msg.type === 'result') break;
   }
 } catch (err) {
   if (err.name === 'AbortError') {
