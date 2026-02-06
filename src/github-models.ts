@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
+const MAX_RETRIES = 4;
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -41,9 +42,13 @@ function getGitHubToken(): string {
   return token;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export async function callGitHubModels(
   messages: ChatMessage[],
-  model: string = 'openai/gpt-4o',
+  model: string = 'openai/gpt-4o-mini',
   options?: { maxTokens?: number; responseFormat?: ResponseFormat },
 ): Promise<{ content: string; tokens: number }> {
   const token = getGitHubToken();
@@ -60,16 +65,54 @@ export async function callGitHubModels(
     body.response_format = options.responseFormat;
   }
 
-  const response = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body),
-  });
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
 
-  if (!response.ok) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as ChatResponse;
+      if (data.error) throw new Error(`GitHub Models: ${data.error.message}`);
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        tokens: data.usage?.total_tokens || 0,
+      };
+    }
+
+    // Handle rate limiting with retry
+    if (response.status === 429) {
+      if (attempt === MAX_RETRIES) {
+        throw new Error(
+          `GitHub Models rate limit exceeded after ${MAX_RETRIES} retries. ` +
+          'Try using a smaller model (openai/gpt-4o-mini gets 3x the quota of gpt-4o), ' +
+          'or reduce chunk count by increasing chunk size.',
+        );
+      }
+
+      // Respect Retry-After header if present, otherwise exponential backoff
+      const retryAfter = response.headers.get('retry-after');
+      let waitMs: number;
+      if (retryAfter) {
+        waitMs = (parseInt(retryAfter) || 10) * 1000;
+      } else {
+        // Exponential backoff: 5s, 15s, 30s, 60s
+        waitMs = Math.min(60000, 5000 * Math.pow(3, attempt));
+      }
+
+      const waitSec = Math.ceil(waitMs / 1000);
+      core.info(`       Rate limited (429). Waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+      await sleep(waitMs);
+      continue;
+    }
+
+    // Handle other errors
     const text = await response.text();
     if (response.status === 401 || response.status === 403) {
       throw new Error(
@@ -83,11 +126,6 @@ export async function callGitHubModels(
     throw new Error(`GitHub Models API error ${response.status}: ${text.slice(0, 300)}`);
   }
 
-  const data = (await response.json()) as ChatResponse;
-  if (data.error) throw new Error(`GitHub Models: ${data.error.message}`);
-
-  return {
-    content: data.choices?.[0]?.message?.content || '',
-    tokens: data.usage?.total_tokens || 0,
-  };
+  // Should not reach here, but TypeScript needs it
+  throw new Error('GitHub Models: unexpected retry loop exit');
 }

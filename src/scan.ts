@@ -68,7 +68,9 @@ function collectFiles(dir: string, files: string[] = []): string[] {
   return files;
 }
 
-function chunkFiles(files: string[], maxChars: number = 24000): string[][] {
+// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
+// Larger chunks = fewer API requests = less likely to hit rate limits.
+function chunkFiles(files: string[], maxChars: number = 32000): string[][] {
   const chunks: string[][] = [];
   let current: string[] = [];
   let size = 0;
@@ -182,6 +184,10 @@ export function calculateScore(issues: Issue[]): number {
   return Math.max(0, Math.min(100, score));
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -261,6 +267,13 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     } catch (e) {
       failCount++;
       core.warning(`       FAILED: ${e}`);
+    }
+
+    // Space out requests to stay under RPM limits.
+    // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
+    // The retry logic in github-models.ts handles 429s, but spacing prevents them.
+    if (i < chunks.length - 1) {
+      await sleep(4500);
     }
   }
 

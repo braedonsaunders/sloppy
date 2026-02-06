@@ -131,27 +131,84 @@ export async function writeJobSummary(data: ScanResult | LoopState): Promise<voi
     md += `### Score: ${r.score}/100 — ${scoreGrade(r.score)}\n\n`;
     md += `${progressBar(r.score)} ${r.score}/100\n\n`;
     md += `${r.summary}\n\n`;
+
     if (r.issues.length > 0) {
+      // Issue summary table
+      md += `| Type | Count | Worst Severity |\n|------|-------|---------|\n`;
+      for (const [type, issues] of Object.entries(groupBy(r.issues))) {
+        const worst = issues.reduce((w, i) => {
+          const order = ['critical', 'high', 'medium', 'low'];
+          return order.indexOf(i.severity) < order.indexOf(w) ? i.severity : w;
+        }, 'low' as string);
+        md += `| ${type} | ${issues.length} | ${worst} |\n`;
+      }
+      md += '\n';
+
+      // Full issues list (collapsible)
+      md += `<details>\n<summary>All issues (${r.issues.length})</summary>\n\n`;
+      md += `| Severity | Type | File | Line | Description |\n|----------|------|------|------|-------------|\n`;
+      const sorted = [...r.issues].sort((a, b) => {
+        const order = ['critical', 'high', 'medium', 'low'];
+        return order.indexOf(a.severity) - order.indexOf(b.severity);
+      });
+      for (const i of sorted) {
+        md += `| ${i.severity} | ${i.type} | \`${i.file}\` | ${i.line || '-'} | ${i.description} |\n`;
+      }
+      md += `\n</details>\n\n`;
+
+      // Mermaid pie chart
       md += `\`\`\`mermaid\npie title Issues by Type\n`;
       for (const [type, issues] of Object.entries(groupBy(r.issues))) {
         md += `    "${type}" : ${issues.length}\n`;
       }
-      md += `\`\`\`\n`;
+      md += `\`\`\`\n\n`;
     }
+
+    md += `---\n*Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more](https://github.com/braedonsaunders/sloppy)*\n`;
   } else {
     const s = data as LoopState;
     const dur = s.passes.reduce((sum, p) => sum + p.durationMs, 0);
     const d = s.scoreAfter - s.scoreBefore;
     md += `### Score: ${s.scoreBefore} → ${s.scoreAfter} (${d >= 0 ? '+' : ''}${d})\n\n`;
     md += `${progressBar(s.scoreAfter)} ${s.scoreAfter}/100\n\n`;
-    md += `**${s.passes.length} passes** | **${s.totalFixed} fixed** | **${s.totalSkipped} skipped** | **${fmtDuration(dur)}**\n\n`;
+    md += `| Metric | Value |\n|--------|-------|\n`;
+    md += `| Passes | ${s.passes.length} |\n`;
+    md += `| Fixed | **${s.totalFixed}** |\n`;
+    md += `| Skipped | ${s.totalSkipped} |\n`;
+    md += `| Duration | ${fmtDuration(dur)} |\n\n`;
+
     if (s.totalFixed > 0) {
+      const fixed = s.issues.filter(i => i.status === 'fixed');
+      const byType = groupBy(fixed);
+
+      md += `<details open>\n<summary>Fixed issues (${fixed.length})</summary>\n\n`;
+      for (const [type, issues] of Object.entries(byType)) {
+        md += `**${type}** (${issues.length})\n\n`;
+        md += `| File | Issue | Commit |\n|------|-------|--------|\n`;
+        for (const i of issues) {
+          const sha = i.commitSha?.slice(0, 7) || '-';
+          md += `| \`${i.file}:${i.line || '?'}\` | ${i.description} | \`${sha}\` |\n`;
+        }
+        md += '\n';
+      }
+      md += `</details>\n\n`;
+
       md += `\`\`\`mermaid\npie title Fixed by Type\n`;
-      for (const [type, issues] of Object.entries(groupBy(s.issues.filter(i => i.status === 'fixed')))) {
+      for (const [type, issues] of Object.entries(byType)) {
         md += `    "${type}" : ${issues.length}\n`;
       }
-      md += `\`\`\`\n`;
+      md += `\`\`\`\n\n`;
     }
+
+    // Pass breakdown
+    md += `<details>\n<summary>Pass breakdown</summary>\n\n`;
+    md += `| Pass | Found | Fixed | Skipped | Duration |\n|------|-------|-------|---------|----------|\n`;
+    for (const p of s.passes) {
+      md += `| ${p.number} | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+    }
+    md += `\n</details>\n\n`;
+
+    md += `---\n*[Sloppy](https://github.com/braedonsaunders/sloppy) — relentless AI code cleanup*\n`;
   }
 
   await core.summary.addRaw(md).write();

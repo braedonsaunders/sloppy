@@ -30257,7 +30257,7 @@ function getConfig() {
             .split(',').map(s => s.trim()),
         strictness: (core.getInput('strictness') || 'high'),
         model: core.getInput('model') || '',
-        githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
+        githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
         testCommand: core.getInput('test-command') || '',
         failBelow: parseInt(core.getInput('fail-below') || '0'),
         verbose: core.getInput('verbose') === 'true',
@@ -30405,7 +30405,7 @@ function deployDashboard(history) {
     if (!fs.existsSync(dir))
         fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'index.html'), generateDashboard(history));
-    core.info('Dashboard generated at .sloppy/site/index.html');
+    core.info('Dashboard written to .sloppy/site/index.html (upload with actions/upload-artifact to download)');
 }
 
 
@@ -30453,6 +30453,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.callGitHubModels = callGitHubModels;
 const core = __importStar(__nccwpck_require__(7484));
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
+const MAX_RETRIES = 4;
 function getGitHubToken() {
     const token = process.env.GITHUB_TOKEN ||
         process.env.INPUT_GITHUB_TOKEN ||
@@ -30466,7 +30467,10 @@ function getGitHubToken() {
     }
     return token;
 }
-async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options) {
     const token = getGitHubToken();
     const maxTokens = options?.maxTokens ?? 4000;
     const body = {
@@ -30478,15 +30482,48 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
     if (options?.responseFormat) {
         body.response_format = options.responseFormat;
     }
-    const response = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-    });
-    if (!response.ok) {
+    const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+    };
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const response = await fetch(ENDPOINT, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        });
+        if (response.ok) {
+            const data = (await response.json());
+            if (data.error)
+                throw new Error(`GitHub Models: ${data.error.message}`);
+            return {
+                content: data.choices?.[0]?.message?.content || '',
+                tokens: data.usage?.total_tokens || 0,
+            };
+        }
+        // Handle rate limiting with retry
+        if (response.status === 429) {
+            if (attempt === MAX_RETRIES) {
+                throw new Error(`GitHub Models rate limit exceeded after ${MAX_RETRIES} retries. ` +
+                    'Try using a smaller model (openai/gpt-4o-mini gets 3x the quota of gpt-4o), ' +
+                    'or reduce chunk count by increasing chunk size.');
+            }
+            // Respect Retry-After header if present, otherwise exponential backoff
+            const retryAfter = response.headers.get('retry-after');
+            let waitMs;
+            if (retryAfter) {
+                waitMs = (parseInt(retryAfter) || 10) * 1000;
+            }
+            else {
+                // Exponential backoff: 5s, 15s, 30s, 60s
+                waitMs = Math.min(60000, 5000 * Math.pow(3, attempt));
+            }
+            const waitSec = Math.ceil(waitMs / 1000);
+            core.info(`       Rate limited (429). Waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+            await sleep(waitMs);
+            continue;
+        }
+        // Handle other errors
         const text = await response.text();
         if (response.status === 401 || response.status === 403) {
             throw new Error(`GitHub Models auth failed (${response.status}). Ensure your workflow has:\n` +
@@ -30497,13 +30534,8 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
         }
         throw new Error(`GitHub Models API error ${response.status}: ${text.slice(0, 300)}`);
     }
-    const data = (await response.json());
-    if (data.error)
-        throw new Error(`GitHub Models: ${data.error.message}`);
-    return {
-        content: data.choices?.[0]?.message?.content || '',
-        tokens: data.usage?.total_tokens || 0,
-    };
+    // Should not reach here, but TypeScript needs it
+    throw new Error('GitHub Models: unexpected retry loop exit');
 }
 
 
@@ -30581,6 +30613,10 @@ async function run() {
             await (0, report_1.postScanComment)(result);
             await (0, report_1.writeJobSummary)(result);
             await (0, report_1.updateBadge)(result.score);
+            // Point users to the Job Summary (native GitHub UI)
+            const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            core.notice(`Sloppy scan complete — score: ${result.score}/100. View full results in the Job Summary tab.`);
+            core.setOutput('summary-url', runUrl);
             const byType = {};
             for (const i of result.issues)
                 byType[i.type] = (byType[i.type] || 0) + 1;
@@ -30623,6 +30659,10 @@ async function run() {
                 core.setOutput('pr-url', prUrl);
             await (0, report_1.writeJobSummary)(state);
             await (0, report_1.updateBadge)(state.scoreAfter);
+            // Point users to the Job Summary (native GitHub UI)
+            const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            core.notice(`Sloppy fix complete — score: ${state.scoreBefore} → ${state.scoreAfter}. View full results in the Job Summary tab.`);
+            core.setOutput('summary-url', runUrl);
             const byType = {};
             for (const i of state.issues.filter(i => i.status === 'fixed')) {
                 byType[i.type] = (byType[i.type] || 0) + 1;
@@ -31273,12 +31313,35 @@ async function writeJobSummary(data) {
         md += `${progressBar(r.score)} ${r.score}/100\n\n`;
         md += `${r.summary}\n\n`;
         if (r.issues.length > 0) {
+            // Issue summary table
+            md += `| Type | Count | Worst Severity |\n|------|-------|---------|\n`;
+            for (const [type, issues] of Object.entries(groupBy(r.issues))) {
+                const worst = issues.reduce((w, i) => {
+                    const order = ['critical', 'high', 'medium', 'low'];
+                    return order.indexOf(i.severity) < order.indexOf(w) ? i.severity : w;
+                }, 'low');
+                md += `| ${type} | ${issues.length} | ${worst} |\n`;
+            }
+            md += '\n';
+            // Full issues list (collapsible)
+            md += `<details>\n<summary>All issues (${r.issues.length})</summary>\n\n`;
+            md += `| Severity | Type | File | Line | Description |\n|----------|------|------|------|-------------|\n`;
+            const sorted = [...r.issues].sort((a, b) => {
+                const order = ['critical', 'high', 'medium', 'low'];
+                return order.indexOf(a.severity) - order.indexOf(b.severity);
+            });
+            for (const i of sorted) {
+                md += `| ${i.severity} | ${i.type} | \`${i.file}\` | ${i.line || '-'} | ${i.description} |\n`;
+            }
+            md += `\n</details>\n\n`;
+            // Mermaid pie chart
             md += `\`\`\`mermaid\npie title Issues by Type\n`;
             for (const [type, issues] of Object.entries(groupBy(r.issues))) {
                 md += `    "${type}" : ${issues.length}\n`;
             }
-            md += `\`\`\`\n`;
+            md += `\`\`\`\n\n`;
         }
+        md += `---\n*Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more](https://github.com/braedonsaunders/sloppy)*\n`;
     }
     else {
         const s = data;
@@ -31286,14 +31349,39 @@ async function writeJobSummary(data) {
         const d = s.scoreAfter - s.scoreBefore;
         md += `### Score: ${s.scoreBefore} → ${s.scoreAfter} (${d >= 0 ? '+' : ''}${d})\n\n`;
         md += `${progressBar(s.scoreAfter)} ${s.scoreAfter}/100\n\n`;
-        md += `**${s.passes.length} passes** | **${s.totalFixed} fixed** | **${s.totalSkipped} skipped** | **${fmtDuration(dur)}**\n\n`;
+        md += `| Metric | Value |\n|--------|-------|\n`;
+        md += `| Passes | ${s.passes.length} |\n`;
+        md += `| Fixed | **${s.totalFixed}** |\n`;
+        md += `| Skipped | ${s.totalSkipped} |\n`;
+        md += `| Duration | ${fmtDuration(dur)} |\n\n`;
         if (s.totalFixed > 0) {
+            const fixed = s.issues.filter(i => i.status === 'fixed');
+            const byType = groupBy(fixed);
+            md += `<details open>\n<summary>Fixed issues (${fixed.length})</summary>\n\n`;
+            for (const [type, issues] of Object.entries(byType)) {
+                md += `**${type}** (${issues.length})\n\n`;
+                md += `| File | Issue | Commit |\n|------|-------|--------|\n`;
+                for (const i of issues) {
+                    const sha = i.commitSha?.slice(0, 7) || '-';
+                    md += `| \`${i.file}:${i.line || '?'}\` | ${i.description} | \`${sha}\` |\n`;
+                }
+                md += '\n';
+            }
+            md += `</details>\n\n`;
             md += `\`\`\`mermaid\npie title Fixed by Type\n`;
-            for (const [type, issues] of Object.entries(groupBy(s.issues.filter(i => i.status === 'fixed')))) {
+            for (const [type, issues] of Object.entries(byType)) {
                 md += `    "${type}" : ${issues.length}\n`;
             }
-            md += `\`\`\`\n`;
+            md += `\`\`\`\n\n`;
         }
+        // Pass breakdown
+        md += `<details>\n<summary>Pass breakdown</summary>\n\n`;
+        md += `| Pass | Found | Fixed | Skipped | Duration |\n|------|-------|-------|---------|----------|\n`;
+        for (const p of s.passes) {
+            md += `| ${p.number} | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+        }
+        md += `\n</details>\n\n`;
+        md += `---\n*[Sloppy](https://github.com/braedonsaunders/sloppy) — relentless AI code cleanup*\n`;
     }
     await core.summary.addRaw(md).write();
 }
@@ -31499,7 +31587,9 @@ function collectFiles(dir, files = []) {
     }
     return files;
 }
-function chunkFiles(files, maxChars = 24000) {
+// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
+// Larger chunks = fewer API requests = less likely to hit rate limits.
+function chunkFiles(files, maxChars = 32000) {
     const chunks = [];
     let current = [];
     let size = 0;
@@ -31615,6 +31705,9 @@ function calculateScore(issues) {
     }
     return Math.max(0, Math.min(100, score));
 }
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 function formatDuration(ms) {
     const s = Math.floor(ms / 1000);
     if (s < 60)
@@ -31683,6 +31776,12 @@ async function runScan(config) {
         catch (e) {
             failCount++;
             core.warning(`       FAILED: ${e}`);
+        }
+        // Space out requests to stay under RPM limits.
+        // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
+        // The retry logic in github-models.ts handles 429s, but spacing prevents them.
+        if (i < chunks.length - 1) {
+            await sleep(4500);
         }
     }
     // Deduplicate

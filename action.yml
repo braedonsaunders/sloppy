@@ -54,7 +54,7 @@ inputs:
   github-models-model:
     description: 'Model for free scan tier via GitHub Models'
     required: false
-    default: 'openai/gpt-4o'
+    default: 'openai/gpt-4o-mini'
   test-command:
     description: 'Custom test command (auto-detected if empty)'
     required: false
@@ -99,6 +99,8 @@ outputs:
     description: 'Total issues fixed'
   pr-url:
     description: 'URL of the created pull request'
+  summary-url:
+    description: 'URL to the Job Summary with full results'
 
 runs:
   using: 'node20'

@@ -33,7 +33,7 @@ export function getConfig(): SloppyConfig {
       .split(',').map(s => s.trim()) as IssueType[],
     strictness: (core.getInput('strictness') || 'high') as 'low' | 'medium' | 'high',
     model: core.getInput('model') || '',
-    githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
+    githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
     testCommand: core.getInput('test-command') || '',
     failBelow: parseInt(core.getInput('fail-below') || '0'),
     verbose: core.getInput('verbose') === 'true',
