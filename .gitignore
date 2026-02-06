@@ -1,55 +1,8 @@
-# Dependencies
 node_modules/
-.pnpm-store/
-
-# Build outputs
-dist/
-build/
-*.tsbuildinfo
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-logs/
 *.log
-npm-debug.log*
-pnpm-debug.log*
-
-# Test coverage (but not source code in coverage/ dirs)
-/coverage/
-**/coverage/*.json
-**/coverage/*.info
-**/coverage/lcov-report/
-!packages/*/src/coverage/
-
-# Database
-*.db
-*.db-journal
-*.sqlite
-*.sqlite3
-
-# Temporary files
-tmp/
-temp/
-.tmp/
-
-# Turbo
+.env
+.env.*
+.DS_Store
+*.tgz
 .turbo/
-
-# Sloppy data
-data/
-repos/
+*.tsbuildinfo

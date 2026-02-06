@@ -1,333 +1,413 @@
 <p align="center">
-  <img src="./sloppy-logo.png" alt="Sloppy - AI Code Janitor" width="400" />
+  <img src="./sloppy-logo.png" alt="Sloppy" width="400" />
+</p>
+
+<h3 align="center">The GitHub Action that relentlessly cleans your code using AI.</h3>
+
+<p align="center">
+  Free scan. No API key. No config. Just add the action.
 </p>
 
 <p align="center">
-  <strong>Your AI writes code. Sloppy makes it production-ready.</strong>
+  <a href="https://github.com/braedonsaunders/sloppy/stargazers"><img src="https://img.shields.io/github/stars/braedonsaunders/sloppy?style=flat&color=yellow" alt="GitHub Stars" /></a>
+  <a href="https://github.com/braedonsaunders/sloppy/blob/main/LICENSE"><img src="https://img.shields.io/github/license/braedonsaunders/sloppy?color=blue" alt="License" /></a>
+  <a href="https://github.com/marketplace/actions/sloppy"><img src="https://img.shields.io/badge/GitHub%20Action-Marketplace-blue?logo=github" alt="GitHub Marketplace" /></a>
+  <a href="https://github.com/braedonsaunders/sloppy/actions"><img src="https://img.shields.io/github/actions/workflow/status/braedonsaunders/sloppy/ci.yml?label=CI" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/infrastructure_cost-$0-brightgreen" alt="$0 Infrastructure" />
 </p>
 
 <p align="center">
-  <a href="#quickstart">Quickstart</a> •
-  <a href="#features">Features</a> •
-  <a href="#how-it-works">How It Works</a> •
-  <a href="#configuration">Configuration</a> •
-  <a href="https://sloppy.dev/docs">Docs</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License" />
-  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" />
-  <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node >= 22" />
+  <a href="#tldr">TLDR</a> &middot;
+  <a href="#why-sloppy">Why Sloppy</a> &middot;
+  <a href="#how-it-works">How It Works</a> &middot;
+  <a href="#configuration-reference">Configuration</a> &middot;
+  <a href="#the-sloppy-score">Scoring</a> &middot;
+  <a href="#faq">FAQ</a>
 </p>
 
 ---
 
-## The Problem
+## TLDR
 
-You vibe-coded a feature in 10 minutes. Feels great. Ship it?
+Add four lines to your repo. Get a code quality score on every push. Free.
 
-**Not so fast.** That AI-generated code has:
-
-```
-❌ TODO: implement error handling
-❌ 47 TypeScript errors
-❌ Security vulnerabilities (SQL injection on line 234)
-❌ Copy-pasted code everywhere
-❌ Zero test coverage
-❌ Dead code that does nothing
-```
-
-You could spend 3 hours fixing it. Or...
-
-## The Solution
-
-```bash
-npx sloppy
+```yaml
+name: Sloppy
+on: [push, pull_request]
+jobs:
+  sloppy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      models: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: braedonsaunders/sloppy@v1
 ```
 
-**Sloppy turns AI slop into production code.** It finds the mess. It fixes the mess. It commits the fixes. You review and merge.
+That's it. No API key. No config file. No hosted service. Sloppy uses the GitHub Models free tier to scan your repo and report a score from 0 to 100. It posts the results as a PR comment, updates a badge, and tracks history over time -- all inside your repo.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│   🔍 Analyzing...                                          │
-│   ├── Found 12 stub implementations                        │
-│   ├── Found 8 security vulnerabilities                     │
-│   ├── Found 47 type errors                                 │
-│   └── Found 23 lint violations                             │
-│                                                             │
-│   🔧 Fixing...                                             │
-│   ├── ✅ Implemented auth middleware (commit: a3f2b1c)     │
-│   ├── ✅ Fixed SQL injection in user.ts (commit: b4c3d2e)  │
-│   ├── ✅ Resolved type errors (commit: c5d4e3f)            │
-│   └── ✅ Applied ESLint fixes (commit: d6e5f4g)            │
-│                                                             │
-│   📊 Results: 90 issues fixed, 0 tests broken              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-Each fix = one atomic git commit. Don't like a fix? `git revert`. Simple.
+Want it to actually *fix* the issues? Bring your own API key and turn on fix mode. Keep reading.
 
 ---
 
-## Quickstart
+## What You Get
 
-### Automatic Setup (Recommended)
+On every pull request, Sloppy drops a comment like this:
 
-**Windows (PowerShell):**
-```powershell
-.\scripts\setup.ps1
+```
+Sloppy Score: 72 / 100  (was 68)
+
+  CATEGORY        ISSUES    DELTA
+  security           0       -2
+  bugs               3       -1
+  types              5        0
+  lint              12       -4
+  dead-code          4        0
+  stubs              2       -1
+  duplicates         1        0
+  coverage          38%     +3%
+
+  8 issues fixed since last run.
+  3 new issues introduced in this PR.
+
+  Full history: https://yourname.github.io/yourrepo/
 ```
 
-**macOS / Linux:**
-```bash
-chmod +x scripts/setup.sh && ./scripts/setup.sh
-```
-
-### Manual Setup
-
-```bash
-# Install
-pnpm install
-
-# Build
-pnpm build
-
-# Run
-pnpm start
-```
-
-Open `http://localhost:3000`, then go to **Settings** to configure your AI provider.
-
-**See [INSTALL.md](INSTALL.md) for detailed platform-specific instructions.**
+In fix mode, you also get a PR with atomic commits -- one commit per fix, each independently revertible.
 
 ---
 
-## Features
+## Why Sloppy
 
-### 🔍 8 Parallel Analyzers
+**Every other tool does one pass. Sloppy doesn't stop.**
 
-| Analyzer | What It Catches |
-|----------|-----------------|
-| **Stubs** | `TODO`, `FIXME`, empty implementations, placeholder code |
-| **Duplicates** | Copy-pasted code blocks, redundant logic |
-| **Bugs** | Null refs, unreachable code, unused variables |
-| **Types** | TypeScript errors, missing types, `any` abuse |
-| **Lint** | ESLint violations, formatting issues |
-| **Security** | SQL injection, XSS, hardcoded secrets, OWASP Top 10 |
-| **Coverage** | Untested code paths, missing test files |
-| **Dead Code** | Unused exports, unreachable functions |
+Most linters and AI code review tools scan your code once, dump a report, and call it a day. Sloppy runs multiple passes. It scans, fixes, re-scans, finds new issues exposed by the fixes, fixes those, and keeps going until the codebase is actually clean or the budget runs out.
 
-All analyzers run **in parallel**. Full codebase scan in seconds, not minutes.
+Here is what makes it different:
 
-### 🤖 Multi-Provider AI
+| Feature | Other tools | Sloppy |
+|---|---|---|
+| Scan passes | 1 | As many as it takes |
+| Auto-fix | Maybe lint rules | AI-powered logic fixes |
+| Commit style | One giant diff | One commit per issue |
+| Infrastructure | Their servers | Your GitHub Actions runner |
+| Free tier | Limited | Unlimited scans via GitHub Models |
+| Cost to run | Their pricing page | Your API key, your spend cap |
+| Hosting required | Yes | No. Git is the database. |
 
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Claude    │    │   OpenAI    │    │   Ollama    │
-│  (Default)  │    │   GPT-4o    │    │   Local     │
-└─────────────┘    └─────────────┘    └─────────────┘
-        │                 │                  │
-        └────────────────┬──────────────────┘
-                         │
-                         ▼
-              ┌─────────────────┐
-              │  Unified API    │
-              │  Rate Limited   │
-              │  Auto-Retry     │
-              └─────────────────┘
-```
+Other things worth knowing:
 
-Use Claude for quality. Use GPT-4o for speed. Use Ollama for privacy. Switch anytime.
+- **Self-chaining.** If a fix run hits the GitHub Actions 6-hour job limit, Sloppy checkpoints its progress and spawns a new workflow run to continue where it left off. Set `max-chains: 3` and it can run for up to 18 hours across multiple jobs.
 
-### 🎯 Surgical Fixes
+- **Atomic commits.** Every fix is a single commit with a clear message. Don't like a fix? `git revert <sha>`. Done. No untangling a 40-file diff.
 
-Sloppy doesn't rewrite your codebase. It makes **minimal, targeted changes**:
+- **Dashboard via GitHub Pages.** Sloppy writes `history.json` to a `.sloppy/` directory in your repo. Point GitHub Pages at it and you get a score dashboard. Zero hosting.
 
-- Each issue = one focused fix
-- Each fix = one git commit
-- Each commit = independently revertible
+- **Dynamic badge.** Wire up a GitHub Gist and shields.io and your README badge updates on every run. Green when clean, red when not.
 
-Your git history stays clean. Your code reviews stay sane.
-
-### 🛡️ Safety First
-
-```bash
-# Checkpoint before risky changes
-sloppy checkpoint create "before-auth-refactor"
-
-# Something broke?
-sloppy checkpoint restore "before-auth-refactor"
-```
-
-- Automatic checkpoints before destructive operations
-- Test verification after every fix
-- Instant rollback to any checkpoint
-
-### ⚡ Real-Time UI
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/braedonsaunders/sloppy/main/assets/sloppy-ui.png" alt="Sloppy UI" width="800" />
-</p>
-
-Watch fixes happen live. Approve or reject changes. Track metrics over time.
+- **$0 infrastructure.** The creator hosts nothing. There is no server, no database, no SaaS. You bring your own API key. Sloppy runs on your GitHub Actions minutes. That's it.
 
 ---
 
 ## How It Works
 
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Analyze    │────▶│     Fix      │────▶│   Verify     │
-│  (Parallel)  │     │   (AI Gen)   │     │   (Tests)    │
-└──────────────┘     └──────────────┘     └──────────────┘
-       │                    │                    │
-       ▼                    ▼                    ▼
-  Find issues         Generate fix        Run test suite
-  Deduplicate         Apply patch         Check for breaks
-  Prioritize          Commit change       Revert if failed
+Sloppy operates in three tiers. Pick the one that fits.
+
+### Tier 1: Free Scan (no API key)
+
+Sloppy uses the **GitHub Models free tier** (available to all GitHub users) to scan your code and produce a score. No API key, no secrets, no cost.
+
+What you get:
+- Score from 0 to 100 on every push
+- PR comments showing the score and issue breakdown
+- History tracking in `.sloppy/history.json`
+- Badge support via shields.io + gist
+
+What you don't get:
+- Auto-fixes (that requires an AI agent with more capability than the free tier provides)
+
+```yaml
+name: Sloppy
+on: [push, pull_request]
+jobs:
+  sloppy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      models: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: braedonsaunders/sloppy@v1
 ```
 
-**The Loop:**
+### Tier 2: BYOK Fix (API key)
 
-1. **Scan** - Run all 8 analyzers in parallel
-2. **Prioritize** - Sort by severity (security > bugs > types > lint)
-3. **Fix** - AI generates minimal fix for highest priority issue
-4. **Verify** - Run tests to ensure nothing broke
-5. **Commit** - Atomic commit with descriptive message
-6. **Repeat** - Until all issues resolved or time limit hit
+Bring your own Anthropic or OpenAI API key. Sloppy uses **Claude Code CLI** or **OpenAI Codex CLI** to find and fix issues, then opens a PR with atomic commits.
+
+**With Claude (recommended):**
+
+```yaml
+name: Sloppy Fix
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+jobs:
+  sloppy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          mode: fix
+          agent: claude
+          timeout: 30m
+          max-cost: '$5.00'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+**With OpenAI Codex:**
+
+```yaml
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          mode: fix
+          agent: codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+### Tier 3: Claude Max Subscription (OAuth)
+
+If you have a Claude Max subscription, you can use your OAuth token instead of a metered API key. Same capabilities, subscription pricing.
+
+```yaml
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          mode: fix
+          agent: claude
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
 
 ---
 
-## Configuration
+## What Sloppy Catches
 
-### Basic: `sloppy.config.json`
+Eight analysis categories, all running in parallel:
 
-```json
-{
-  "maxTime": "2h",
-  "provider": {
-    "type": "claude",
-    "model": "claude-sonnet-4-20250514"
-  },
-  "strictness": "high",
-  "issues": {
-    "stubs": true,
-    "duplicates": true,
-    "bugs": true,
-    "typeErrors": true,
-    "lintErrors": true,
-    "security": true,
-    "missingTests": true,
-    "deadCode": true
-  }
-}
-```
+| Category | What it finds |
+|---|---|
+| **security** | SQL injection, XSS, hardcoded secrets, dependency vulnerabilities, OWASP Top 10 |
+| **bugs** | Null references, unreachable code, off-by-one errors, race conditions |
+| **types** | TypeScript errors, missing type annotations, `any` abuse, incorrect generics |
+| **lint** | ESLint violations, formatting issues, import order, naming conventions |
+| **dead-code** | Unused exports, unreachable functions, orphaned files, commented-out blocks |
+| **stubs** | `TODO`, `FIXME`, `HACK`, empty function bodies, placeholder implementations |
+| **duplicates** | Copy-pasted logic, redundant utility functions, repeated patterns |
+| **coverage** | Untested code paths, missing test files, low branch coverage |
+
+You can enable or disable any category with the `fix-types` input.
+
+---
+
+## Configuration Reference
+
+All inputs are optional. Sloppy works with zero configuration.
+
+| Input | Default | Description |
+|---|---|---|
+| `mode` | *(empty = scan)* | `scan` (report only) or `fix` (auto-fix + PR) |
+| `agent` | `claude` | AI agent: `claude` or `codex` |
+| `timeout` | `30m` | Max run time. Accepts `30m`, `2h`, `5h50m`. |
+| `max-cost` | `$5.00` | Max API spend per run. Sloppy stops when the budget is hit. |
+| `max-passes` | `10` | Max scan/fix passes before stopping |
+| `min-passes` | `2` | Minimum consecutive clean passes to confirm the repo is truly clean |
+| `max-chains` | `3` | Max self-continuations for long runs (each chain gets up to 6h) |
+| `strictness` | `high` | Issue detection strictness: `low`, `medium`, `high` |
+| `fix-types` | `security,bugs,types,lint,dead-code,stubs,duplicates,coverage` | Comma-separated list of issue types to scan and fix |
+| `model` | *(auto)* | Override the AI model (e.g. `claude-sonnet-4-5-20250929`) |
+| `github-models-model` | `openai/gpt-4o` | Model to use for free scan tier via GitHub Models |
+| `test-command` | *(auto-detected)* | Custom test command. Sloppy auto-detects `npm test`, `pytest`, etc. |
+| `gist-id` | *(empty)* | GitHub Gist ID for dynamic badge updates |
+| `gist-token` | *(empty)* | PAT with `gist` scope for writing badge data |
+| `fail-below` | `0` | Fail the GitHub Actions check if the score drops below this threshold |
+
+### Outputs
+
+| Output | Description |
+|---|---|
+| `score` | Code quality score (0-100) |
+| `score-before` | Score before fixes were applied |
+| `issues-found` | Total number of issues found |
+| `issues-fixed` | Total number of issues fixed |
+| `pr-url` | URL of the created pull request (fix mode only) |
 
 ### Strictness Levels
 
-| Level | Catches | Best For |
-|-------|---------|----------|
-| `low` | Critical bugs, security issues | Quick cleanup |
-| `medium` | + Type errors, lint violations | Regular maintenance |
-| `high` | + Style issues, minor code smells | Production prep |
-
-### Approval Mode
-
-Don't trust AI to commit directly? Enable approval mode:
-
-```json
-{
-  "approvalRequired": true
-}
-```
-
-Every fix pauses for your approval before committing.
+| Level | What it catches | Best for |
+|---|---|---|
+| `low` | Critical security issues, crash-causing bugs | Quick CI gate |
+| `medium` | + type errors, lint violations, dead code | Regular maintenance |
+| `high` | + stubs, duplicates, style issues, coverage gaps | Production readiness |
 
 ---
 
-## Architecture
+## The Sloppy Score
 
-```
-sloppy/
-├── packages/
-│   ├── core/          # Shared types, schemas, utilities
-│   ├── server/        # Fastify API + WebSocket server
-│   ├── ui/            # React dashboard
-│   ├── providers/     # AI providers (Claude, OpenAI, Ollama)
-│   ├── analyzers/     # The 8 code analyzers
-│   └── git/           # Git operations wrapper
-├── turbo.json         # Monorepo orchestration
-└── pnpm-workspace.yaml
+Sloppy produces a single number from **0 to 100** representing your codebase health.
+
+The score is a weighted composite across all eight categories. Security and bugs weigh more than lint and style. A repo with zero critical issues but some lint violations still scores high.
+
+| Score | Color | Meaning |
+|---|---|---|
+| 90 -- 100 | Bright green | Clean. Ship it. |
+| 70 -- 89 | Green | Solid. Minor issues only. |
+| 50 -- 69 | Yellow | Needs attention. Meaningful issues present. |
+| 30 -- 49 | Orange | Significant problems. Fix before shipping. |
+| 0 -- 29 | Red | Critical issues. Do not ship. |
+
+The score is tracked over time in `.sloppy/history.json` inside your repository. Git is the database. You can query it, graph it, or pipe it into anything that reads JSON.
+
+### Using `fail-below` as a CI Gate
+
+```yaml
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          fail-below: '70'
 ```
 
-**Tech Stack:**
-- **Frontend**: React 18, Vite, TailwindCSS, Zustand, TanStack Query
-- **Backend**: Node.js 22+, Fastify, WebSocket, Better SQLite3
-- **Analysis**: TypeScript Compiler API, ESLint, jscpd
-- **Build**: pnpm workspaces, Turborepo
+If the score drops below 70, the action fails and blocks the PR. Use this to enforce a quality floor.
 
 ---
 
-## Roadmap
+## Badge Setup
 
-- [ ] VS Code extension
-- [ ] GitHub Action for CI/CD
-- [ ] Custom analyzer plugins
-- [ ] Team collaboration features
-- [ ] Self-healing mode (auto-fix on file save)
+Show your Sloppy Score in your README with a dynamic badge.
+
+### Step 1: Create a Gist
+
+Create a public GitHub Gist with a file named `sloppy-badge.json`. The content doesn't matter -- Sloppy will overwrite it.
+
+### Step 2: Create a PAT
+
+Create a personal access token with the `gist` scope. Add it as a repository secret named `GIST_TOKEN`.
+
+### Step 3: Configure the Action
+
+```yaml
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          gist-id: 'your-gist-id-here'
+          gist-token: ${{ secrets.GIST_TOKEN }}
+```
+
+### Step 4: Add the Badge
+
+```markdown
+![Sloppy Score](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/YOUR_USERNAME/YOUR_GIST_ID/raw/sloppy-badge.json)
+```
+
+The badge updates automatically on every Sloppy run with the current score and color.
+
+---
+
+## Dashboard
+
+Sloppy writes score history to `.sloppy/history.json` in your repo. To get a visual dashboard:
+
+1. Enable GitHub Pages on your repo (Settings > Pages)
+2. Point it at the branch and directory containing `.sloppy/`
+3. Sloppy includes a static `index.html` dashboard that reads `history.json` and renders score trends
+
+Zero hosting. Zero config. Just GitHub Pages.
 
 ---
 
 ## FAQ
 
-**Q: Will this break my code?**
+**Q: Is the free scan actually free?**
 
-Every fix runs through your test suite. If tests fail, the fix is reverted automatically. Your main branch is never touched—Sloppy works on its own branch.
+Yes. It uses the GitHub Models free tier, which is available to all GitHub users. No API key needed. The `models: read` permission in the workflow grants access. You can scan unlimited repos at no cost.
 
-**Q: How is this different from ESLint --fix?**
+**Q: What's the difference between scan mode and fix mode?**
 
-ESLint fixes formatting. Sloppy fixes *logic*. It implements missing error handling, removes security vulnerabilities, adds missing type annotations, and refactors duplicated code. It uses AI to understand *intent*, not just syntax.
+Scan mode analyzes your code and reports a score. Fix mode does everything scan mode does, then uses an AI coding agent (Claude Code or OpenAI Codex) to actually fix the issues and open a pull request. Scan is free. Fix requires an API key.
 
-**Q: Can I use local models?**
+**Q: Will fix mode break my code?**
 
-Yes. Configure Ollama and use any local model. Your code never leaves your machine.
+Every fix runs through your test suite. If tests fail after a fix, that fix is reverted automatically. Sloppy also commits each fix atomically, so you can `git revert` any individual change. It works on its own branch and opens a PR -- your main branch is never modified directly.
 
-**Q: What about monorepos?**
+**Q: Why multi-pass? Isn't one scan enough?**
 
-Fully supported. Sloppy respects workspace boundaries and only commits changes to affected packages.
+No. Fixing issue A often reveals issue B that was hidden behind it. A function that was dead code becomes reachable after a refactor. A type error surfaces after removing an `any` cast. One pass gives you a partial picture. Sloppy keeps scanning until two consecutive passes find nothing new.
+
+**Q: What happens if a run hits the 6-hour GitHub Actions limit?**
+
+Sloppy checkpoints its progress and triggers a new workflow run to continue. This is called self-chaining. By default it will chain up to 3 times (18 hours total). You can control this with the `max-chains` input.
+
+**Q: How much does fix mode cost?**
+
+It depends on your codebase and the issues found. The `max-cost` input (default: `$5.00`) caps spending per run. A typical medium-sized repo costs $1-3 per fix run. You can also use a Claude Max subscription via OAuth token for flat-rate pricing.
+
+**Q: Where is the data stored?**
+
+In your Git repo. Score history lives in `.sloppy/history.json`. Badge data goes to a GitHub Gist you control. The dashboard is a static page served by GitHub Pages. There is no external database, no third-party server, no telemetry.
+
+**Q: Does the author of Sloppy host anything?**
+
+No. Zero infrastructure. No servers, no databases, no SaaS, no analytics. The action runs entirely on your GitHub Actions runner using your API keys. The author hosts nothing and has no access to your code or data.
+
+**Q: Can I use this with monorepos?**
+
+Yes. Sloppy respects your repository structure and scopes its analysis to the files present. You can configure `fix-types` to focus on specific categories relevant to your project.
+
+**Q: What languages does Sloppy support?**
+
+The free scan tier works with any language supported by GitHub Models. Fix mode supports whatever Claude Code or OpenAI Codex can handle, which covers most mainstream languages. TypeScript-specific checks (type errors, lint) require a TypeScript project.
 
 ---
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. Sloppy is ~2000 lines of TypeScript compiled with `@vercel/ncc` into a single file for the GitHub Action runtime.
 
 ```bash
-# Development
-pnpm install
-pnpm dev
+# Clone
+git clone https://github.com/braedonsaunders/sloppy.git
+cd sloppy
 
-# Run tests
-pnpm test
+# Install
+npm install
+
+# Build
+npm run build
 
 # Type check
-pnpm typecheck
+npm run typecheck
 ```
+
+The compiled output goes to `dist/index.js`, which is what the action runs.
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ---
 
 <p align="center">
-  <strong>Stop shipping AI slop. Start shipping quality code.</strong>
+  <strong>Every other tool does one pass. Sloppy doesn't stop.</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/braedonsaunders/sloppy">Give us a ⭐ if Sloppy saved you time!</a>
+  <a href="https://github.com/braedonsaunders/sloppy">Star the repo</a> if you think code cleanup should be relentless.
 </p>
