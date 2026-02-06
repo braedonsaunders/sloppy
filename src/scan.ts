@@ -16,6 +16,44 @@ const IGNORE_DIRS = new Set([
   '__pycache__', '.venv', 'venv', 'target', 'coverage', '.sloppy',
 ]);
 
+// Structured output schema — the model MUST conform to this exact shape.
+// No more "please respond with valid JSON" in the prompt.
+const ISSUES_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'scan_results',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        issues: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage'],
+              },
+              severity: {
+                type: 'string',
+                enum: ['critical', 'high', 'medium', 'low'],
+              },
+              file: { type: 'string' },
+              line: { type: 'number' },
+              description: { type: 'string' },
+            },
+            required: ['type', 'severity', 'file', 'line', 'description'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['issues'],
+      additionalProperties: false,
+    },
+  },
+};
+
 function collectFiles(dir: string, files: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith('.') && entry.name !== '.github') continue;
@@ -59,7 +97,7 @@ function chunkFiles(files: string[], maxChars: number = 24000): string[][] {
 
 function buildPrompt(files: string[], cwd: string, chunkNum: number, totalChunks: number): string {
   const fileList = files.map(f => path.relative(cwd, f));
-  let prompt = `You are a senior code quality auditor. Analyze chunk ${chunkNum}/${totalChunks}.
+  let prompt = `Analyze chunk ${chunkNum}/${totalChunks} for code quality issues.
 
 FILES IN THIS CHUNK:
 ${fileList.map(f => `  - ${f}`).join('\n')}
@@ -83,10 +121,7 @@ SEVERITY GUIDE:
 RULES:
 - Only report REAL issues. No false positives. No style preferences.
 - Be specific: exact file, exact line number, exact description.
-- If a file looks clean, don't invent issues.
-
-Respond with ONLY valid JSON. No markdown. No explanation. No code fences.
-{"issues":[{"type":"category","severity":"level","file":"relative/path","line":123,"description":"what is wrong and why"}]}
+- If a file looks clean, return an empty issues array.
 
 SOURCE CODE:
 
@@ -106,9 +141,7 @@ SOURCE CODE:
 
 function parseIssues(content: string): Issue[] {
   try {
-    const match = content.match(/\{[\s\S]*\}/);
-    if (!match) return [];
-    const data = JSON.parse(match[0]);
+    const data = JSON.parse(content);
     return (data.issues || []).map((raw: any, i: number) => ({
       id: `scan-${Date.now()}-${i}`,
       type: (raw.type || 'lint') as IssueType,
@@ -119,8 +152,24 @@ function parseIssues(content: string): Issue[] {
       status: 'found' as const,
     }));
   } catch {
-    core.warning('Failed to parse scan response');
-    return [];
+    // Fallback: try to extract JSON from mixed content (shouldn't happen with structured outputs)
+    try {
+      const match = content.match(/\{[\s\S]*\}/);
+      if (!match) return [];
+      const data = JSON.parse(match[0]);
+      return (data.issues || []).map((raw: any, i: number) => ({
+        id: `scan-${Date.now()}-${i}`,
+        type: (raw.type || 'lint') as IssueType,
+        severity: (raw.severity || 'medium') as Severity,
+        file: raw.file || 'unknown',
+        line: raw.line || undefined,
+        description: raw.description || 'Unknown issue',
+        status: 'found' as const,
+      }));
+    } catch {
+      core.warning('Failed to parse scan response');
+      return [];
+    }
   }
 }
 
@@ -185,17 +234,18 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
 
   for (let i = 0; i < chunks.length; i++) {
     const chunkStart = Date.now();
-    const chunkFiles = chunks[i].map(f => path.relative(cwd, f));
+    const chunkFileNames = chunks[i].map(f => path.relative(cwd, f));
     const progress = Math.round(((i + 1) / chunks.length) * 100);
-    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFiles.slice(0, 3).join(', ')}${chunkFiles.length > 3 ? ` +${chunkFiles.length - 3} more` : ''}`);
+    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}`);
 
     try {
       const { content, tokens } = await callGitHubModels(
         [
-          { role: 'system', content: 'You are a code quality analyzer. Respond ONLY with valid JSON. No markdown fences.' },
+          { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
           { role: 'user', content: buildPrompt(chunks[i], cwd, i + 1, chunks.length) },
         ],
         config.githubModelsModel,
+        { responseFormat: ISSUES_SCHEMA },
       );
       totalTokens += tokens;
       const chunkIssues = parseIssues(content);
