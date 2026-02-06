@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
+import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -73,6 +74,12 @@ if (!query) {
 const controller = new AbortController();
 if (opts.timeout > 0) {
   setTimeout(() => controller.abort(), opts.timeout);
+  // Hard safety net: if AbortController doesn't cause the SDK to throw,
+  // force-exit after an extra 10s grace period.
+  setTimeout(() => {
+    process.stderr.write('HARD_TIMEOUT\\n');
+    process.exit(1);
+  }, opts.timeout + 10_000).unref();
 }
 
 try {
@@ -91,6 +98,9 @@ try {
     // once we have the result.
     if (msg.type === 'result') break;
   }
+  // SDK keeps background connections alive (HTTP keep-alive, etc.) which
+  // prevent Node.js from exiting. Force exit after the loop completes.
+  process.exit(0);
 } catch (err) {
   if (err.name === 'AbortError') {
     process.stderr.write('TIMEOUT\\n');
@@ -228,56 +238,55 @@ async function runClaudeSDK(
     }, 15_000);
   }
 
-  const execOptions: exec.ExecOptions = {
-    listeners: {
-      stdout: (data: Buffer) => {
-        const chunk = data.toString();
+  const onStdout = (data: Buffer): void => {
+    const chunk = data.toString();
 
-        if (firstChunk && verbose) {
-          firstChunk = false;
-          const elapsed = Math.round((Date.now() - execStart) / 1000);
-          ui.agentStreamStart(elapsed, chunk.length);
-        }
+    if (firstChunk && verbose) {
+      firstChunk = false;
+      const elapsed = Math.round((Date.now() - execStart) / 1000);
+      ui.agentStreamStart(elapsed, chunk.length);
+    }
 
-        lineBuffer += chunk;
-        const lines = lineBuffer.split('\n');
-        lineBuffer = lines.pop() || '';
-        for (const line of lines) processLine(line);
-      },
-      stderr: (data: Buffer) => {
-        const chunk = data.toString();
-        stderr += chunk;
-        if (verbose) {
-          for (const line of chunk.split('\n')) {
-            const trimmed = line.trim();
-            if (trimmed) ui.agentStderr(trimmed);
-          }
-        }
-      },
-    },
-    ignoreReturnCode: true,
-    silent: true,
-    cwd: options?.cwd || undefined,
-    env: {
-      ...process.env,
-      NODE_PATH: globalRoot,
-      // Strip all whitespace from auth tokens — GitHub Actions secrets often
-      // include embedded or trailing newlines which cause "Headers.append:
-      // invalid header value" errors when the SDK sets Authorization headers.
-      ...(process.env.ANTHROPIC_API_KEY && {
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
-      }),
-      ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
-        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
-      }),
-    } as Record<string, string>,
+    lineBuffer += chunk;
+    const lines = lineBuffer.split('\n');
+    lineBuffer = lines.pop() || '';
+    for (const line of lines) processLine(line);
+  };
+
+  const onStderr = (data: Buffer): void => {
+    const chunk = data.toString();
+    stderr += chunk;
+    if (verbose) {
+      for (const line of chunk.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed) ui.agentStderr(trimmed);
+      }
+    }
+  };
+
+  const spawnEnv: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    NODE_PATH: globalRoot,
+    // Strip all whitespace from auth tokens — GitHub Actions secrets often
+    // include embedded or trailing newlines which cause "Headers.append:
+    // invalid header value" errors when the SDK sets Authorization headers.
+    ...(process.env.ANTHROPIC_API_KEY && {
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
+    }),
+    ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
+    }),
   };
 
   let exitCode: number;
   try {
-    // Safety timeout in parent (+30s buffer so the runner's internal abort fires first)
-    const parentTimeout = options?.timeout ? options.timeout + 30_000 : undefined;
-    exitCode = await execWithTimeout('node', [scriptPath, promptPath, opts], execOptions, parentTimeout);
+    // Parent timeout: runner has internal abort + hard exit, parent adds buffer to SIGTERM/SIGKILL
+    const parentTimeout = options?.timeout ? options.timeout + 15_000 : undefined;
+    exitCode = await spawnWithTimeout(
+      'node', [scriptPath, promptPath, opts],
+      { env: spawnEnv, cwd: options?.cwd, onStdout, onStderr },
+      parentTimeout,
+    );
     if (lineBuffer.trim()) processLine(lineBuffer);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
@@ -327,46 +336,46 @@ async function runCLI(
     }, 30_000);
   }
 
-  const execOptions: exec.ExecOptions = {
-    listeners: {
-      stdout: (data: Buffer) => {
-        const chunk = data.toString();
-        stdout += chunk;
-        if (verbose) {
-          for (const line of chunk.split('\n')) {
-            const trimmed = line.trim();
-            if (trimmed) ui.agentText(trimmed.slice(0, 300));
-          }
-        }
-      },
-      stderr: (data: Buffer) => {
-        const chunk = data.toString();
-        stderr += chunk;
-        if (verbose) {
-          for (const line of chunk.split('\n')) {
-            const trimmed = line.trim();
-            if (trimmed) ui.agentStderr(trimmed);
-          }
-        }
-      },
-    },
-    ignoreReturnCode: true,
-    silent: true,
-    cwd: options?.cwd || undefined,
-    env: {
-      ...process.env,
-      ...(process.env.ANTHROPIC_API_KEY && {
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
-      }),
-      ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
-        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
-      }),
-    } as Record<string, string>,
+  const cliEnv: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    ...(process.env.ANTHROPIC_API_KEY && {
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
+    }),
+    ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
+    }),
   };
 
   let exitCode: number;
   try {
-    exitCode = await execWithTimeout(cmd, args, execOptions, options?.timeout);
+    exitCode = await spawnWithTimeout(
+      cmd, args,
+      {
+        env: cliEnv,
+        cwd: options?.cwd,
+        onStdout: (data: Buffer) => {
+          const chunk = data.toString();
+          stdout += chunk;
+          if (verbose) {
+            for (const line of chunk.split('\n')) {
+              const trimmed = line.trim();
+              if (trimmed) ui.agentText(trimmed.slice(0, 300));
+            }
+          }
+        },
+        onStderr: (data: Buffer) => {
+          const chunk = data.toString();
+          stderr += chunk;
+          if (verbose) {
+            for (const line of chunk.split('\n')) {
+              const trimmed = line.trim();
+              if (trimmed) ui.agentStderr(trimmed);
+            }
+          }
+        },
+      },
+      options?.timeout,
+    );
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
@@ -383,35 +392,56 @@ async function runCLI(
   return { output: stdout, exitCode };
 }
 
-async function execWithTimeout(
+// Spawn a child process with proper timeout handling.
+// Unlike @actions/exec.exec() + Promise.race, this actually kills the child
+// process when the timeout fires, preventing zombie processes.
+function spawnWithTimeout(
   cmd: string,
   args: string[],
-  options: exec.ExecOptions,
+  options: {
+    env?: Record<string, string>;
+    cwd?: string;
+    onStdout?: (data: Buffer) => void;
+    onStderr?: (data: Buffer) => void;
+  },
   timeoutMs?: number,
 ): Promise<number> {
-  if (!timeoutMs || timeoutMs <= 0) {
-    return exec.exec(cmd, args, options);
-  }
+  return new Promise((resolve) => {
+    const child = childProcess.spawn(cmd, args, {
+      env: options.env as NodeJS.ProcessEnv,
+      cwd: options.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-  let timer: ReturnType<typeof setTimeout>;
-  let timedOut = false;
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(code);
+    };
 
-  const timeoutPromise = new Promise<number>((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      core.warning(`Agent timed out after ${Math.round(timeoutMs / 1000)}s`);
-      resolve(1);
-    }, timeoutMs);
+    if (child.stdout && options.onStdout) child.stdout.on('data', options.onStdout);
+    if (child.stderr && options.onStderr) child.stderr.on('data', options.onStderr);
+
+    child.on('close', (code) => finish(code ?? 1));
+    child.on('error', () => finish(1));
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (!settled) {
+          core.warning(`Agent timed out after ${Math.round(timeoutMs / 1000)}s — killing process`);
+          child.kill('SIGTERM');
+          // If SIGTERM doesn't work, force-kill after 5s
+          setTimeout(() => {
+            if (!settled) {
+              child.kill('SIGKILL');
+              finish(1);
+            }
+          }, 5_000).unref();
+        }
+      }, timeoutMs);
+    }
   });
-
-  const execPromise = exec.exec(cmd, args, options);
-
-  const exitCode = await Promise.race([execPromise, timeoutPromise]);
-  clearTimeout(timer!);
-
-  if (timedOut) {
-    core.warning('Agent process may still be running in background after timeout');
-  }
-
-  return exitCode;
 }
