@@ -233,6 +233,14 @@ async function runClaudeSDK(
     env: {
       ...process.env,
       NODE_PATH: globalRoot,
+      // Trim API keys — GitHub Actions secrets sometimes include trailing newlines
+      // which cause "invalid header value" errors in the SDK's HTTP client.
+      ...(process.env.ANTHROPIC_API_KEY && {
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.trim(),
+      }),
+      ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.trim(),
+      }),
     } as Record<string, string>,
   };
 
