@@ -37,11 +37,10 @@ async function loadQuery() {
     try {
       const mod = await import(pkg);
       if (mod.query) return mod.query;
-    } catch (e) {
-      process.stderr.write('import(' + pkg + '): ' + (e.code || e.message) + '\\n');
-    }
+    } catch {}
 
     // Try loading from global npm root via file URL
+    // (bare import always fails for globally-installed ESM packages)
     if (globalRoot) {
       try {
         const pkgDir = path.join(globalRoot, pkg);
@@ -51,11 +50,10 @@ async function loadQuery() {
         if (typeof entry === 'object') entry = entry.import || entry.default;
         if (!entry) entry = pkgJson.main || 'index.js';
         const fullPath = path.resolve(pkgDir, entry);
-        process.stderr.write('trying file URL: ' + fullPath + '\\n');
         const mod = await import(pathToFileURL(fullPath).href);
         if (mod.query) return mod.query;
       } catch (e) {
-        process.stderr.write('file import(' + pkg + '): ' + (e.code || e.message) + '\\n');
+        process.stderr.write(pkg + ': ' + (e.code || e.message) + '\\n');
       }
     }
   }
@@ -182,8 +180,23 @@ async function runClaudeSDK(
               core.info(`  | [tool: ${block.name}]`);
             }
           }
+        } else if (event.type === 'tool_progress') {
+          core.info(`  | [${event.tool_name}: ${event.elapsed_time_seconds}s]`);
+        } else if (event.type === 'tool_use_summary') {
+          const preview = event.summary.length > 200
+            ? event.summary.slice(0, 200) + '...'
+            : event.summary;
+          core.info(`  | ${preview}`);
         } else if (event.type === 'system') {
-          core.info(`  | [system: ${event.subtype || 'init'}]`);
+          const sub = event.subtype || 'init';
+          if (sub === 'task_notification') {
+            core.info(`  | [task ${event.status}: ${event.summary || event.task_id}]`);
+          } else {
+            core.info(`  | [system: ${sub}]`);
+          }
+        } else if (event.type === 'result') {
+          const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : '';
+          core.info(`  | [result: ${event.subtype}, ${event.num_turns} turns${cost}]`);
         }
       }
     } catch {
@@ -197,7 +210,7 @@ async function runClaudeSDK(
     heartbeat = setInterval(() => {
       const elapsed = Math.round((Date.now() - execStart) / 1000);
       core.info(`  ... agent running (${elapsed}s, ${eventCount} events)`);
-    }, 30_000);
+    }, 15_000);
   }
 
   const execOptions: exec.ExecOptions = {
