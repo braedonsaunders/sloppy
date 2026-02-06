@@ -2,11 +2,12 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
-import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity } from './types';
+import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity, PluginContext } from './types';
 import { installAgent, runAgent } from './agent';
 import { calculateScore } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
+import { runHook, applyFilters, formatCustomPromptSection } from './plugins';
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -80,7 +81,7 @@ async function gitRevert(): Promise<void> {
   await exec.exec('git', ['clean', '-fd'], { ignoreReturnCode: true });
 }
 
-function scanPrompt(pass: number, previousFixes: string[], plan: string): string {
+function scanPrompt(pass: number, previousFixes: string[], plan: string, customSection: string): string {
   const planSection = plan ? `\nQUALITY PLAN (from PLAN.md):\n${plan}\n` : '';
 
   if (pass === 1) {
@@ -103,7 +104,7 @@ SEVERITY LEVELS:
   high     — will cause bugs in normal usage or data corruption
   medium   — code smell, maintainability risk, potential future bugs
   low      — style issue, minor improvement, naming consistency
-${planSection}
+${planSection}${customSection}
 RULES:
 - Check EVERY file. Do not skip any directory.
 - Only report REAL issues with specific file paths and line numbers.
@@ -125,7 +126,7 @@ TASK: Scan the ENTIRE repository again with fresh eyes. Previous fixes often rev
 - Fixing a type error reveals logic bugs underneath
 - Refactoring may introduce new edge cases
 - Previously-hidden code paths are now reachable
-${planSection}
+${planSection}${customSection}
 ISSUE CATEGORIES: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
 SEVERITY LEVELS: critical, high, medium, low
 
@@ -139,7 +140,7 @@ Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 {"issues":[{"type":"category","severity":"level","file":"relative/path","line":42,"description":"what is wrong"}]}`;
 }
 
-function fixPrompt(issue: Issue, testCommand: string): string {
+function fixPrompt(issue: Issue, testCommand: string, customSection: string): string {
   return `Fix this specific code quality issue. Make the MINIMAL change required.
 
 ISSUE:
@@ -147,7 +148,7 @@ ISSUE:
   Severity: ${issue.severity}
   File: ${issue.file}${issue.line ? ` (line ${issue.line})` : ''}
   Problem: ${issue.description}
-
+${customSection}
 RULES:
 1. Fix ONLY this specific issue. Do not touch anything else.
 2. Make the smallest possible change.
@@ -189,7 +190,7 @@ function parseIssues(output: string): Issue[] {
   }
 }
 
-export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
+export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext): Promise<LoopState> {
   const startTime = Date.now();
   const checkpoint = loadCheckpoint();
 
@@ -262,6 +263,9 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     core.info('Loaded PLAN.md for quality context');
   }
 
+  // Build custom prompt section from plugins + custom-prompt config
+  const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
+
   // Load preexisting issues from output file (if available and no checkpoint)
   let seededIssues: Issue[] = [];
   if (!checkpoint && config.outputFile) {
@@ -299,9 +303,12 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
     } else {
       core.info('');
+      // Run pre-scan hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
+
       core.info(`Scanning repository (${config.agent})...`);
       const scanStart = Date.now();
-      const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan), {
+      const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan, customSection), {
         maxTurns: config.maxTurns.scan,
         model: config.model || undefined,
         timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
@@ -310,6 +317,19 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       const scanDuration = formatDuration(Date.now() - scanStart);
 
       found = parseIssues(scanResult.output);
+
+      // Run post-scan hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'post-scan');
+
+      // Apply plugin filters
+      if (pluginCtx) {
+        const before = found.length;
+        found = applyFilters(found, pluginCtx.filters);
+        if (found.length < before) {
+          core.info(`Plugin filters removed ${before - found.length} issues`);
+        }
+      }
+
       core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
     }
 
@@ -368,8 +388,11 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
       core.info(`    ${issue.description}`);
 
+      // Run pre-fix hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_TYPE: issue.type });
+
       const fixStart = Date.now();
-      const result = await runAgent(config.agent, fixPrompt(issue, testCmd), {
+      const result = await runAgent(config.agent, fixPrompt(issue, testCmd, customSection), {
         maxTurns: config.maxTurns.fix,
         model: config.model || undefined,
         timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
@@ -399,6 +422,9 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
         await gitRevert();
         core.info(`    -> REVERTED (${fixDuration}): tests failed`);
       }
+
+      // Run post-fix hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'post-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_STATUS: issue.status });
 
       state.issues.push(issue);
     }

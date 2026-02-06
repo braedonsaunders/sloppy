@@ -32,6 +32,9 @@ export interface SloppyConfig {
   maxIssuesPerPass: number;
   scanScope: ScanScope;
   outputFile: string;
+  customPrompt: string;
+  customPromptFile: string;
+  pluginsEnabled: boolean;
 }
 
 export interface Issue {
@@ -89,4 +92,60 @@ export interface HistoryEntry {
   prUrl?: string;
   mode: 'scan' | 'fix';
   agent: string;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin system types
+// ---------------------------------------------------------------------------
+
+/** A custom regex pattern contributed by a plugin for Layer 0 scanning. */
+export interface PluginPattern {
+  regex: string;
+  type: IssueType | string;
+  severity: Severity;
+  description: string;
+  extensions?: string[];
+}
+
+/** Lifecycle hook definition — a shell command to run at a specific phase. */
+export interface PluginHooks {
+  'pre-scan'?: string;
+  'post-scan'?: string;
+  'pre-fix'?: string;
+  'post-fix'?: string;
+}
+
+/** Issue filter rules contributed by a plugin. */
+export interface PluginFilters {
+  'exclude-paths'?: string[];
+  'exclude-types'?: string[];
+  'min-severity'?: Severity;
+}
+
+/** A single loaded plugin manifest. */
+export interface SloppyPlugin {
+  name: string;
+  version?: string;
+  description?: string;
+  /** Custom prompt text injected into every scan/fix prompt. */
+  prompt?: string;
+  /** Custom regex patterns for Layer 0 local scanning. */
+  patterns?: PluginPattern[];
+  /** Lifecycle hook shell commands. */
+  hooks?: PluginHooks;
+  /** Issue filter rules. */
+  filters?: PluginFilters;
+  /** Directory the plugin was loaded from (for resolving relative hook paths). */
+  _dir: string;
+}
+
+/** Aggregated context from all loaded plugins. */
+export interface PluginContext {
+  plugins: SloppyPlugin[];
+  /** Merged custom prompt text (custom-prompt input + plugin prompts). */
+  customPrompt: string;
+  /** Merged extra patterns for local scanning. */
+  extraPatterns: PluginPattern[];
+  /** Merged filters. */
+  filters: PluginFilters;
 }

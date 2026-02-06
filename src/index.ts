@@ -13,7 +13,8 @@ import {
   loadOutputFile,
 } from './report';
 import { deployDashboard } from './dashboard';
-import { HistoryEntry, ScanResult, LoopState } from './types';
+import { HistoryEntry, ScanResult, LoopState, PluginContext } from './types';
+import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
 
 async function run(): Promise<void> {
   try {
@@ -37,9 +38,22 @@ async function run(): Promise<void> {
     core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
     core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
 
+    // Load custom prompts and plugins
+    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    const customPrompt = resolveCustomPrompt(config.customPrompt, config.customPromptFile, cwd);
+    const plugins = config.pluginsEnabled ? loadPlugins(cwd) : [];
+    const pluginCtx = buildPluginContext(plugins, customPrompt);
+
+    if (customPrompt) {
+      core.info(`Custom prompt: ${customPrompt.length} chars loaded`);
+    }
+    if (plugins.length > 0) {
+      core.info(`Plugins: ${plugins.map(p => p.name).join(', ')}`);
+    }
+
     if (config.mode === 'scan') {
       // ---- FREE TIER: GitHub Models ----
-      const result = await runScan(config);
+      const result = await runScan(config, pluginCtx);
 
       core.setOutput('score', result.score);
       core.setOutput('issues-found', result.issues.length);
@@ -87,7 +101,7 @@ async function run(): Promise<void> {
 
     } else {
       // ---- FIX MODE: Claude Code or Codex CLI ----
-      const state = await runFixLoop(config);
+      const state = await runFixLoop(config, pluginCtx);
 
       core.setOutput('score', state.scoreAfter);
       core.setOutput('score-before', state.scoreBefore);

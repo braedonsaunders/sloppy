@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as github from '@actions/github';
 import { callGitHubModels, TokenLimitError } from './github-models';
-import { SloppyConfig, Issue, ScanResult, IssueType, Severity } from './types';
+import { SloppyConfig, Issue, ScanResult, IssueType, Severity, PluginContext } from './types';
 import {
   prepareChunks,
   buildSmartPrompt,
@@ -14,6 +14,7 @@ import {
   SmartChunk,
 } from './smart-split';
 import { localScanAll } from './local-scan';
+import { runHook, applyFilters } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
 
@@ -183,6 +184,7 @@ async function runFingerprintScan(
   filePaths: string[],
   cwd: string,
   model: string,
+  customPrompt?: string,
 ): Promise<{ issues: Issue[]; tokens: number; apiCalls: number }> {
   // Generate fingerprints for all files
   const fingerprints = filePaths
@@ -211,9 +213,12 @@ async function runFingerprintScan(
     core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
 
     try {
+      const systemMsg = customPrompt
+        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
       const { content, tokens } = await callGitHubModels(
         [
-          { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+          { role: 'system', content: systemMsg },
           { role: 'user', content: chunks[i].promptText },
         ],
         model,
@@ -252,13 +257,17 @@ async function scanChunk(
   totalChunks: number,
   model: string,
   depth: number = 0,
+  customPrompt?: string,
 ): Promise<{ issues: Issue[]; tokens: number }> {
   const prompt = buildSmartPrompt(chunk, chunkNum, totalChunks);
+  const systemMsg = customPrompt
+    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
 
   try {
     const { content, tokens } = await callGitHubModels(
       [
-        { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+        { role: 'system', content: systemMsg },
         { role: 'user', content: prompt },
       ],
       model,
@@ -298,7 +307,7 @@ async function scanChunk(
         manifest: chunk.manifest,
       };
 
-      const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1);
+      const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1, customPrompt);
       allIssues.push(...result.issues);
       allTokens += result.tokens;
 
@@ -313,7 +322,7 @@ async function scanChunk(
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
 
-export async function runScan(config: SloppyConfig): Promise<ScanResult> {
+export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   const scanStart = Date.now();
 
@@ -398,7 +407,8 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     // ================================================================
     core.info('');
     core.info('── Layer 0: Local Analysis (no API calls) ──');
-    const { issues: localIssues, flaggedFiles } = localScanAll(filesToScan, cwd);
+    const extraPatterns = pluginCtx?.extraPatterns || [];
+    const { issues: localIssues, flaggedFiles } = localScanAll(filesToScan, cwd, extraPatterns);
     if (localIssues.length > 0) {
       core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
       allIssues.push(...localIssues);
@@ -419,6 +429,11 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     // ================================================================
     const useDeepScan = scanStrategy === 'deep';
     let aiIssues: Issue[] = [];
+
+    // Run pre-scan hooks
+    if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
+
+    const customPrompt = pluginCtx?.customPrompt || '';
 
     if (useDeepScan) {
       core.info('');
@@ -444,7 +459,7 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
 
         try {
           const { issues: chunkIssues, tokens } = await scanChunk(
-            chunks[i], i + 1, chunks.length, config.githubModelsModel,
+            chunks[i], i + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined,
           );
           totalTokens += tokens;
           totalApiCalls++;
@@ -465,7 +480,7 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     } else {
       core.info('');
       core.info(`── Layer 1: Fingerprint Scan (${filesToScan.length} files — compact) ──`);
-      const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
+      const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
       aiIssues = fpResult.issues;
       totalTokens += fpResult.tokens;
       totalApiCalls += fpResult.apiCalls;
@@ -473,10 +488,26 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
 
     allIssues.push(...aiIssues);
 
+    // Run post-scan hooks
+    if (pluginCtx) await runHook(pluginCtx.plugins, 'post-scan');
+
     // Update cache with new results
     const newIssues = [...localIssues, ...aiIssues];
     updateCacheEntries(cache, newIssues, filesToScan, cwd, scanStrategy);
     saveCache(cwd, cache);
+  }
+
+  // ================================================================
+  // Apply plugin filters
+  // ================================================================
+  if (pluginCtx) {
+    const before = allIssues.length;
+    const filtered = applyFilters(allIssues, pluginCtx.filters);
+    if (filtered.length < before) {
+      core.info(`Plugin filters removed ${before - filtered.length} issues`);
+    }
+    allIssues.length = 0;
+    allIssues.push(...filtered);
   }
 
   // ================================================================

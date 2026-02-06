@@ -8,7 +8,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { Issue, IssueType, Severity } from './types';
+import { Issue, IssueType, Severity, PluginPattern } from './types';
 
 interface Pattern {
   regex: RegExp;
@@ -120,11 +120,32 @@ const PATTERNS: Pattern[] = [
   },
 ];
 
+/** Convert PluginPattern definitions into runtime Pattern objects. */
+function compilePluginPatterns(pluginPatterns: PluginPattern[]): Pattern[] {
+  const compiled: Pattern[] = [];
+  for (const pp of pluginPatterns) {
+    try {
+      const regex = new RegExp(pp.regex, 'g');
+      compiled.push({
+        regex,
+        type: pp.type as IssueType,
+        severity: pp.severity,
+        description: pp.description,
+        extensions: pp.extensions,
+      });
+    } catch (e) {
+      // Skip invalid regex patterns from plugins
+    }
+  }
+  return compiled;
+}
+
 /**
  * Run local static analysis on a single file.
  * Returns issues found without any API calls.
+ * Accepts optional extra patterns contributed by plugins.
  */
-export function localScanFile(filePath: string, cwd: string): Issue[] {
+export function localScanFile(filePath: string, cwd: string, extraPatterns: PluginPattern[] = []): Issue[] {
   let content: string;
   try {
     content = fs.readFileSync(filePath, 'utf-8');
@@ -137,7 +158,9 @@ export function localScanFile(filePath: string, cwd: string): Issue[] {
   const lines = content.split('\n');
   const issues: Issue[] = [];
 
-  for (const pattern of PATTERNS) {
+  const allPatterns = [...PATTERNS, ...compilePluginPatterns(extraPatterns)];
+
+  for (const pattern of allPatterns) {
     if (pattern.extensions && pattern.extensions.length > 0) {
       if (!pattern.extensions.includes(ext)) continue;
     }
@@ -182,16 +205,18 @@ export function localScanFile(filePath: string, cwd: string): Issue[] {
 /**
  * Run local scan on all files. Returns issues + set of files that had
  * local findings (useful for prioritizing AI scanning).
+ * Accepts optional extra patterns contributed by plugins.
  */
 export function localScanAll(
   filePaths: string[],
   cwd: string,
+  extraPatterns: PluginPattern[] = [],
 ): { issues: Issue[]; flaggedFiles: Set<string> } {
   const allIssues: Issue[] = [];
   const flaggedFiles = new Set<string>();
 
   for (const fp of filePaths) {
-    const fileIssues = localScanFile(fp, cwd);
+    const fileIssues = localScanFile(fp, cwd, extraPatterns);
     if (fileIssues.length > 0) {
       allIssues.push(...fileIssues);
       flaggedFiles.add(path.relative(cwd, fp));

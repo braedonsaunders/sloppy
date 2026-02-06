@@ -30541,6 +30541,9 @@ function getConfig() {
         maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
         scanScope: (core.getInput('scan-scope') || 'auto'),
         outputFile: core.getInput('output-file') || '',
+        customPrompt: core.getInput('custom-prompt') || '',
+        customPromptFile: core.getInput('custom-prompt-file') || '',
+        pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
     };
 }
 
@@ -31189,6 +31192,7 @@ const loop_1 = __nccwpck_require__(3601);
 const chain_1 = __nccwpck_require__(2470);
 const report_1 = __nccwpck_require__(665);
 const dashboard_1 = __nccwpck_require__(4299);
+const plugins_1 = __nccwpck_require__(6067);
 async function run() {
     try {
         const config = (0, config_1.getConfig)();
@@ -31207,9 +31211,20 @@ async function run() {
         const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
         core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
         core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
+        // Load custom prompts and plugins
+        const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+        const customPrompt = (0, plugins_1.resolveCustomPrompt)(config.customPrompt, config.customPromptFile, cwd);
+        const plugins = config.pluginsEnabled ? (0, plugins_1.loadPlugins)(cwd) : [];
+        const pluginCtx = (0, plugins_1.buildPluginContext)(plugins, customPrompt);
+        if (customPrompt) {
+            core.info(`Custom prompt: ${customPrompt.length} chars loaded`);
+        }
+        if (plugins.length > 0) {
+            core.info(`Plugins: ${plugins.map(p => p.name).join(', ')}`);
+        }
         if (config.mode === 'scan') {
             // ---- FREE TIER: GitHub Models ----
-            const result = await (0, scan_1.runScan)(config);
+            const result = await (0, scan_1.runScan)(config, pluginCtx);
             core.setOutput('score', result.score);
             core.setOutput('issues-found', result.issues.length);
             await (0, report_1.postScanComment)(result);
@@ -31249,7 +31264,7 @@ async function run() {
         }
         else {
             // ---- FIX MODE: Claude Code or Codex CLI ----
-            const state = await (0, loop_1.runFixLoop)(config);
+            const state = await (0, loop_1.runFixLoop)(config, pluginCtx);
             core.setOutput('score', state.scoreAfter);
             core.setOutput('score-before', state.scoreBefore);
             core.setOutput('issues-found', state.issues.length);
@@ -31460,11 +31475,32 @@ const PATTERNS = [
         extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
     },
 ];
+/** Convert PluginPattern definitions into runtime Pattern objects. */
+function compilePluginPatterns(pluginPatterns) {
+    const compiled = [];
+    for (const pp of pluginPatterns) {
+        try {
+            const regex = new RegExp(pp.regex, 'g');
+            compiled.push({
+                regex,
+                type: pp.type,
+                severity: pp.severity,
+                description: pp.description,
+                extensions: pp.extensions,
+            });
+        }
+        catch (e) {
+            // Skip invalid regex patterns from plugins
+        }
+    }
+    return compiled;
+}
 /**
  * Run local static analysis on a single file.
  * Returns issues found without any API calls.
+ * Accepts optional extra patterns contributed by plugins.
  */
-function localScanFile(filePath, cwd) {
+function localScanFile(filePath, cwd, extraPatterns = []) {
     let content;
     try {
         content = fs.readFileSync(filePath, 'utf-8');
@@ -31476,7 +31512,8 @@ function localScanFile(filePath, cwd) {
     const ext = path.extname(filePath).toLowerCase();
     const lines = content.split('\n');
     const issues = [];
-    for (const pattern of PATTERNS) {
+    const allPatterns = [...PATTERNS, ...compilePluginPatterns(extraPatterns)];
+    for (const pattern of allPatterns) {
         if (pattern.extensions && pattern.extensions.length > 0) {
             if (!pattern.extensions.includes(ext))
                 continue;
@@ -31515,12 +31552,13 @@ function localScanFile(filePath, cwd) {
 /**
  * Run local scan on all files. Returns issues + set of files that had
  * local findings (useful for prioritizing AI scanning).
+ * Accepts optional extra patterns contributed by plugins.
  */
-function localScanAll(filePaths, cwd) {
+function localScanAll(filePaths, cwd, extraPatterns = []) {
     const allIssues = [];
     const flaggedFiles = new Set();
     for (const fp of filePaths) {
-        const fileIssues = localScanFile(fp, cwd);
+        const fileIssues = localScanFile(fp, cwd, extraPatterns);
         if (fileIssues.length > 0) {
             allIssues.push(...fileIssues);
             flaggedFiles.add(path.relative(cwd, fp));
@@ -31580,6 +31618,7 @@ const agent_1 = __nccwpck_require__(1598);
 const scan_1 = __nccwpck_require__(4798);
 const checkpoint_1 = __nccwpck_require__(4213);
 const report_1 = __nccwpck_require__(665);
+const plugins_1 = __nccwpck_require__(6067);
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 function sortBySeverity(issues) {
     return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
@@ -31651,7 +31690,7 @@ async function gitRevert() {
     await exec.exec('git', ['checkout', '.'], { ignoreReturnCode: true });
     await exec.exec('git', ['clean', '-fd'], { ignoreReturnCode: true });
 }
-function scanPrompt(pass, previousFixes, plan) {
+function scanPrompt(pass, previousFixes, plan, customSection) {
     const planSection = plan ? `\nQUALITY PLAN (from PLAN.md):\n${plan}\n` : '';
     if (pass === 1) {
         return `You are a senior code quality auditor performing a comprehensive codebase review.
@@ -31673,7 +31712,7 @@ SEVERITY LEVELS:
   high     — will cause bugs in normal usage or data corruption
   medium   — code smell, maintainability risk, potential future bugs
   low      — style issue, minor improvement, naming consistency
-${planSection}
+${planSection}${customSection}
 RULES:
 - Check EVERY file. Do not skip any directory.
 - Only report REAL issues with specific file paths and line numbers.
@@ -31694,7 +31733,7 @@ TASK: Scan the ENTIRE repository again with fresh eyes. Previous fixes often rev
 - Fixing a type error reveals logic bugs underneath
 - Refactoring may introduce new edge cases
 - Previously-hidden code paths are now reachable
-${planSection}
+${planSection}${customSection}
 ISSUE CATEGORIES: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
 SEVERITY LEVELS: critical, high, medium, low
 
@@ -31707,7 +31746,7 @@ RULES:
 Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 {"issues":[{"type":"category","severity":"level","file":"relative/path","line":42,"description":"what is wrong"}]}`;
 }
-function fixPrompt(issue, testCommand) {
+function fixPrompt(issue, testCommand, customSection) {
     return `Fix this specific code quality issue. Make the MINIMAL change required.
 
 ISSUE:
@@ -31715,7 +31754,7 @@ ISSUE:
   Severity: ${issue.severity}
   File: ${issue.file}${issue.line ? ` (line ${issue.line})` : ''}
   Problem: ${issue.description}
-
+${customSection}
 RULES:
 1. Fix ONLY this specific issue. Do not touch anything else.
 2. Make the smallest possible change.
@@ -31758,7 +31797,7 @@ function parseIssues(output) {
         return [];
     }
 }
-async function runFixLoop(config) {
+async function runFixLoop(config, pluginCtx) {
     const startTime = Date.now();
     const checkpoint = (0, checkpoint_1.loadCheckpoint)();
     const state = checkpoint || {
@@ -31824,6 +31863,8 @@ async function runFixLoop(config) {
         plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
         core.info('Loaded PLAN.md for quality context');
     }
+    // Build custom prompt section from plugins + custom-prompt config
+    const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx) : '';
     // Load preexisting issues from output file (if available and no checkpoint)
     let seededIssues = [];
     if (!checkpoint && config.outputFile) {
@@ -31857,9 +31898,12 @@ async function runFixLoop(config) {
         }
         else {
             core.info('');
+            // Run pre-scan hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
             core.info(`Scanning repository (${config.agent})...`);
             const scanStart = Date.now();
-            const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan), {
+            const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan, customSection), {
                 maxTurns: config.maxTurns.scan,
                 model: config.model || undefined,
                 timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
@@ -31867,6 +31911,17 @@ async function runFixLoop(config) {
             });
             const scanDuration = formatDuration(Date.now() - scanStart);
             found = parseIssues(scanResult.output);
+            // Run post-scan hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-scan');
+            // Apply plugin filters
+            if (pluginCtx) {
+                const before = found.length;
+                found = (0, plugins_1.applyFilters)(found, pluginCtx.filters);
+                if (found.length < before) {
+                    core.info(`Plugin filters removed ${before - found.length} issues`);
+                }
+            }
             core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
         }
         if (found.length > 0) {
@@ -31918,8 +31973,11 @@ async function runFixLoop(config) {
             const timeLeft = formatTimeRemaining(deadline);
             core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
             core.info(`    ${issue.description}`);
+            // Run pre-fix hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_TYPE: issue.type });
             const fixStart = Date.now();
-            const result = await (0, agent_1.runAgent)(config.agent, fixPrompt(issue, testCmd), {
+            const result = await (0, agent_1.runAgent)(config.agent, fixPrompt(issue, testCmd, customSection), {
                 maxTurns: config.maxTurns.fix,
                 model: config.model || undefined,
                 timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
@@ -31950,6 +32008,9 @@ async function runFixLoop(config) {
                 await gitRevert();
                 core.info(`    -> REVERTED (${fixDuration}): tests failed`);
             }
+            // Run post-fix hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_STATUS: issue.status });
             state.issues.push(issue);
         }
         state.passes.push({
@@ -32001,6 +32062,497 @@ async function runFixLoop(config) {
     core.info('='.repeat(50));
     (0, checkpoint_1.saveCheckpoint)(state);
     return state;
+}
+
+
+/***/ }),
+
+/***/ 6067:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Plugin system for Sloppy.
+ *
+ * Plugins live in `.sloppy/plugins/` as YAML manifests (plugin.yml).
+ * Each plugin can contribute:
+ *   - Custom prompt text injected into scan/fix prompts
+ *   - Regex patterns for Layer 0 local scanning
+ *   - Lifecycle hooks (shell commands) at pre-scan, post-scan, pre-fix, post-fix
+ *   - Issue filters (exclude paths, types, set minimum severity)
+ *
+ * Users can also inject custom prompt text directly via the `custom-prompt`
+ * action input or a `custom-prompt-file`, or by convention via `.sloppy/prompt.md`.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.resolveCustomPrompt = resolveCustomPrompt;
+exports.loadPlugins = loadPlugins;
+exports.buildPluginContext = buildPluginContext;
+exports.runHook = runHook;
+exports.applyFilters = applyFilters;
+exports.formatCustomPromptSection = formatCustomPromptSection;
+const core = __importStar(__nccwpck_require__(7484));
+const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+// ---------------------------------------------------------------------------
+// YAML subset parser — handles the plugin.yml format without adding a
+// dependency. Supports scalars, lists, and one level of nesting.
+// ---------------------------------------------------------------------------
+function parseSimpleYaml(text) {
+    const result = {};
+    const lines = text.split('\n');
+    let currentKey = '';
+    let currentList = null;
+    let currentMap = null;
+    let inMultiline = false;
+    let multilineValue = '';
+    for (const rawLine of lines) {
+        // Skip comments and empty lines (unless in multiline)
+        if (!inMultiline && (rawLine.trim().startsWith('#') || rawLine.trim() === '')) {
+            continue;
+        }
+        // Handle multiline block scalar (|)
+        if (inMultiline) {
+            if (rawLine.startsWith('  ') || rawLine.startsWith('\t') || rawLine.trim() === '') {
+                multilineValue += rawLine.replace(/^ {2}/, '') + '\n';
+                continue;
+            }
+            else {
+                // End of block — store value
+                if (currentMap) {
+                    currentMap[currentKey] = multilineValue.trimEnd();
+                }
+                else {
+                    result[currentKey] = multilineValue.trimEnd();
+                }
+                inMultiline = false;
+                multilineValue = '';
+            }
+        }
+        // Top-level key (no leading whitespace)
+        const topMatch = rawLine.match(/^([a-zA-Z_-]+)\s*:\s*(.*)/);
+        if (topMatch && !rawLine.startsWith(' ') && !rawLine.startsWith('\t')) {
+            // Flush any pending list/map
+            if (currentList) {
+                result[currentKey] = currentList;
+                currentList = null;
+            }
+            if (currentMap) {
+                result[currentKey] = currentMap;
+                currentMap = null;
+            }
+            currentKey = topMatch[1];
+            const val = topMatch[2].trim();
+            if (val === '|') {
+                inMultiline = true;
+                multilineValue = '';
+            }
+            else if (val === '' || val === '[]') {
+                // Will be filled by subsequent indented lines
+                if (val === '[]')
+                    result[currentKey] = [];
+            }
+            else {
+                result[currentKey] = stripQuotes(val);
+            }
+            continue;
+        }
+        // List item at top level (  - value)
+        const listMatch = rawLine.match(/^\s+-\s+(.*)/);
+        if (listMatch && !rawLine.match(/^\s+-\s+\w+\s*:/)) {
+            if (!currentList)
+                currentList = [];
+            currentList.push(stripQuotes(listMatch[1].trim()));
+            continue;
+        }
+        // List item that starts a map (  - key: value)
+        const listMapMatch = rawLine.match(/^\s+-\s+(\w[\w-]*)\s*:\s*(.*)/);
+        if (listMapMatch) {
+            if (!currentList)
+                currentList = [];
+            const obj = {};
+            obj[listMapMatch[1]] = stripQuotes(listMapMatch[2].trim());
+            currentList.push(obj);
+            continue;
+        }
+        // Nested key:value under current context (  key: value)
+        const nestedMatch = rawLine.match(/^\s+([a-zA-Z_-]+)\s*:\s*(.*)/);
+        if (nestedMatch) {
+            // If the last list item is an object, add to it
+            if (currentList && currentList.length > 0 && typeof currentList[currentList.length - 1] === 'object') {
+                currentList[currentList.length - 1][nestedMatch[1]] = stripQuotes(nestedMatch[2].trim());
+            }
+            else {
+                // Start a nested map
+                if (!currentMap)
+                    currentMap = {};
+                const val = nestedMatch[2].trim();
+                if (val === '|') {
+                    inMultiline = true;
+                    multilineValue = '';
+                }
+                else {
+                    currentMap[nestedMatch[1]] = stripQuotes(val);
+                }
+            }
+        }
+    }
+    // Flush trailing values
+    if (inMultiline) {
+        if (currentMap) {
+            currentMap[currentKey] = multilineValue.trimEnd();
+        }
+        else {
+            result[currentKey] = multilineValue.trimEnd();
+        }
+    }
+    if (currentList)
+        result[currentKey] = currentList;
+    if (currentMap)
+        result[currentKey] = currentMap;
+    return result;
+}
+function stripQuotes(s) {
+    if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'))) {
+        return s.slice(1, -1);
+    }
+    return s;
+}
+// ---------------------------------------------------------------------------
+// Plugin loading
+// ---------------------------------------------------------------------------
+function loadPluginManifest(pluginDir) {
+    const manifestPath = path.join(pluginDir, 'plugin.yml');
+    if (!fs.existsSync(manifestPath))
+        return null;
+    try {
+        const raw = fs.readFileSync(manifestPath, 'utf-8');
+        const data = parseSimpleYaml(raw);
+        const plugin = {
+            name: data.name || path.basename(pluginDir),
+            version: data.version,
+            description: data.description,
+            prompt: data.prompt,
+            _dir: pluginDir,
+        };
+        // Parse patterns
+        if (Array.isArray(data.patterns)) {
+            plugin.patterns = data.patterns.map(p => ({
+                regex: p.regex || '',
+                type: p.type || 'lint',
+                severity: (p.severity || 'medium'),
+                description: p.description || '',
+                extensions: p.extensions
+                    ? (typeof p.extensions === 'string' ? p.extensions.split(',').map(s => s.trim()) : undefined)
+                    : undefined,
+            })).filter(p => p.regex);
+        }
+        // Parse hooks
+        if (data.hooks && typeof data.hooks === 'object') {
+            const h = data.hooks;
+            plugin.hooks = {};
+            for (const key of ['pre-scan', 'post-scan', 'pre-fix', 'post-fix']) {
+                if (h[key])
+                    plugin.hooks[key] = h[key];
+            }
+        }
+        // Parse filters
+        if (data.filters && typeof data.filters === 'object') {
+            const f = data.filters;
+            plugin.filters = {};
+            if (Array.isArray(f['exclude-paths'])) {
+                plugin.filters['exclude-paths'] = f['exclude-paths'];
+            }
+            if (Array.isArray(f['exclude-types'])) {
+                plugin.filters['exclude-types'] = f['exclude-types'];
+            }
+            if (f['min-severity']) {
+                plugin.filters['min-severity'] = f['min-severity'];
+            }
+        }
+        return plugin;
+    }
+    catch (e) {
+        core.warning(`Failed to load plugin from ${pluginDir}: ${e}`);
+        return null;
+    }
+}
+/** Load a single-file plugin (a .yml file directly in the plugins dir). */
+function loadSingleFilePlugin(filePath) {
+    if (!filePath.endsWith('.yml') && !filePath.endsWith('.yaml'))
+        return null;
+    if (path.basename(filePath) === 'plugin.yml')
+        return null;
+    try {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const data = parseSimpleYaml(raw);
+        const name = path.basename(filePath, path.extname(filePath));
+        const plugin = {
+            name: data.name || name,
+            _dir: path.dirname(filePath),
+        };
+        if (data.prompt)
+            plugin.prompt = data.prompt;
+        if (Array.isArray(data.patterns)) {
+            plugin.patterns = data.patterns.map(p => ({
+                regex: p.regex || '',
+                type: p.type || 'lint',
+                severity: (p.severity || 'medium'),
+                description: p.description || '',
+                extensions: p.extensions
+                    ? (typeof p.extensions === 'string' ? p.extensions.split(',').map(s => s.trim()) : undefined)
+                    : undefined,
+            })).filter(p => p.regex);
+        }
+        if (data.hooks && typeof data.hooks === 'object') {
+            const h = data.hooks;
+            plugin.hooks = {};
+            for (const key of ['pre-scan', 'post-scan', 'pre-fix', 'post-fix']) {
+                if (h[key])
+                    plugin.hooks[key] = h[key];
+            }
+        }
+        if (data.filters && typeof data.filters === 'object') {
+            const f = data.filters;
+            plugin.filters = {};
+            if (Array.isArray(f['exclude-paths']))
+                plugin.filters['exclude-paths'] = f['exclude-paths'];
+            if (Array.isArray(f['exclude-types']))
+                plugin.filters['exclude-types'] = f['exclude-types'];
+            if (f['min-severity'])
+                plugin.filters['min-severity'] = f['min-severity'];
+        }
+        return plugin;
+    }
+    catch (e) {
+        core.warning(`Failed to load plugin file ${filePath}: ${e}`);
+        return null;
+    }
+}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+/**
+ * Resolve custom prompt text from all sources (in priority order):
+ *   1. `custom-prompt` action input (inline text)
+ *   2. `custom-prompt-file` action input (path to a file)
+ *   3. `.sloppy/prompt.md` convention file
+ *
+ * All sources are concatenated (not overridden) so they compose.
+ */
+function resolveCustomPrompt(customPromptInput, customPromptFile, cwd) {
+    const parts = [];
+    // 1. Inline input
+    if (customPromptInput.trim()) {
+        parts.push(customPromptInput.trim());
+    }
+    // 2. File input
+    if (customPromptFile.trim()) {
+        const filePath = path.isAbsolute(customPromptFile)
+            ? customPromptFile
+            : path.join(cwd, customPromptFile);
+        if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf-8').trim();
+            if (content)
+                parts.push(content);
+        }
+        else {
+            core.warning(`custom-prompt-file not found: ${filePath}`);
+        }
+    }
+    // 3. Convention: .sloppy/prompt.md
+    const conventionPath = path.join(cwd, '.sloppy', 'prompt.md');
+    if (fs.existsSync(conventionPath)) {
+        const content = fs.readFileSync(conventionPath, 'utf-8').trim();
+        if (content)
+            parts.push(content);
+    }
+    return parts.join('\n\n');
+}
+/**
+ * Load all plugins from `.sloppy/plugins/`.
+ *
+ * Supports two layouts:
+ *   - Directory plugin: `.sloppy/plugins/my-plugin/plugin.yml`
+ *   - Single-file plugin: `.sloppy/plugins/my-rules.yml`
+ */
+function loadPlugins(cwd) {
+    const pluginsDir = path.join(cwd, '.sloppy', 'plugins');
+    if (!fs.existsSync(pluginsDir))
+        return [];
+    const plugins = [];
+    for (const entry of fs.readdirSync(pluginsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+            const plugin = loadPluginManifest(path.join(pluginsDir, entry.name));
+            if (plugin)
+                plugins.push(plugin);
+        }
+        else if (entry.isFile()) {
+            const plugin = loadSingleFilePlugin(path.join(pluginsDir, entry.name));
+            if (plugin)
+                plugins.push(plugin);
+        }
+    }
+    return plugins;
+}
+/**
+ * Build the aggregated PluginContext from all sources.
+ */
+function buildPluginContext(plugins, customPrompt) {
+    const promptParts = [];
+    if (customPrompt)
+        promptParts.push(customPrompt);
+    const extraPatterns = [];
+    const mergedFilters = {};
+    const excludePaths = [];
+    const excludeTypes = [];
+    let minSeverity;
+    const SEVERITY_RANK = { critical: 3, high: 2, medium: 1, low: 0 };
+    for (const plugin of plugins) {
+        if (plugin.prompt)
+            promptParts.push(plugin.prompt);
+        if (plugin.patterns)
+            extraPatterns.push(...plugin.patterns);
+        if (plugin.filters) {
+            if (plugin.filters['exclude-paths'])
+                excludePaths.push(...plugin.filters['exclude-paths']);
+            if (plugin.filters['exclude-types'])
+                excludeTypes.push(...plugin.filters['exclude-types']);
+            if (plugin.filters['min-severity']) {
+                const rank = SEVERITY_RANK[plugin.filters['min-severity']] ?? 0;
+                if (!minSeverity || rank > (SEVERITY_RANK[minSeverity] ?? 0)) {
+                    minSeverity = plugin.filters['min-severity'];
+                }
+            }
+        }
+    }
+    if (excludePaths.length > 0)
+        mergedFilters['exclude-paths'] = [...new Set(excludePaths)];
+    if (excludeTypes.length > 0)
+        mergedFilters['exclude-types'] = [...new Set(excludeTypes)];
+    if (minSeverity)
+        mergedFilters['min-severity'] = minSeverity;
+    return {
+        plugins,
+        customPrompt: promptParts.join('\n\n'),
+        extraPatterns,
+        filters: mergedFilters,
+    };
+}
+// ---------------------------------------------------------------------------
+// Hook execution
+// ---------------------------------------------------------------------------
+/**
+ * Run a lifecycle hook across all plugins that define it.
+ * Hooks run sequentially in plugin load order. A non-zero exit code
+ * logs a warning but does not abort the run.
+ */
+async function runHook(plugins, hook, env) {
+    for (const plugin of plugins) {
+        const cmd = plugin.hooks?.[hook];
+        if (!cmd)
+            continue;
+        const resolvedCmd = path.isAbsolute(cmd) ? cmd : path.join(plugin._dir, cmd);
+        core.info(`  [plugin:${plugin.name}] Running ${hook} hook...`);
+        try {
+            const exitCode = await exec.exec('sh', ['-c', resolvedCmd], {
+                ignoreReturnCode: true,
+                silent: true,
+                env: { ...process.env, ...env },
+                cwd: plugin._dir,
+            });
+            if (exitCode !== 0) {
+                core.warning(`  [plugin:${plugin.name}] ${hook} hook exited with code ${exitCode}`);
+            }
+        }
+        catch (e) {
+            core.warning(`  [plugin:${plugin.name}] ${hook} hook failed: ${e}`);
+        }
+    }
+}
+// ---------------------------------------------------------------------------
+// Issue filtering
+// ---------------------------------------------------------------------------
+const SEVERITY_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
+/**
+ * Apply plugin filters to a list of issues.
+ * Removes issues matching exclude rules or below minimum severity.
+ */
+function applyFilters(issues, filters) {
+    if (!filters || Object.keys(filters).length === 0)
+        return issues;
+    const excludePaths = filters['exclude-paths'] || [];
+    const excludeTypes = new Set(filters['exclude-types'] || []);
+    const minRank = filters['min-severity'] ? (SEVERITY_RANK[filters['min-severity']] ?? 0) : 0;
+    return issues.filter(issue => {
+        // Check type exclusion
+        if (excludeTypes.has(issue.type))
+            return false;
+        // Check severity minimum
+        if (minRank > 0 && (SEVERITY_RANK[issue.severity] ?? 0) < minRank)
+            return false;
+        // Check path exclusion (simple glob: * matches anything, ** matches dirs)
+        if (excludePaths.length > 0) {
+            for (const pattern of excludePaths) {
+                if (matchGlob(issue.file, pattern))
+                    return false;
+            }
+        }
+        return true;
+    });
+}
+/** Simple glob matcher supporting * and **. */
+function matchGlob(filepath, pattern) {
+    const regexStr = pattern
+        .replace(/\./g, '\\.')
+        .replace(/\*\*/g, '{{DOUBLESTAR}}')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\{\{DOUBLESTAR\}\}/g, '.*');
+    return new RegExp(`^${regexStr}$`).test(filepath);
+}
+/**
+ * Format the custom prompt section for injection into scan/fix prompts.
+ * Returns empty string if no custom content.
+ */
+function formatCustomPromptSection(ctx) {
+    if (!ctx.customPrompt)
+        return '';
+    return `\nCUSTOM RULES (from user configuration and plugins):\n${ctx.customPrompt}\n`;
 }
 
 
@@ -32764,6 +33316,7 @@ const github = __importStar(__nccwpck_require__(3228));
 const github_models_1 = __nccwpck_require__(7287);
 const smart_split_1 = __nccwpck_require__(7487);
 const local_scan_1 = __nccwpck_require__(4708);
+const plugins_1 = __nccwpck_require__(6067);
 const fingerprint_1 = __nccwpck_require__(2659);
 const scan_cache_1 = __nccwpck_require__(1629);
 const CODE_EXTENSIONS = new Set([
@@ -32927,7 +33480,7 @@ function formatDuration(ms) {
 // ---------------------------------------------------------------------------
 // Layer 1: Fingerprint scanning (compact representations → fewer API calls)
 // ---------------------------------------------------------------------------
-async function runFingerprintScan(filePaths, cwd, model) {
+async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
     // Generate fingerprints for all files
     const fingerprints = filePaths
         .map(fp => (0, fingerprint_1.generateFingerprint)(fp, cwd))
@@ -32950,8 +33503,11 @@ async function runFingerprintScan(filePaths, cwd, model) {
         const progress = Math.round(((i + 1) / chunks.length) * 100);
         core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
         try {
+            const systemMsg = customPrompt
+                ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+                : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
             const { content, tokens } = await (0, github_models_1.callGitHubModels)([
-                { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+                { role: 'system', content: systemMsg },
                 { role: 'user', content: chunks[i].promptText },
             ], model, { responseFormat: ISSUES_SCHEMA });
             totalTokens += tokens;
@@ -32978,11 +33534,14 @@ async function runFingerprintScan(filePaths, cwd, model) {
 // ---------------------------------------------------------------------------
 // Layer 2: Deep scan with full content (kept as fallback, used for smart-split)
 // ---------------------------------------------------------------------------
-async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
+async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customPrompt) {
     const prompt = (0, smart_split_1.buildSmartPrompt)(chunk, chunkNum, totalChunks);
+    const systemMsg = customPrompt
+        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
     try {
         const { content, tokens } = await (0, github_models_1.callGitHubModels)([
-            { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+            { role: 'system', content: systemMsg },
             { role: 'user', content: prompt },
         ], model, { responseFormat: ISSUES_SCHEMA });
         return { issues: parseIssues(content), tokens };
@@ -33015,7 +33574,7 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
                 totalCodeTokens: half.reduce((s, f) => s + f.tokens, 0),
                 manifest: chunk.manifest,
             };
-            const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1);
+            const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1, customPrompt);
             allIssues.push(...result.issues);
             allTokens += result.tokens;
             if (halves.indexOf(half) === 0)
@@ -33027,7 +33586,7 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
 // ---------------------------------------------------------------------------
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
-async function runScan(config) {
+async function runScan(config, pluginCtx) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
     const scope = config.scanScope;
@@ -33102,7 +33661,8 @@ async function runScan(config) {
         // ================================================================
         core.info('');
         core.info('── Layer 0: Local Analysis (no API calls) ──');
-        const { issues: localIssues, flaggedFiles } = (0, local_scan_1.localScanAll)(filesToScan, cwd);
+        const extraPatterns = pluginCtx?.extraPatterns || [];
+        const { issues: localIssues, flaggedFiles } = (0, local_scan_1.localScanAll)(filesToScan, cwd, extraPatterns);
         if (localIssues.length > 0) {
             core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
             allIssues.push(...localIssues);
@@ -33123,6 +33683,10 @@ async function runScan(config) {
         // ================================================================
         const useDeepScan = scanStrategy === 'deep';
         let aiIssues = [];
+        // Run pre-scan hooks
+        if (pluginCtx)
+            await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
+        const customPrompt = pluginCtx?.customPrompt || '';
         if (useDeepScan) {
             core.info('');
             core.info(`── Layer 1: Deep Scan (${filesToScan.length} files — full content) ──`);
@@ -33140,7 +33704,7 @@ async function runScan(config) {
                 const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
                 core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
                 try {
-                    const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel);
+                    const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
                     totalTokens += tokens;
                     totalApiCalls++;
                     aiIssues.push(...chunkIssues);
@@ -33162,16 +33726,31 @@ async function runScan(config) {
         else {
             core.info('');
             core.info(`── Layer 1: Fingerprint Scan (${filesToScan.length} files — compact) ──`);
-            const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
+            const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
             aiIssues = fpResult.issues;
             totalTokens += fpResult.tokens;
             totalApiCalls += fpResult.apiCalls;
         }
         allIssues.push(...aiIssues);
+        // Run post-scan hooks
+        if (pluginCtx)
+            await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-scan');
         // Update cache with new results
         const newIssues = [...localIssues, ...aiIssues];
         (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd, scanStrategy);
         (0, scan_cache_1.saveCache)(cwd, cache);
+    }
+    // ================================================================
+    // Apply plugin filters
+    // ================================================================
+    if (pluginCtx) {
+        const before = allIssues.length;
+        const filtered = (0, plugins_1.applyFilters)(allIssues, pluginCtx.filters);
+        if (filtered.length < before) {
+            core.info(`Plugin filters removed ${before - filtered.length} issues`);
+        }
+        allIssues.length = 0;
+        allIssues.push(...filtered);
     }
     // ================================================================
     // Deduplicate & score

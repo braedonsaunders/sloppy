@@ -91,6 +91,18 @@ inputs:
     description: 'What to scan: auto (PR files on pull_request, full otherwise), pr (PR files only), full (entire repo)'
     required: false
     default: 'auto'
+  custom-prompt:
+    description: 'Custom instructions injected into every scan/fix prompt (inline text)'
+    required: false
+    default: ''
+  custom-prompt-file:
+    description: 'Path to a file containing custom prompt instructions (relative to repo root)'
+    required: false
+    default: ''
+  plugins:
+    description: 'Enable/disable the plugin system (loads from .sloppy/plugins/)'
+    required: false
+    default: 'true'
   chain_number:
     description: 'Internal: chain continuation number'
     required: false
