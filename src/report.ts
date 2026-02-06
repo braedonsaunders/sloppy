@@ -3,6 +3,7 @@ import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
 import { LoopState, ScanResult, Issue, HistoryEntry, SloppyConfig } from './types';
+import { formatDuration, parseGitHubRepo } from './utils';
 
 // --- Helpers ---
 
@@ -59,15 +60,6 @@ function miniBar(count: number, max: number, w = 10): string {
   return '\u2588'.repeat(filled) + '\u2591'.repeat(w - filled);
 }
 
-function fmtDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  if (m < 60) return `${m}m ${sec}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
 function groupBy(issues: Issue[]): Record<string, Issue[]> {
   const g: Record<string, Issue[]> = {};
   for (const i of issues) (g[i.type] ??= []).push(i);
@@ -111,7 +103,7 @@ export function buildFixPRBody(state: LoopState): string {
   md += `<td align="center">\n\n**${state.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
   md += `<td align="center">\n\n**${state.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
   md += `<td align="center">\n\n**${state.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
-  md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+  md += `<td align="center">\n\n**${formatDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
   md += `</tr>\n</table>\n\n`;
 
   if (fixed.length > 0) {
@@ -141,7 +133,7 @@ export function buildFixPRBody(state: LoopState): string {
   md += `<details>\n<summary>\u{1F504} Pass Breakdown</summary>\n\n`;
   md += `| Pass | Found | Fixed | Skipped | Duration |\n|:----:|:-----:|:-----:|:-------:|:--------:|\n`;
   for (const p of state.passes) {
-    md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+    md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${formatDuration(p.durationMs)} |\n`;
   }
   md += `\n</details>\n\n---\n\n`;
 
@@ -319,12 +311,12 @@ export async function writeJobSummary(data: ScanResult | LoopState): Promise<voi
     md += `<td align="center">\n\n**${s.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
     md += `<td align="center">\n\n**${s.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
     md += `<td align="center">\n\n**${s.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
-    md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+    md += `<td align="center">\n\n**${formatDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
     md += `</tr>\n</table>\n\n`;
 
     if (d > 0) {
       md += `> [!IMPORTANT]\n`;
-      md += `> Score improved by **${d} points** across **${s.passes.length} pass${s.passes.length !== 1 ? 'es' : ''}** in **${fmtDuration(dur)}**\n\n`;
+      md += `> Score improved by **${d} points** across **${s.passes.length} pass${s.passes.length !== 1 ? 'es' : ''}** in **${formatDuration(dur)}**\n\n`;
     }
 
     // ---- Fixed issues by type ----
@@ -370,7 +362,7 @@ export async function writeJobSummary(data: ScanResult | LoopState): Promise<voi
     md += `|:----:|:-----:|:-----:|:-------:|:--------:|:---------|\n`;
     const maxFixed = Math.max(...s.passes.map(p => p.fixed), 1);
     for (const p of s.passes) {
-      md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} | \`${miniBar(p.fixed, maxFixed, 8)}\` |\n`;
+      md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${formatDuration(p.durationMs)} | \`${miniBar(p.fixed, maxFixed, 8)}\` |\n`;
     }
     md += `\n</details>\n\n`;
 
@@ -388,8 +380,13 @@ export async function createPullRequest(state: LoopState): Promise<string | null
   const token = process.env.GITHUB_TOKEN;
   if (!token || state.totalFixed === 0) return null;
 
+  const parsed = parseGitHubRepo();
+  if (!parsed) {
+    core.warning('Cannot create PR: GITHUB_REPOSITORY is not set or malformed');
+    return null;
+  }
   const octokit = github.getOctokit(token);
-  const [owner, repo] = (process.env.GITHUB_REPOSITORY || '').split('/');
+  const { owner, repo } = parsed;
   const base = process.env.GITHUB_REF_NAME || 'main';
   const d = state.scoreAfter - state.scoreBefore;
   const title = `sloppy: fix ${state.totalFixed} issues (score ${state.scoreBefore} → ${state.scoreAfter})`;

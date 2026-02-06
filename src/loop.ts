@@ -10,6 +10,7 @@ import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
 import { runHook, applyFilters, formatCustomPromptSection, applyAllowRules } from './plugins';
 import * as ui from './ui';
+import { formatDuration, mapRawToIssue } from './utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,16 +22,6 @@ function sortBySeverity(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  if (m < 60) return rem > 0 ? `${m}m${rem}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  const remM = m % 60;
-  return remM > 0 ? `${h}h${remM}m` : `${h}h`;
-}
 
 function formatTimeRemaining(deadline: number): string {
   return formatDuration(Math.max(0, deadline - Date.now()));
@@ -394,21 +385,19 @@ function parseIssues(output: string): Issue[] {
       const parsed = JSON.parse(text);
       if (parsed.result) text = parsed.result;
       else if (typeof parsed === 'string') text = parsed;
-    } catch {}
+    } catch { /* not JSON-wrapped, use raw text */ }
 
     const match = text.match(/\{[\s\S]*"issues"[\s\S]*\}/);
     if (!match) return [];
 
     const data = JSON.parse(match[0]);
-    return (data.issues || []).map((raw: any, i: number) => ({
-      id: `fix-${Date.now()}-${i}`,
-      type: (raw.type || 'lint') as IssueType,
-      severity: (raw.severity || 'medium') as Severity,
-      file: raw.file || 'unknown',
-      line: raw.line,
-      description: raw.description || '',
-      status: 'found' as const,
-    }));
+    const rawIssues: unknown[] = data.issues || [];
+    const issues: Issue[] = [];
+    for (let i = 0; i < rawIssues.length; i++) {
+      const issue = mapRawToIssue(rawIssues[i], 'fix', i);
+      if (issue) issues.push(issue);
+    }
+    return issues;
   } catch {
     core.warning('Failed to parse agent scan output');
     return [];
@@ -690,12 +679,42 @@ async function dispatchClustersParallel(
         const picked = await cherryPickCommits(worker.branch);
         core.info(`    [${worker.branch}] Cherry-picked ${picked.length} commits`);
 
-        for (let i = 0; i < Math.min(parsed.fixed.length, picked.length); i++) {
-          parsed.fixed[i].commitSha = picked[i];
+        // Build a map of sha → set of modified files so we can match
+        // fixes by file rather than assuming array position correspondence.
+        // parseClusterResults orders by cluster.issues while cherryPickCommits
+        // orders by git history; with parallel subagents those can diverge.
+        const commitFiles = new Map<string, Set<string>>();
+        for (const sha of picked) {
+          let filesOutput = '';
+          await exec.exec('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
+            listeners: { stdout: (d: Buffer) => { filesOutput += d.toString(); } },
+            ignoreReturnCode: true,
+            silent: true,
+          });
+          commitFiles.set(sha, new Set(filesOutput.trim().split('\n').filter(f => f.length > 0)));
         }
 
-        allFixed.push(...parsed.fixed);
-        allSkipped.push(...parsed.skipped);
+        const matchedIssues = new Set<Issue>();
+        for (const issue of parsed.fixed) {
+          for (const sha of picked) {
+            const files = commitFiles.get(sha);
+            if (files?.has(issue.file)) {
+              issue.commitSha = sha;
+              matchedIssues.add(issue);
+              break;
+            }
+          }
+          if (!matchedIssues.has(issue)) {
+            issue.status = 'skipped';
+            issue.skipReason = 'Cherry-pick conflict — fix lost';
+          }
+        }
+
+        const actuallyFixed = parsed.fixed.filter(i => matchedIssues.has(i));
+        const lostFixes = parsed.fixed.filter(i => !matchedIssues.has(i));
+
+        allFixed.push(...actuallyFixed);
+        allSkipped.push(...parsed.skipped, ...lostFixes);
       }
 
       // Cleanup worktree
@@ -932,6 +951,17 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
       for (const issue of skipped) {
         state.totalSkipped++;
         ui.skipped(issue.file, issue.description, issue.skipReason);
+      }
+
+      // Run post-fix hooks (matches sequential path behavior)
+      if (pluginCtx) {
+        for (const issue of [...fixed, ...skipped]) {
+          await runHook(pluginCtx.plugins, 'post-fix', {
+            SLOPPY_ISSUE_FILE: issue.file,
+            SLOPPY_ISSUE_TYPE: issue.type,
+            SLOPPY_ISSUE_STATUS: issue.status,
+          });
+        }
       }
     } else {
       // Sequential cluster-based dispatch

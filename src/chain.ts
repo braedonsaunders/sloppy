@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { LoopState } from './types';
+import { parseGitHubRepo } from './utils';
 
 export async function triggerChain(state: LoopState): Promise<void> {
   const token = process.env.GITHUB_TOKEN;
@@ -9,8 +10,13 @@ export async function triggerChain(state: LoopState): Promise<void> {
     return;
   }
 
+  const parsed = parseGitHubRepo();
+  if (!parsed) {
+    core.warning('Cannot chain: GITHUB_REPOSITORY is not set or malformed');
+    return;
+  }
   const octokit = github.getOctokit(token);
-  const [owner, repo] = (process.env.GITHUB_REPOSITORY || '').split('/');
+  const { owner, repo } = parsed;
   const ref = (process.env.GITHUB_REF || 'main').replace('refs/heads/', '');
 
   // Determine workflow filename from GITHUB_WORKFLOW_REF

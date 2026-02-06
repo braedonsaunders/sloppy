@@ -171,15 +171,6 @@ export function clusterHeader(idx: number, total: number, dir: string, issueCoun
 }
 
 // ---------------------------------------------------------------------------
-// Tree structure for agent output
-// ---------------------------------------------------------------------------
-
-export function treeItem(text: string, isLast: boolean): void {
-  const prefix = isLast ? SYM.cornerRight : SYM.teeRight;
-  core.info(`    ${c(prefix + SYM.dash, S.gray)} ${text}`);
-}
-
-// ---------------------------------------------------------------------------
 // Score display
 // ---------------------------------------------------------------------------
 
@@ -248,18 +239,6 @@ export function agentDone(elapsed: number, events: number): void {
 
 export function agentStderr(line: string): void {
   core.info(`  ${c(SYM.vline, S.red)} ${c(line, S.red)}`);
-}
-
-// ---------------------------------------------------------------------------
-// Groups (collapsible sections in GitHub Actions)
-// ---------------------------------------------------------------------------
-
-export function startGroup(name: string): void {
-  core.startGroup(name);
-}
-
-export function endGroup(): void {
-  core.endGroup();
 }
 
 // ---------------------------------------------------------------------------

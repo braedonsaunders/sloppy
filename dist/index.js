@@ -30413,14 +30413,20 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.triggerChain = triggerChain;
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
+const utils_1 = __nccwpck_require__(1798);
 async function triggerChain(state) {
     const token = process.env.GITHUB_TOKEN;
     if (!token) {
         core.warning('Cannot chain: no GITHUB_TOKEN');
         return;
     }
+    const parsed = (0, utils_1.parseGitHubRepo)();
+    if (!parsed) {
+        core.warning('Cannot chain: GITHUB_REPOSITORY is not set or malformed');
+        return;
+    }
     const octokit = github.getOctokit(token);
-    const [owner, repo] = (process.env.GITHUB_REPOSITORY || '').split('/');
+    const { owner, repo } = parsed;
     const ref = (process.env.GITHUB_REF || 'main').replace('refs/heads/', '');
     // Determine workflow filename from GITHUB_WORKFLOW_REF
     const workflowRef = process.env.GITHUB_WORKFLOW_REF || '';
@@ -31157,6 +31163,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TokenLimitError = void 0;
 exports.callGitHubModels = callGitHubModels;
 const core = __importStar(__nccwpck_require__(7484));
+const utils_1 = __nccwpck_require__(1798);
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
 const MAX_RETRIES = 4;
 /** Thrown when the request body exceeds the model's input token limit (HTTP 413). */
@@ -31179,9 +31186,6 @@ function getGitHubToken() {
             'Or ensure permissions include: models: read');
     }
     return token;
-}
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }
 async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options) {
     const token = getGitHubToken();
@@ -31233,7 +31237,7 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options)
             }
             const waitSec = Math.ceil(waitMs / 1000);
             core.info(`       Rate limited (429). Waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
-            await sleep(waitMs);
+            await (0, utils_1.sleep)(waitMs);
             continue;
         }
         // Handle other errors
@@ -31565,6 +31569,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.localScanFile = localScanFile;
 exports.localScanAll = localScanAll;
+const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const PATTERNS = [
@@ -31667,11 +31672,27 @@ const PATTERNS = [
         extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
     },
 ];
+/**
+ * Basic check for common ReDoS patterns (nested quantifiers).
+ * Detects patterns like (a+)+, (a*)+, (a+)*, (a{2,})+ which cause
+ * catastrophic backtracking.
+ */
+function isReDoSRisk(pattern) {
+    return /([+*?]|\{\d+,?\d*\})\s*\)\s*([+*?]|\{\d+,?\d*\})/.test(pattern);
+}
 /** Convert PluginPattern definitions into runtime Pattern objects. */
 function compilePluginPatterns(pluginPatterns) {
     const compiled = [];
     for (const pp of pluginPatterns) {
         try {
+            if (isReDoSRisk(pp.regex)) {
+                core.warning(`Plugin pattern rejected (potential ReDoS): ${pp.regex.slice(0, 60)}`);
+                continue;
+            }
+            if (pp.regex.length > 500) {
+                core.warning(`Plugin pattern rejected (too complex, ${pp.regex.length} chars): ${pp.regex.slice(0, 60)}...`);
+                continue;
+            }
             const regex = new RegExp(pp.regex, 'g');
             compiled.push({
                 regex,
@@ -31813,6 +31834,7 @@ const checkpoint_1 = __nccwpck_require__(4213);
 const report_1 = __nccwpck_require__(665);
 const plugins_1 = __nccwpck_require__(6067);
 const ui = __importStar(__nccwpck_require__(5125));
+const utils_1 = __nccwpck_require__(1798);
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -31820,20 +31842,8 @@ const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 function sortBySeverity(issues) {
     return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
 }
-function formatDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    if (s < 60)
-        return `${s}s`;
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
-    if (m < 60)
-        return rem > 0 ? `${m}m${rem}s` : `${m}m`;
-    const h = Math.floor(m / 60);
-    const remM = m % 60;
-    return remM > 0 ? `${h}h${remM}m` : `${h}h`;
-}
 function formatTimeRemaining(deadline) {
-    return formatDuration(Math.max(0, deadline - Date.now()));
+    return (0, utils_1.formatDuration)(Math.max(0, deadline - Date.now()));
 }
 // ---------------------------------------------------------------------------
 // Test detection — covers major ecosystems
@@ -32170,20 +32180,19 @@ function parseIssues(output) {
             else if (typeof parsed === 'string')
                 text = parsed;
         }
-        catch { }
+        catch { /* not JSON-wrapped, use raw text */ }
         const match = text.match(/\{[\s\S]*"issues"[\s\S]*\}/);
         if (!match)
             return [];
         const data = JSON.parse(match[0]);
-        return (data.issues || []).map((raw, i) => ({
-            id: `fix-${Date.now()}-${i}`,
-            type: (raw.type || 'lint'),
-            severity: (raw.severity || 'medium'),
-            file: raw.file || 'unknown',
-            line: raw.line,
-            description: raw.description || '',
-            status: 'found',
-        }));
+        const rawIssues = data.issues || [];
+        const issues = [];
+        for (let i = 0; i < rawIssues.length; i++) {
+            const issue = (0, utils_1.mapRawToIssue)(rawIssues[i], 'fix', i);
+            if (issue)
+                issues.push(issue);
+        }
+        return issues;
     }
     catch {
         core.warning('Failed to parse agent scan output');
@@ -32410,11 +32419,39 @@ async function dispatchClustersParallel(clusters, config, testCmd, customSection
                 }
                 const picked = await cherryPickCommits(worker.branch);
                 core.info(`    [${worker.branch}] Cherry-picked ${picked.length} commits`);
-                for (let i = 0; i < Math.min(parsed.fixed.length, picked.length); i++) {
-                    parsed.fixed[i].commitSha = picked[i];
+                // Build a map of sha → set of modified files so we can match
+                // fixes by file rather than assuming array position correspondence.
+                // parseClusterResults orders by cluster.issues while cherryPickCommits
+                // orders by git history; with parallel subagents those can diverge.
+                const commitFiles = new Map();
+                for (const sha of picked) {
+                    let filesOutput = '';
+                    await exec.exec('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
+                        listeners: { stdout: (d) => { filesOutput += d.toString(); } },
+                        ignoreReturnCode: true,
+                        silent: true,
+                    });
+                    commitFiles.set(sha, new Set(filesOutput.trim().split('\n').filter(f => f.length > 0)));
                 }
-                allFixed.push(...parsed.fixed);
-                allSkipped.push(...parsed.skipped);
+                const matchedIssues = new Set();
+                for (const issue of parsed.fixed) {
+                    for (const sha of picked) {
+                        const files = commitFiles.get(sha);
+                        if (files?.has(issue.file)) {
+                            issue.commitSha = sha;
+                            matchedIssues.add(issue);
+                            break;
+                        }
+                    }
+                    if (!matchedIssues.has(issue)) {
+                        issue.status = 'skipped';
+                        issue.skipReason = 'Cherry-pick conflict — fix lost';
+                    }
+                }
+                const actuallyFixed = parsed.fixed.filter(i => matchedIssues.has(i));
+                const lostFixes = parsed.fixed.filter(i => !matchedIssues.has(i));
+                allFixed.push(...actuallyFixed);
+                allSkipped.push(...parsed.skipped, ...lostFixes);
             }
             // Cleanup worktree
             await removeWorktree(worker.worktree, worker.branch);
@@ -32449,7 +32486,7 @@ async function runFixLoop(config, pluginCtx) {
     ui.section('FIX MODE');
     ui.kv('Agent', config.agent);
     ui.kv('Model', config.model || 'default');
-    ui.kv('Timeout', formatDuration(config.timeout));
+    ui.kv('Timeout', (0, utils_1.formatDuration)(config.timeout));
     ui.kv('Max passes', String(config.maxPasses));
     ui.kv('Max issues', `${config.maxIssuesPerPass || 'unlimited'}/pass`);
     ui.kv('Parallel', `${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
@@ -32532,7 +32569,7 @@ async function runFixLoop(config, pluginCtx) {
                 timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
                 verbose: config.verbose,
             });
-            const scanDuration = formatDuration(Date.now() - scanStart);
+            const scanDuration = (0, utils_1.formatDuration)(Date.now() - scanStart);
             // Detect scan failure — don't treat empty output + error exit as "clean"
             if (scanResult.exitCode !== 0 && !scanResult.output.trim()) {
                 core.warning(`Scan agent failed (exit ${scanResult.exitCode}, no output) — will retry next pass`);
@@ -32620,6 +32657,16 @@ async function runFixLoop(config, pluginCtx) {
                 state.totalSkipped++;
                 ui.skipped(issue.file, issue.description, issue.skipReason);
             }
+            // Run post-fix hooks (matches sequential path behavior)
+            if (pluginCtx) {
+                for (const issue of [...fixed, ...skipped]) {
+                    await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-fix', {
+                        SLOPPY_ISSUE_FILE: issue.file,
+                        SLOPPY_ISSUE_TYPE: issue.type,
+                        SLOPPY_ISSUE_STATUS: issue.status,
+                    });
+                }
+            }
         }
         else {
             // Sequential cluster-based dispatch
@@ -32636,7 +32683,7 @@ async function runFixLoop(config, pluginCtx) {
                 }
                 const clusterStart = Date.now();
                 const { fixed, skipped } = await dispatchClusterSequential(cluster, config, testCmd, customSection, deadline, margin);
-                const clusterDur = formatDuration(Date.now() - clusterStart);
+                const clusterDur = (0, utils_1.formatDuration)(Date.now() - clusterStart);
                 passFixed += fixed.length;
                 passSkipped += skipped.length;
                 for (const issue of fixed) {
@@ -32678,7 +32725,7 @@ async function runFixLoop(config, pluginCtx) {
             durationMs: Date.now() - passStart,
         });
         ui.blank();
-        ui.passSummary(state.pass, passFixed, passSkipped, formatDuration(Date.now() - passStart));
+        ui.passSummary(state.pass, passFixed, passSkipped, (0, utils_1.formatDuration)(Date.now() - passStart));
         core.info(`  ${ui.c('Running totals:', ui.S.gray)} ${ui.c(String(state.totalFixed), ui.S.bold, ui.S.green)} fixed, ${ui.c(String(state.totalSkipped), ui.S.yellow)} skipped`);
         (0, checkpoint_1.saveCheckpoint)(state);
         // Push after each pass so fixes aren't lost if the job is killed.
@@ -32723,7 +32770,7 @@ async function runFixLoop(config, pluginCtx) {
     ui.stat('Fixed', String(state.totalFixed));
     ui.stat('Skipped', String(state.totalSkipped));
     ui.stat('Passes', String(state.passes.length));
-    ui.stat('Duration', formatDuration(Date.now() - startTime));
+    ui.stat('Duration', (0, utils_1.formatDuration)(Date.now() - startTime));
     ui.stat('Complete', state.complete
         ? ui.c('YES', ui.S.bold, ui.S.green)
         : ui.c('NO', ui.S.yellow) + ui.c(' (more work may remain)', ui.S.gray));
@@ -33354,6 +33401,7 @@ const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+const utils_1 = __nccwpck_require__(1798);
 // --- Helpers ---
 function severityIcon(s) {
     const map = { critical: '\u{1F534}', high: '\u{1F7E0}', medium: '\u{1F7E1}', low: '\u{1F535}' };
@@ -33413,16 +33461,6 @@ function miniBar(count, max, w = 10) {
     const filled = Math.max(1, Math.round((count / max) * w));
     return '\u2588'.repeat(filled) + '\u2591'.repeat(w - filled);
 }
-function fmtDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    if (s < 60)
-        return `${s}s`;
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    if (m < 60)
-        return `${m}m ${sec}s`;
-    return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
 function groupBy(issues) {
     const g = {};
     for (const i of issues)
@@ -33461,7 +33499,7 @@ function buildFixPRBody(state) {
     md += `<td align="center">\n\n**${state.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
     md += `<td align="center">\n\n**${state.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
     md += `<td align="center">\n\n**${state.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
-    md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+    md += `<td align="center">\n\n**${(0, utils_1.formatDuration)(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
     md += `</tr>\n</table>\n\n`;
     if (fixed.length > 0) {
         const sortedTypes = Object.entries(byType).sort((a, b) => b[1].length - a[1].length);
@@ -33488,7 +33526,7 @@ function buildFixPRBody(state) {
     md += `<details>\n<summary>\u{1F504} Pass Breakdown</summary>\n\n`;
     md += `| Pass | Found | Fixed | Skipped | Duration |\n|:----:|:-----:|:-----:|:-------:|:--------:|\n`;
     for (const p of state.passes) {
-        md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+        md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${(0, utils_1.formatDuration)(p.durationMs)} |\n`;
     }
     md += `\n</details>\n\n---\n\n`;
     md += `> **Merge** to accept all fixes \u00B7 **Close** to reject \u00B7 Revert individual commits as needed\n\n`;
@@ -33642,11 +33680,11 @@ async function writeJobSummary(data) {
         md += `<td align="center">\n\n**${s.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
         md += `<td align="center">\n\n**${s.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
         md += `<td align="center">\n\n**${s.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
-        md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+        md += `<td align="center">\n\n**${(0, utils_1.formatDuration)(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
         md += `</tr>\n</table>\n\n`;
         if (d > 0) {
             md += `> [!IMPORTANT]\n`;
-            md += `> Score improved by **${d} points** across **${s.passes.length} pass${s.passes.length !== 1 ? 'es' : ''}** in **${fmtDuration(dur)}**\n\n`;
+            md += `> Score improved by **${d} points** across **${s.passes.length} pass${s.passes.length !== 1 ? 'es' : ''}** in **${(0, utils_1.formatDuration)(dur)}**\n\n`;
         }
         // ---- Fixed issues by type ----
         if (s.totalFixed > 0) {
@@ -33687,7 +33725,7 @@ async function writeJobSummary(data) {
         md += `|:----:|:-----:|:-----:|:-------:|:--------:|:---------|\n`;
         const maxFixed = Math.max(...s.passes.map(p => p.fixed), 1);
         for (const p of s.passes) {
-            md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} | \`${miniBar(p.fixed, maxFixed, 8)}\` |\n`;
+            md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${(0, utils_1.formatDuration)(p.durationMs)} | \`${miniBar(p.fixed, maxFixed, 8)}\` |\n`;
         }
         md += `\n</details>\n\n`;
         // ---- Footer ----
@@ -33701,8 +33739,13 @@ async function createPullRequest(state) {
     const token = process.env.GITHUB_TOKEN;
     if (!token || state.totalFixed === 0)
         return null;
+    const parsed = (0, utils_1.parseGitHubRepo)();
+    if (!parsed) {
+        core.warning('Cannot create PR: GITHUB_REPOSITORY is not set or malformed');
+        return null;
+    }
     const octokit = github.getOctokit(token);
-    const [owner, repo] = (process.env.GITHUB_REPOSITORY || '').split('/');
+    const { owner, repo } = parsed;
     const base = process.env.GITHUB_REF_NAME || 'main';
     const d = state.scoreAfter - state.scoreBefore;
     const title = `sloppy: fix ${state.totalFixed} issues (score ${state.scoreBefore} → ${state.scoreAfter})`;
@@ -34066,6 +34109,7 @@ const plugins_1 = __nccwpck_require__(6067);
 const fingerprint_1 = __nccwpck_require__(2659);
 const scan_cache_1 = __nccwpck_require__(1629);
 const ui = __importStar(__nccwpck_require__(5125));
+const utils_1 = __nccwpck_require__(1798);
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
     '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.swift', '.kt', '.scala',
@@ -34173,15 +34217,14 @@ async function collectPrFiles(cwd) {
 function parseIssues(content) {
     try {
         const data = JSON.parse(content);
-        return (data.issues || []).map((raw, i) => ({
-            id: `scan-${Date.now()}-${i}`,
-            type: (raw.type || 'lint'),
-            severity: (raw.severity || 'medium'),
-            file: raw.file || 'unknown',
-            line: raw.line || undefined,
-            description: raw.description || 'Unknown issue',
-            status: 'found',
-        }));
+        const rawIssues = data.issues || [];
+        const issues = [];
+        for (let i = 0; i < rawIssues.length; i++) {
+            const issue = (0, utils_1.mapRawToIssue)(rawIssues[i], 'scan', i);
+            if (issue)
+                issues.push(issue);
+        }
+        return issues;
     }
     catch {
         try {
@@ -34189,15 +34232,14 @@ function parseIssues(content) {
             if (!match)
                 return [];
             const data = JSON.parse(match[0]);
-            return (data.issues || []).map((raw, i) => ({
-                id: `scan-${Date.now()}-${i}`,
-                type: (raw.type || 'lint'),
-                severity: (raw.severity || 'medium'),
-                file: raw.file || 'unknown',
-                line: raw.line || undefined,
-                description: raw.description || 'Unknown issue',
-                status: 'found',
-            }));
+            const rawIssues = data.issues || [];
+            const issues = [];
+            for (let i = 0; i < rawIssues.length; i++) {
+                const issue = (0, utils_1.mapRawToIssue)(rawIssues[i], 'scan', i);
+                if (issue)
+                    issues.push(issue);
+            }
+            return issues;
         }
         catch {
             core.warning('Failed to parse scan response');
@@ -34235,17 +34277,6 @@ function calculateScore(issues, loc) {
         totalPenalty = totalPenalty / kloc;
     }
     return Math.max(0, Math.min(100, Math.round(100 - totalPenalty)));
-}
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-function formatDuration(ms) {
-    const s = Math.floor(ms / 1000);
-    if (s < 60)
-        return `${s}s`;
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
-    return rem > 0 ? `${m}m${rem}s` : `${m}m`;
 }
 // ---------------------------------------------------------------------------
 // Layer 1: Fingerprint scanning (compact representations → fewer API calls)
@@ -34285,7 +34316,7 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
             const idx = batchStart + j;
             // Stagger starts slightly to avoid hitting rate limits simultaneously
             if (j > 0)
-                await sleep(500 * j);
+                await (0, utils_1.sleep)(500 * j);
             const chunkStart = Date.now();
             const { content, tokens } = await (0, github_models_1.callGitHubModels)([
                 { role: 'system', content: systemMsg },
@@ -34302,7 +34333,7 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
                 apiCalls++;
                 const chunkIssues = parseIssues(content);
                 allIssues.push(...chunkIssues);
-                const elapsedStr = formatDuration(elapsed);
+                const elapsedStr = (0, utils_1.formatDuration)(elapsed);
                 if (chunkIssues.length > 0) {
                     core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
                 }
@@ -34316,7 +34347,7 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
         }
         // Rate-limit pause between batches (not after last batch)
         if (batchStart + CONCURRENCY < chunks.length) {
-            await sleep(3000);
+            await (0, utils_1.sleep)(3000);
         }
     }
     return { issues: allIssues, tokens: totalTokens, apiCalls };
@@ -34368,7 +34399,7 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customP
             allIssues.push(...result.issues);
             allTokens += result.tokens;
             if (halves.indexOf(half) === 0)
-                await sleep(4500);
+                await (0, utils_1.sleep)(4500);
         }
         return { issues: allIssues, tokens: allTokens };
     }
@@ -34493,7 +34524,7 @@ async function runScan(config, pluginCtx) {
                 const results = await Promise.allSettled(batch.map(async (chunk, j) => {
                     const idx = batchStart + j;
                     if (j > 0)
-                        await sleep(500 * j);
+                        await (0, utils_1.sleep)(500 * j);
                     const chunkStart = Date.now();
                     const { issues: chunkIssues, tokens } = await scanChunk(chunk, idx + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
                     return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
@@ -34504,7 +34535,7 @@ async function runScan(config, pluginCtx) {
                         totalTokens += tokens;
                         totalApiCalls++;
                         aiIssues.push(...chunkIssues);
-                        const elapsedStr = formatDuration(elapsed);
+                        const elapsedStr = (0, utils_1.formatDuration)(elapsed);
                         if (chunkIssues.length > 0) {
                             core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
                         }
@@ -34517,7 +34548,7 @@ async function runScan(config, pluginCtx) {
                     }
                 }
                 if (batchStart + DEEP_CONCURRENCY < chunks.length) {
-                    await sleep(3000);
+                    await (0, utils_1.sleep)(3000);
                 }
             }
         }
@@ -34588,7 +34619,7 @@ async function runScan(config, pluginCtx) {
     });
     const loc = countSourceLOC(files);
     const score = calculateScore(unique, loc);
-    const totalElapsed = formatDuration(Date.now() - scanStart);
+    const totalElapsed = (0, utils_1.formatDuration)(Date.now() - scanStart);
     // Summary
     ui.blank();
     ui.banner('SCAN COMPLETE');
@@ -35765,7 +35796,6 @@ exports.issueFound = issueFound;
 exports.severityBreakdown = severityBreakdown;
 exports.progressBar = progressBar;
 exports.clusterHeader = clusterHeader;
-exports.treeItem = treeItem;
 exports.scoreChange = scoreChange;
 exports.score = score;
 exports.stat = stat;
@@ -35779,8 +35809,6 @@ exports.agentHeartbeat = agentHeartbeat;
 exports.agentStreamStart = agentStreamStart;
 exports.agentDone = agentDone;
 exports.agentStderr = agentStderr;
-exports.startGroup = startGroup;
-exports.endGroup = endGroup;
 exports.passSummary = passSummary;
 exports.finalResults = finalResults;
 exports.c = c;
@@ -35932,13 +35960,6 @@ function clusterHeader(idx, total, dir, issueCount) {
     core.info(`  ${c(`[${idx}/${total}]`, S.bold, S.cyan)} ${c(dir, S.bold)}${c(`/`, S.gray)} ${c(`(${issueCount} issue${issueCount !== 1 ? 's' : ''})`, S.gray)}`);
 }
 // ---------------------------------------------------------------------------
-// Tree structure for agent output
-// ---------------------------------------------------------------------------
-function treeItem(text, isLast) {
-    const prefix = isLast ? exports.SYM.cornerRight : exports.SYM.teeRight;
-    core.info(`    ${c(prefix + exports.SYM.dash, S.gray)} ${text}`);
-}
-// ---------------------------------------------------------------------------
 // Score display
 // ---------------------------------------------------------------------------
 function scoreChange(before, after) {
@@ -35994,15 +36015,6 @@ function agentStderr(line) {
     core.info(`  ${c(exports.SYM.vline, S.red)} ${c(line, S.red)}`);
 }
 // ---------------------------------------------------------------------------
-// Groups (collapsible sections in GitHub Actions)
-// ---------------------------------------------------------------------------
-function startGroup(name) {
-    core.startGroup(name);
-}
-function endGroup() {
-    core.endGroup();
-}
-// ---------------------------------------------------------------------------
 // Pass summary block
 // ---------------------------------------------------------------------------
 function passSummary(pass, fixedCount, skippedCount, duration) {
@@ -36017,6 +36029,86 @@ function finalResults() {
     core.info(divider());
     core.info(c('  R E S U L T S', S.bold, S.brightWhite));
     core.info(divider());
+}
+
+
+/***/ }),
+
+/***/ 1798:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+/**
+ * Shared utilities used across the codebase.
+ * Extracted to eliminate duplication of formatDuration, sleep, and issue parsing.
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.formatDuration = formatDuration;
+exports.sleep = sleep;
+exports.mapRawToIssue = mapRawToIssue;
+exports.parseGitHubRepo = parseGitHubRepo;
+// ---------------------------------------------------------------------------
+// Time helpers
+// ---------------------------------------------------------------------------
+/**
+ * Format a duration in milliseconds to a human-readable string.
+ * Examples: "45s", "5m30s", "2h15m"
+ */
+function formatDuration(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60)
+        return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    if (m < 60)
+        return rem > 0 ? `${m}m${rem}s` : `${m}m`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return remM > 0 ? `${h}h${remM}m` : `${h}h`;
+}
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+// ---------------------------------------------------------------------------
+// Issue parsing helpers
+// ---------------------------------------------------------------------------
+const VALID_ISSUE_TYPES = new Set([
+    'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
+]);
+const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+/**
+ * Map a raw JSON object to a validated Issue.
+ * Returns null if the raw data doesn't have the minimum required shape.
+ * Performs runtime type checking to guard against malformed AI model responses.
+ */
+function mapRawToIssue(raw, idPrefix, index) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    const r = raw;
+    return {
+        id: `${idPrefix}-${Date.now()}-${index}`,
+        type: (typeof r.type === 'string' && VALID_ISSUE_TYPES.has(r.type) ? r.type : 'lint'),
+        severity: (typeof r.severity === 'string' && VALID_SEVERITIES.has(r.severity) ? r.severity : 'medium'),
+        file: typeof r.file === 'string' && r.file ? r.file : 'unknown',
+        line: typeof r.line === 'number' ? r.line : undefined,
+        description: typeof r.description === 'string' && r.description ? r.description : 'Unknown issue',
+        status: 'found',
+    };
+}
+// ---------------------------------------------------------------------------
+// GitHub helpers
+// ---------------------------------------------------------------------------
+/**
+ * Parse GITHUB_REPOSITORY env var ("owner/repo") into components.
+ * Returns null if missing or malformed.
+ */
+function parseGitHubRepo() {
+    const full = process.env.GITHUB_REPOSITORY || '';
+    const idx = full.indexOf('/');
+    if (idx <= 0 || idx >= full.length - 1)
+        return null;
+    return { owner: full.slice(0, idx), repo: full.slice(idx + 1) };
 }
 
 
