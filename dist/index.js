@@ -29970,8 +29970,9 @@ const path = __importStar(__nccwpck_require__(6928));
 const os = __importStar(__nccwpck_require__(857));
 async function installAgent(agent) {
     if (agent === 'claude') {
-        // @anthropic-ai/claude-code provides both the CLI and the SDK query() function.
-        await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
+        // @anthropic-ai/claude-agent-sdk provides the SDK query() function for streaming.
+        // @anthropic-ai/claude-code provides the CLI binary for the fallback path.
+        await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code']);
     }
     else {
         await exec.exec('npm', ['install', '-g', '@openai/codex']);
@@ -29992,7 +29993,7 @@ import { pathToFileURL } from 'node:url';
 
 async function loadQuery() {
   const globalRoot = process.env.NODE_PATH || '';
-  const packages = ['@anthropic-ai/claude-code'];
+  const packages = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code'];
 
   for (const pkg of packages) {
     // Try bare specifier (works if in local node_modules)
