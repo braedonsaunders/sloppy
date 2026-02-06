@@ -38,6 +38,16 @@ export interface SloppyConfig {
   parallelAgents: number;
 }
 
+/** Repo-level .sloppy.yml configuration. */
+export interface RepoConfig {
+  ignore?: string[];
+  rules?: Record<string, 'off' | Severity>;
+  fixTypes?: IssueType[];
+  testCommand?: string;
+  strictness?: 'low' | 'medium' | 'high';
+  failBelow?: number;
+}
+
 export interface Issue {
   id: string;
   type: IssueType;

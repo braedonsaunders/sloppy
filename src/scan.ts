@@ -67,7 +67,7 @@ const ISSUES_SCHEMA = {
   },
 };
 
-function collectFiles(dir: string, files: string[] = []): string[] {
+export function collectFiles(dir: string, files: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith('.') && entry.name !== '.github') continue;
     if (IGNORE_DIRS.has(entry.name)) continue;
@@ -155,13 +155,36 @@ function parseIssues(content: string): Issue[] {
   }
 }
 
-export function calculateScore(issues: Issue[]): number {
-  const penalties: Record<Severity, number> = { critical: 10, high: 5, medium: 2, low: 1 };
-  let score = 100;
-  for (const issue of issues) {
-    score -= penalties[issue.severity] || 1;
+/**
+ * Count non-blank lines of code across the given files.
+ * Returns at least 1 to avoid division-by-zero.
+ */
+export function countSourceLOC(files: string[]): number {
+  let loc = 0;
+  for (const f of files) {
+    try {
+      const content = fs.readFileSync(f, 'utf-8');
+      loc += content.split('\n').filter(l => l.trim().length > 0).length;
+    } catch {}
   }
-  return Math.max(0, Math.min(100, score));
+  return Math.max(loc, 1);
+}
+
+/**
+ * Score code quality 0–100. When `loc` is provided the penalty is
+ * normalised per-KLOC so larger repos aren't unfairly punished.
+ */
+export function calculateScore(issues: Issue[], loc?: number): number {
+  const penalties: Record<Severity, number> = { critical: 10, high: 5, medium: 2, low: 1 };
+  let totalPenalty = 0;
+  for (const issue of issues) {
+    totalPenalty += penalties[issue.severity] || 1;
+  }
+  if (loc && loc > 0) {
+    const kloc = Math.max(1, loc / 1000);
+    totalPenalty = totalPenalty / kloc;
+  }
+  return Math.max(0, Math.min(100, Math.round(100 - totalPenalty)));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -521,7 +544,8 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
     return true;
   });
 
-  const score = calculateScore(unique);
+  const loc = countSourceLOC(files);
+  const score = calculateScore(unique, loc);
   const totalElapsed = formatDuration(Date.now() - scanStart);
 
   // Summary
@@ -529,7 +553,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   core.info('='.repeat(50));
   core.info('SCAN COMPLETE');
   core.info('='.repeat(50));
-  core.info(`Score:      ${score}/100`);
+  core.info(`Score:      ${score}/100 (${loc.toLocaleString()} LOC)`);
   core.info(`Issues:     ${unique.length} found`);
   core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
   core.info(`Cache hits: ${cacheHits}/${files.length} files`);

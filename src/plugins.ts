@@ -31,7 +31,7 @@ import {
 // dependency. Supports scalars, lists, and one level of nesting.
 // ---------------------------------------------------------------------------
 
-function parseSimpleYaml(text: string): Record<string, unknown> {
+export function parseSimpleYaml(text: string): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const lines = text.split('\n');
   let currentKey = '';
