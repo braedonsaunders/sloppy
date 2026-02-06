@@ -17,6 +17,7 @@ import { localScanAll } from './local-scan';
 import { runHook, applyFilters } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
+import * as ui from './ui';
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -218,12 +219,11 @@ async function runFingerprintScan(
 
   const totalHotspots = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
   const avgTokens = Math.round(fingerprints.reduce((n, f) => n + f.tokens, 0) / fingerprints.length);
-  core.info(`  Generated ${fingerprints.length} fingerprints (avg ${avgTokens} tokens/file, ${totalHotspots} hotspots)`);
+  core.info(`  ${fingerprints.length} fingerprints ${ui.c(`(avg ${avgTokens} tokens, ${totalHotspots} hotspots)`, ui.S.gray)}`);
 
   // Pack into token-budgeted chunks
   const chunks = packFingerprints(fingerprints, model);
-  core.info(`  Packed into ${chunks.length} fingerprint chunks`);
-  core.info('');
+  core.info(`  ${chunks.length} chunks to scan`);
 
   const allIssues: Issue[] = [];
   let totalTokens = 0;
@@ -233,7 +233,7 @@ async function runFingerprintScan(
     const chunkStart = Date.now();
     const fileCount = chunks[i].fingerprints.length;
     const progress = Math.round(((i + 1) / chunks.length) * 100);
-    core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
+    core.info(ui.progressBar(i + 1, chunks.length, 20, `${fileCount} files (~${chunks[i].totalTokens} tokens)`));
 
     try {
       const systemMsg = customPrompt
@@ -254,12 +254,12 @@ async function runFingerprintScan(
 
       const elapsed = formatDuration(Date.now() - chunkStart);
       if (chunkIssues.length > 0) {
-        core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+        core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
       } else {
-        core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+        core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
       }
     } catch (e) {
-      core.warning(`         FAILED: ${e}`);
+      core.warning(`    FAILED: ${e}`);
     }
 
     if (i < chunks.length - 1) {
@@ -353,38 +353,34 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   const isPR = !!github.context.payload.pull_request;
   const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
 
-  core.info('');
-  core.info('='.repeat(50));
-  core.info('SLOPPY FREE SCAN');
-  core.info(`Model: ${config.githubModelsModel}`);
-  core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
-  core.info('='.repeat(50));
-  core.info('');
+  ui.section('SCAN');
+  ui.kv('Model', config.githubModelsModel);
+  ui.kv('Scope', `${scope}${scope === 'auto' ? (isPR ? ' \u2192 pr' : ' \u2192 full') : ''}`);
 
   let files: string[];
   let scopeLabel: string;
 
   if (usePrDiff) {
-    core.info('Collecting PR changed files...');
+    core.info(`  Collecting PR changed files...`);
     const prFiles = await collectPrFiles(cwd);
     if (prFiles && prFiles.length > 0) {
       files = prFiles;
       scopeLabel = `PR #${github.context.payload.pull_request?.number} (${files.length} changed files)`;
     } else {
-      core.info('No PR files found or not in PR context. Falling back to full repo scan.');
+      core.info(`  No PR files found. Falling back to full repo scan.`);
       files = collectFiles(cwd);
       scopeLabel = `full repo (${files.length} files)`;
     }
   } else {
-    core.info('Collecting all source files...');
+    core.info(`  Collecting source files...`);
     files = collectFiles(cwd);
     scopeLabel = `full repo (${files.length} files)`;
   }
 
-  core.info(`Scope: ${scopeLabel}`);
+  ui.kv('Files', scopeLabel);
 
   if (files.length === 0) {
-    core.info('No source files found — nothing to scan.');
+    core.info(`  ${ui.c('No source files found', ui.S.gray)} — nothing to scan.`);
     return { issues: [], score: 100, summary: 'No source files found.', tokens: 0 };
   }
 
@@ -399,7 +395,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
     .slice(0, 5)
     .map(([ext, count]) => `${ext}(${count})`)
     .join(', ');
-  core.info(`File types: ${topExts}`);
+  ui.kv('File types', topExts);
 
   // ================================================================
   // CACHE: Skip unchanged files
@@ -414,7 +410,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   );
 
   if (cacheHits > 0) {
-    core.info(`Cache: ${cacheHits} files unchanged (${cachedIssues.length} cached issues), ${uncachedFiles.length} files to scan`);
+    ui.kv('Cache', `${cacheHits} files cached, ${uncachedFiles.length} to scan`);
   }
 
   const filesToScan = uncachedFiles;
@@ -423,20 +419,19 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   let totalApiCalls = 0;
 
   if (filesToScan.length === 0) {
-    core.info('All files cached — no API calls needed!');
+    core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} All files cached — no API calls needed`);
   } else {
     // ================================================================
     // LAYER 0: Local static analysis (zero API calls)
     // ================================================================
-    core.info('');
-    core.info('── Layer 0: Local Analysis (no API calls) ──');
+    ui.section('Layer 0: Local Analysis');
     const extraPatterns = pluginCtx?.extraPatterns || [];
     const { issues: localIssues, flaggedFiles } = localScanAll(filesToScan, cwd, extraPatterns);
     if (localIssues.length > 0) {
-      core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
+      core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files)`, ui.S.gray)}`);
       allIssues.push(...localIssues);
     } else {
-      core.info('  No local issues found');
+      core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No local issues found`);
     }
 
     // ================================================================
@@ -459,8 +454,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
     const customPrompt = pluginCtx?.customPrompt || '';
 
     if (useDeepScan) {
-      core.info('');
-      core.info(`── Layer 1: Deep Scan (${filesToScan.length} files — full content) ──`);
+      ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
 
       const modelLimit = getModelInputLimit(config.githubModelsModel);
       const codeBudget = calculateCodeBudget(modelLimit);
@@ -469,8 +463,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
       const compressedCount = chunks.reduce(
         (n, c) => n + c.files.filter(f => f.compressed).length, 0,
       );
-      core.info(`  ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
-      core.info('');
+      core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
 
       for (let i = 0; i < chunks.length; i++) {
         const chunkStart = Date.now();
@@ -478,7 +471,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
         const progress = Math.round(((i + 1) / chunks.length) * 100);
         const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
         const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-        core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
+        core.info(ui.progressBar(i + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
 
         try {
           const { issues: chunkIssues, tokens } = await scanChunk(
@@ -490,9 +483,9 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
 
           const elapsed = formatDuration(Date.now() - chunkStart);
           if (chunkIssues.length > 0) {
-            core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+            core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
           } else {
-            core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+            core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
           }
         } catch (e) {
           core.warning(`         FAILED: ${e}`);
@@ -501,8 +494,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
         if (i < chunks.length - 1) await sleep(4500);
       }
     } else {
-      core.info('');
-      core.info(`── Layer 1: Fingerprint Scan (${filesToScan.length} files — compact) ──`);
+      ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
       const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
       aiIssues = fpResult.issues;
       totalTokens += fpResult.tokens;
@@ -549,35 +541,33 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   const totalElapsed = formatDuration(Date.now() - scanStart);
 
   // Summary
-  core.info('');
-  core.info('='.repeat(50));
-  core.info('SCAN COMPLETE');
-  core.info('='.repeat(50));
-  core.info(`Score:      ${score}/100 (${loc.toLocaleString()} LOC)`);
-  core.info(`Issues:     ${unique.length} found`);
-  core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
-  core.info(`Cache hits: ${cacheHits}/${files.length} files`);
-  core.info(`Tokens:     ${totalTokens.toLocaleString()}`);
-  core.info(`Duration:   ${totalElapsed}`);
+  ui.blank();
+  ui.banner('SCAN COMPLETE');
+  ui.score(score, `Score`);
+  ui.stat('LOC', loc.toLocaleString());
+  ui.stat('Issues', `${unique.length} found`);
+  ui.stat('API calls', String(totalApiCalls));
+  ui.stat('Cache', `${cacheHits}/${files.length} files`);
+  ui.stat('Tokens', totalTokens.toLocaleString());
+  ui.stat('Duration', totalElapsed);
 
   if (unique.length > 0) {
-    core.info('');
-    core.info('Issue breakdown:');
-    const byType: Record<string, number> = {};
+    ui.blank();
     const bySev: Record<string, number> = {};
+    const byType: Record<string, number> = {};
     for (const issue of unique) {
       byType[issue.type] = (byType[issue.type] || 0) + 1;
       bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
     }
-    for (const [sev, count] of Object.entries(bySev).sort()) {
-      core.info(`  ${sev}: ${count}`);
-    }
-    core.info('');
-    for (const [type, count] of Object.entries(byType).sort()) {
-      core.info(`  ${type}: ${count}`);
-    }
+    ui.severityBreakdown(bySev);
+    ui.blank();
+    const typeSummary = Object.entries(byType)
+      .sort((a, b) => b[1] - a[1])
+      .map(([type, count]) => `${type}(${count})`)
+      .join('  ');
+    core.info(`  ${ui.c(typeSummary, ui.S.gray)}`);
   }
-  core.info('='.repeat(50));
+  core.info(ui.divider());
 
   const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
   return { issues: unique, score, summary, tokens: totalTokens };

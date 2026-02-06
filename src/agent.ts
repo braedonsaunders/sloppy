@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { AgentType } from './types';
+import * as ui from './ui';
 
 export async function installAgent(agent: AgentType): Promise<void> {
   if (agent === 'claude') {
@@ -128,6 +129,7 @@ async function runClaudeSDK(
   const verbose = options?.verbose ?? false;
   const execStart = Date.now();
   let agentResult = '';
+  let lastResultsText = '';   // Fallback: last assistant text containing structured results JSON
   let lineBuffer = '';
   let eventCount = 0;
   let firstChunk = true;
@@ -166,6 +168,19 @@ async function runClaudeSDK(
         agentResult = event.result || '';
       }
 
+      // Capture assistant text containing structured results JSON as fallback.
+      // When the agent times out or hits max turns, the SDK emits SDKResultError
+      // which has no `result` field, so agentResult stays empty. But the agent
+      // may have output its final JSON summary in an assistant message before the
+      // error. Capture the last such text so we can use it as fallback.
+      if (event.type === 'assistant' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'text' && block.text && block.text.includes('"results"')) {
+            lastResultsText = block.text;
+          }
+        }
+      }
+
       if (verbose) {
         if (event.type === 'assistant' && event.message?.content) {
           for (const block of event.message.content) {
@@ -174,33 +189,29 @@ async function runClaudeSDK(
                 ? block.text.slice(0, 300) + '...'
                 : block.text;
               for (const textLine of preview.split('\n')) {
-                if (textLine.trim()) core.info(`  | ${textLine}`);
+                if (textLine.trim()) ui.agentText(textLine);
               }
             } else if (block.type === 'tool_use') {
-              core.info(`  | [tool: ${block.name}]`);
+              ui.agentTool(block.name);
             }
           }
         } else if (event.type === 'tool_progress') {
-          core.info(`  | [${event.tool_name}: ${event.elapsed_time_seconds}s]`);
+          ui.agentToolProgress(event.tool_name, event.elapsed_time_seconds);
         } else if (event.type === 'tool_use_summary') {
-          const preview = event.summary.length > 200
-            ? event.summary.slice(0, 200) + '...'
-            : event.summary;
-          core.info(`  | ${preview}`);
+          ui.agentToolSummary(event.summary);
         } else if (event.type === 'system') {
           const sub = event.subtype || 'init';
           if (sub === 'task_notification') {
-            core.info(`  | [task ${event.status}: ${event.summary || event.task_id}]`);
+            core.info(`  ${ui.c(ui.SYM.vline, ui.S.gray)} ${ui.c(`[task ${event.status}: ${event.summary || event.task_id}]`, ui.S.magenta)}`);
           } else {
-            core.info(`  | [system: ${sub}]`);
+            ui.agentSystem(sub);
           }
         } else if (event.type === 'result') {
-          const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : '';
-          core.info(`  | [result: ${event.subtype}, ${event.num_turns} turns${cost}]`);
+          ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd);
         }
       }
     } catch {
-      if (verbose) core.info(`  | ${trimmed.slice(0, 300)}`);
+      if (verbose) ui.agentText(trimmed.slice(0, 300));
     }
   };
 
@@ -209,7 +220,7 @@ async function runClaudeSDK(
   if (verbose) {
     heartbeat = setInterval(() => {
       const elapsed = Math.round((Date.now() - execStart) / 1000);
-      core.info(`  ... agent running (${elapsed}s, ${eventCount} events)`);
+      ui.agentHeartbeat(elapsed, eventCount);
     }, 15_000);
   }
 
@@ -221,7 +232,7 @@ async function runClaudeSDK(
         if (firstChunk && verbose) {
           firstChunk = false;
           const elapsed = Math.round((Date.now() - execStart) / 1000);
-          core.info(`  [stream] First output after ${elapsed}s (${chunk.length} bytes)`);
+          ui.agentStreamStart(elapsed, chunk.length);
         }
 
         lineBuffer += chunk;
@@ -235,7 +246,7 @@ async function runClaudeSDK(
         if (verbose) {
           for (const line of chunk.split('\n')) {
             const trimmed = line.trim();
-            if (trimmed) core.info(`  |err| ${trimmed}`);
+            if (trimmed) ui.agentStderr(trimmed);
           }
         }
       },
@@ -272,14 +283,14 @@ async function runClaudeSDK(
 
   if (verbose) {
     const elapsed = Math.round((Date.now() - execStart) / 1000);
-    core.info(`  [stream] Agent finished in ${elapsed}s (${eventCount} events)`);
+    ui.agentDone(elapsed, eventCount);
   }
 
   if (stderr && exitCode !== 0) {
     core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
   }
 
-  return { output: agentResult, exitCode };
+  return { output: agentResult || lastResultsText, exitCode };
 }
 
 // CLI fallback for claude (--output-format json, no streaming)
@@ -308,7 +319,7 @@ async function runCLI(
   if (verbose) {
     heartbeat = setInterval(() => {
       const elapsed = Math.round((Date.now() - execStart) / 1000);
-      core.info(`  ... agent running (${elapsed}s, stdout: ${stdout.length} bytes)`);
+      ui.agentHeartbeat(elapsed, 0);
     }, 30_000);
   }
 
@@ -320,7 +331,7 @@ async function runCLI(
         if (verbose) {
           for (const line of chunk.split('\n')) {
             const trimmed = line.trim();
-            if (trimmed) core.info(`  | ${trimmed.slice(0, 300)}`);
+            if (trimmed) ui.agentText(trimmed.slice(0, 300));
           }
         }
       },
@@ -330,7 +341,7 @@ async function runCLI(
         if (verbose) {
           for (const line of chunk.split('\n')) {
             const trimmed = line.trim();
-            if (trimmed) core.info(`  |err| ${trimmed}`);
+            if (trimmed) ui.agentStderr(trimmed);
           }
         }
       },
@@ -358,7 +369,7 @@ async function runCLI(
 
   if (verbose) {
     const elapsed = Math.round((Date.now() - execStart) / 1000);
-    core.info(`  [done] Agent finished in ${elapsed}s (stdout: ${stdout.length} bytes)`);
+    ui.agentDone(elapsed, 0);
   }
 
   if (stderr && exitCode !== 0) {

@@ -16,6 +16,7 @@ import { deployDashboard } from './dashboard';
 import { HistoryEntry, ScanResult, LoopState, PluginContext } from './types';
 import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
 import { loadRepoConfig, mergeRepoConfig } from './sloppy-config';
+import * as ui from './ui';
 
 async function run(): Promise<void> {
   try {
@@ -36,8 +37,20 @@ async function run(): Promise<void> {
     const hasClaudeOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
 
-    core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
-    core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
+    ui.blank();
+    ui.banner(
+      'S L O P P Y',
+      `Code Quality Scanner & Auto-Fixer  v1`,
+    );
+    ui.blank();
+    ui.kv('Mode', config.mode);
+    ui.kv('Agent', config.agent);
+    ui.kv('Auth', [
+      hasGithubToken ? ui.c('GITHUB', ui.S.green) : ui.c('GITHUB', ui.S.red),
+      hasAnthropicKey ? ui.c('ANTHROPIC', ui.S.green) : '',
+      hasClaudeOAuth ? ui.c('OAUTH', ui.S.green) : '',
+      hasOpenAIKey ? ui.c('OPENAI', ui.S.green) : '',
+    ].filter(Boolean).join(ui.c(' / ', ui.S.gray)));
 
     // Load custom prompts, plugins, and repo config
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
@@ -121,7 +134,11 @@ async function run(): Promise<void> {
         return;
       }
 
-      core.info(`Done. Score: ${result.score}/100, Issues: ${result.issues.length}`);
+      ui.blank();
+      ui.finalResults();
+      ui.score(result.score);
+      ui.stat('Issues', `${result.issues.length} found`);
+      ui.blank();
 
     } else {
       // ---- FIX MODE: Claude Code or Codex CLI ----
@@ -184,7 +201,13 @@ async function run(): Promise<void> {
         return;
       }
 
-      core.info(`Done. Score: ${state.scoreBefore} → ${state.scoreAfter}, Fixed: ${state.totalFixed}`);
+      ui.blank();
+      ui.finalResults();
+      ui.scoreChange(state.scoreBefore, state.scoreAfter);
+      ui.stat('Fixed', `${state.totalFixed} issues`);
+      ui.stat('Skipped', `${state.totalSkipped} issues`);
+      ui.stat('Passes', String(state.passes.length));
+      ui.blank();
     }
   } catch (error) {
     core.setFailed(error instanceof Error ? error.message : String(error));
