@@ -30609,7 +30609,7 @@ function getConfig() {
         customPrompt: core.getInput('custom-prompt') || '',
         customPromptFile: core.getInput('custom-prompt-file') || '',
         pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
-        parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '1'), 1), 8),
+        parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3'), 1), 8),
     };
 }
 
@@ -31963,6 +31963,10 @@ function scanPrompt(pass, previousFixes, plan, customSection) {
 
 TASK: Scan every file in this repository. Find all code quality issues.
 
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. For example, dispatch one subagent per top-level directory, each
+scanning all files within it. Collect their results and merge into a single output.
+
 ISSUE CATEGORIES (use these exact type values):
   security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
   bugs        — null/undefined derefs, off-by-one, race conditions, wrong logic, unhandled errors
@@ -31999,6 +32003,9 @@ TASK: Scan the ENTIRE repository again with fresh eyes. Previous fixes often rev
 - Fixing a type error reveals logic bugs underneath
 - Refactoring may introduce new edge cases
 - Previously-hidden code paths are now reachable
+
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. Collect their results and merge into a single output.
 ${planSection}${customSection}
 ISSUE CATEGORIES: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
 SEVERITY LEVELS: critical, high, medium, low
@@ -32014,8 +32021,21 @@ Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 }
 function clusterFixPrompt(cluster, testCommand, customSection) {
     const issueList = cluster.issues.map((issue, idx) => `${idx + 1}. [${issue.severity}/${issue.type}] ${issue.file}${issue.line ? `:${issue.line}` : ''} — ${issue.description}`).join('\n');
-    return `You are fixing code quality issues in this repository. Fix these issues ONE AT A TIME.
-
+    // Encourage subagent parallelism when issues span multiple independent files
+    const uniqueFiles = [...new Set(cluster.issues.map(i => i.file))];
+    const parallelSection = uniqueFiles.length > 1
+        ? `
+PARALLELISM — IMPORTANT FOR SPEED:
+These issues span ${uniqueFiles.length} independent files. Use the Task tool to dispatch
+subagents that fix different files simultaneously. Group issues by file and send
+each file's issues to a separate subagent. Each subagent should:
+- Read the file, apply the fix, verify it compiles, then git add && git commit
+- Work independently without coordinating with other subagents
+This dramatically reduces total fix time.
+`
+        : '';
+    return `You are fixing code quality issues in this repository. Fix these issues efficiently.
+${parallelSection}
 ISSUES TO FIX (in priority order):
 ${issueList}
 ${customSection}
@@ -32351,29 +32371,40 @@ async function runFixLoop(config, pluginCtx) {
     ui.kv('Parallel', `${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
     ui.kv('Verbose', config.verbose ? ui.c('ON', ui.S.green) + ui.c(' (streaming)', ui.S.gray) : 'off');
     ui.kv('Chain', `${state.chainNumber}/${config.maxChains}`);
-    // Install agent
+    // Parallelize setup: install agent, git config, test detection, LOC counting
+    // all happen concurrently since they're independent.
     ui.section('SETUP');
-    core.info(`  Installing ${config.agent}...`);
-    await (0, agent_1.installAgent)(config.agent);
-    core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
-    // Setup git
-    await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
-    await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
-    // Create or checkout branch
-    if (!state.branchName) {
-        state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
-        await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
-        ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
-    }
-    else {
-        await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
-        ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
-    }
-    // Detect test command
-    const testCmd = await detectTestCommand(config);
-    ui.kv('Tests', testCmd ? testCmd : ui.c('none detected', ui.S.yellow));
-    // Load PLAN.md if it exists
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    const [, , testCmd, sourceFiles] = await Promise.all([
+        // 1. Install agent
+        (async () => {
+            core.info(`  Installing ${config.agent}...`);
+            await (0, agent_1.installAgent)(config.agent);
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
+        })(),
+        // 2. Git config + branch setup
+        (async () => {
+            await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
+            await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
+            if (!state.branchName) {
+                state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
+                await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
+                ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
+            }
+            else {
+                await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
+                ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
+            }
+        })(),
+        // 3. Detect test command
+        detectTestCommand(config),
+        // 4. Collect source files (for LOC counting)
+        Promise.resolve((0, scan_1.collectFiles)(cwd)),
+    ]);
+    ui.kv('Tests', testCmd ? testCmd : ui.c('none detected', ui.S.yellow));
+    const loc = (0, scan_1.countSourceLOC)(sourceFiles);
+    ui.kv('Source LOC', loc.toLocaleString());
+    // Load PLAN.md if it exists
     let plan = '';
     const planPath = path.join(cwd, 'PLAN.md');
     if (fs.existsSync(planPath)) {
@@ -32381,10 +32412,6 @@ async function runFixLoop(config, pluginCtx) {
         ui.kv('Plan', 'PLAN.md loaded');
     }
     const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx) : '';
-    // Count LOC for normalized scoring
-    const sourceFiles = (0, scan_1.collectFiles)(cwd);
-    const loc = (0, scan_1.countSourceLOC)(sourceFiles);
-    ui.kv('Source LOC', loc.toLocaleString());
     // Load preexisting issues from output file
     let seededIssues = [];
     if (!checkpoint && config.outputFile) {
@@ -34062,36 +34089,57 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
     const allIssues = [];
     let totalTokens = 0;
     let apiCalls = 0;
-    for (let i = 0; i < chunks.length; i++) {
-        const chunkStart = Date.now();
-        const fileCount = chunks[i].fingerprints.length;
-        const progress = Math.round(((i + 1) / chunks.length) * 100);
-        core.info(ui.progressBar(i + 1, chunks.length, 20, `${fileCount} files (~${chunks[i].totalTokens} tokens)`));
-        try {
-            const systemMsg = customPrompt
-                ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-                : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+    const CONCURRENCY = 3; // Fire up to 3 API calls simultaneously
+    const systemMsg = customPrompt
+        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+    // Process chunks in concurrent batches
+    for (let batchStart = 0; batchStart < chunks.length; batchStart += CONCURRENCY) {
+        const batch = chunks.slice(batchStart, batchStart + CONCURRENCY);
+        const batchStartTime = Date.now();
+        // Log what we're dispatching
+        for (let j = 0; j < batch.length; j++) {
+            const idx = batchStart + j;
+            const fileCount = batch[j].fingerprints.length;
+            core.info(ui.progressBar(idx + 1, chunks.length, 20, `${fileCount} files (~${batch[j].totalTokens} tokens)`));
+        }
+        // Fire all requests in this batch concurrently
+        const results = await Promise.allSettled(batch.map(async (chunk, j) => {
+            const idx = batchStart + j;
+            // Stagger starts slightly to avoid hitting rate limits simultaneously
+            if (j > 0)
+                await sleep(500 * j);
+            const chunkStart = Date.now();
             const { content, tokens } = await (0, github_models_1.callGitHubModels)([
                 { role: 'system', content: systemMsg },
-                { role: 'user', content: chunks[i].promptText },
+                { role: 'user', content: chunk.promptText },
             ], model, { responseFormat: ISSUES_SCHEMA });
-            totalTokens += tokens;
-            apiCalls++;
-            const chunkIssues = parseIssues(content);
-            allIssues.push(...chunkIssues);
-            const elapsed = formatDuration(Date.now() - chunkStart);
-            if (chunkIssues.length > 0) {
-                core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+            return { content, tokens, idx, elapsed: Date.now() - chunkStart };
+        }));
+        // Collect results
+        for (let j = 0; j < results.length; j++) {
+            const r = results[j];
+            if (r.status === 'fulfilled') {
+                const { content, tokens, elapsed } = r.value;
+                totalTokens += tokens;
+                apiCalls++;
+                const chunkIssues = parseIssues(content);
+                allIssues.push(...chunkIssues);
+                const elapsedStr = formatDuration(elapsed);
+                if (chunkIssues.length > 0) {
+                    core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                }
+                else {
+                    core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                }
             }
             else {
-                core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                core.warning(`    FAILED: ${r.reason}`);
             }
         }
-        catch (e) {
-            core.warning(`    FAILED: ${e}`);
-        }
-        if (i < chunks.length - 1) {
-            await sleep(4500);
+        // Rate-limit pause between batches (not after last batch)
+        if (batchStart + CONCURRENCY < chunks.length) {
+            await sleep(3000);
         }
     }
     return { issues: allIssues, tokens: totalTokens, apiCalls };
@@ -34254,31 +34302,45 @@ async function runScan(config, pluginCtx) {
             const chunks = (0, smart_split_1.prepareChunks)(filesToScan, cwd, config.githubModelsModel);
             const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
             core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
-            for (let i = 0; i < chunks.length; i++) {
-                const chunkStart = Date.now();
-                const chunkFileNames = chunks[i].files.map(f => f.relativePath);
-                const progress = Math.round(((i + 1) / chunks.length) * 100);
-                const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
-                const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-                core.info(ui.progressBar(i + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
-                try {
-                    const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
-                    totalTokens += tokens;
-                    totalApiCalls++;
-                    aiIssues.push(...chunkIssues);
-                    const elapsed = formatDuration(Date.now() - chunkStart);
-                    if (chunkIssues.length > 0) {
-                        core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+            const DEEP_CONCURRENCY = 3;
+            for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
+                const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
+                for (let j = 0; j < batch.length; j++) {
+                    const idx = batchStart + j;
+                    const chunkFileNames = batch[j].files.map(f => f.relativePath);
+                    const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
+                    const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+                    core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
+                }
+                const results = await Promise.allSettled(batch.map(async (chunk, j) => {
+                    const idx = batchStart + j;
+                    if (j > 0)
+                        await sleep(500 * j);
+                    const chunkStart = Date.now();
+                    const { issues: chunkIssues, tokens } = await scanChunk(chunk, idx + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
+                    return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
+                }));
+                for (const r of results) {
+                    if (r.status === 'fulfilled') {
+                        const { chunkIssues, tokens, elapsed } = r.value;
+                        totalTokens += tokens;
+                        totalApiCalls++;
+                        aiIssues.push(...chunkIssues);
+                        const elapsedStr = formatDuration(elapsed);
+                        if (chunkIssues.length > 0) {
+                            core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                        }
+                        else {
+                            core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                        }
                     }
                     else {
-                        core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                        core.warning(`         FAILED: ${r.reason}`);
                     }
                 }
-                catch (e) {
-                    core.warning(`         FAILED: ${e}`);
+                if (batchStart + DEEP_CONCURRENCY < chunks.length) {
+                    await sleep(3000);
                 }
-                if (i < chunks.length - 1)
-                    await sleep(4500);
             }
         }
         else {
