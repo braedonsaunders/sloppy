@@ -29976,14 +29976,59 @@ async function installAgent(agent) {
 async function runAgent(agent, prompt, options) {
     let stdout = '';
     let stderr = '';
+    let agentResult = '';
+    let lineBuffer = '';
     const verbose = options?.verbose ?? false;
+    const processStreamLine = (line) => {
+        const trimmed = line.trim();
+        if (!trimmed)
+            return;
+        try {
+            const event = JSON.parse(trimmed);
+            if (event.type === 'result') {
+                agentResult = event.result || '';
+            }
+            if (verbose) {
+                if (event.type === 'assistant' && event.message?.content) {
+                    for (const block of event.message.content) {
+                        if (block.type === 'text' && block.text) {
+                            const preview = block.text.length > 300
+                                ? block.text.slice(0, 300) + '...'
+                                : block.text;
+                            for (const textLine of preview.split('\n')) {
+                                if (textLine.trim())
+                                    core.info(`  | ${textLine}`);
+                            }
+                        }
+                        else if (block.type === 'tool_use') {
+                            core.info(`  | [tool: ${block.name}]`);
+                        }
+                    }
+                }
+                else if (event.type === 'tool_result') {
+                    // Show a brief indicator that a tool completed
+                }
+            }
+        }
+        catch {
+            if (verbose)
+                core.info(`  | ${trimmed}`);
+        }
+    };
     const execOptions = {
         listeners: {
             stdout: (data) => {
                 const chunk = data.toString();
                 stdout += chunk;
-                if (verbose) {
-                    // Stream each line to the Actions log in real-time
+                if (agent === 'claude') {
+                    lineBuffer += chunk;
+                    const lines = lineBuffer.split('\n');
+                    lineBuffer = lines.pop() || '';
+                    for (const line of lines) {
+                        processStreamLine(line);
+                    }
+                }
+                else if (verbose) {
                     for (const line of chunk.split('\n')) {
                         const trimmed = line.trim();
                         if (trimmed)
@@ -30004,30 +30049,56 @@ async function runAgent(agent, prompt, options) {
             },
         },
         ignoreReturnCode: true,
-        silent: true, // suppress @actions/exec default output; we handle it ourselves
+        silent: true,
         env: { ...process.env },
     };
     let exitCode;
     if (agent === 'claude') {
-        const args = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
+        const args = ['-p', prompt, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
         if (options?.maxTurns)
             args.push('--max-turns', String(options.maxTurns));
         if (options?.model)
             args.push('--model', options.model);
         if (verbose)
             args.push('--verbose');
-        exitCode = await exec.exec('claude', args, execOptions);
+        exitCode = await execWithTimeout('claude', args, execOptions, options?.timeout);
+        // Process any remaining buffered data
+        if (lineBuffer.trim())
+            processStreamLine(lineBuffer);
     }
     else {
         const args = ['exec', '--full-auto', '--quiet', prompt];
         if (options?.model)
             args.push('--model', options.model);
-        exitCode = await exec.exec('codex', args, execOptions);
+        exitCode = await execWithTimeout('codex', args, execOptions, options?.timeout);
     }
     if (stderr && exitCode !== 0) {
         core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
     }
-    return { output: stdout, exitCode };
+    const output = agent === 'claude' ? agentResult : stdout;
+    return { output, exitCode };
+}
+async function execWithTimeout(cmd, args, options, timeoutMs) {
+    if (!timeoutMs || timeoutMs <= 0) {
+        return exec.exec(cmd, args, options);
+    }
+    let timer;
+    let timedOut = false;
+    const timeoutPromise = new Promise((resolve) => {
+        timer = setTimeout(() => {
+            timedOut = true;
+            core.warning(`Agent timed out after ${Math.round(timeoutMs / 1000)}s`);
+            resolve(1);
+        }, timeoutMs);
+    });
+    const execPromise = exec.exec(cmd, args, options);
+    const exitCode = await Promise.race([execPromise, timeoutPromise]);
+    clearTimeout(timer);
+    if (timedOut) {
+        // The process may still be running, but the caller will treat this as a failure
+        core.warning('Agent process may still be running in background after timeout');
+    }
+    return exitCode;
 }
 
 
