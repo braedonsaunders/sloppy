@@ -220,8 +220,13 @@ export function agentSystem(subtype: string): void {
   core.info(`  ${c(SYM.vline, S.gray)} ${c(`[${subtype}]`, S.magenta)}`);
 }
 
-export function agentResult(subtype: string, turns: number, cost?: number): void {
-  const costStr = cost ? c(` $${cost.toFixed(3)}`, S.gray) : '';
+export function agentResult(subtype: string, turns: number, cost?: number, isOAuth?: boolean): void {
+  let costStr = '';
+  if (isOAuth) {
+    costStr = c(' included in subscription', S.gray);
+  } else if (cost) {
+    costStr = c(` $${cost.toFixed(2)} USD`, S.gray);
+  }
   core.info(`  ${c(SYM.vline, S.gray)} ${c(`[result: ${subtype}, ${turns} turns${costStr ? ',' : ''}${costStr}]`, S.cyan)}`);
 }
 
