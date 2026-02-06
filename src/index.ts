@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { getConfig } from './config';
+import { getConfig, getRawActionInputs } from './config';
 import { runScan } from './scan';
 import { runFixLoop } from './loop';
 import { triggerChain } from './chain';
@@ -15,12 +15,13 @@ import {
 import { deployDashboard } from './dashboard';
 import { HistoryEntry, ScanResult, LoopState, PluginContext } from './types';
 import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
-import { loadRepoConfig, mergeRepoConfig } from './sloppy-config';
+import { loadRepoConfig, mergeRepoConfig, loadProfile, applyProfile } from './sloppy-config';
 import * as ui from './ui';
 
 async function run(): Promise<void> {
   try {
     const config = getConfig();
+    const rawInputs = getRawActionInputs();
 
     // Bridge github-token input to GITHUB_TOKEN env var if not already set
     if (!process.env.GITHUB_TOKEN) {
@@ -37,6 +38,26 @@ async function run(): Promise<void> {
     const hasClaudeOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
 
+    // Load .sloppy.yml repo config and optional profile overlay
+    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    let repoConfig = loadRepoConfig(cwd);
+
+    // Apply profile if specified (action input or repo config)
+    const profileName = config.profile || repoConfig?.mode; // profile comes from action input
+    if (config.profile) {
+      const profileOverlay = loadProfile(cwd, config.profile);
+      if (profileOverlay && repoConfig) {
+        repoConfig = applyProfile(repoConfig, profileOverlay);
+      } else if (profileOverlay) {
+        repoConfig = profileOverlay;
+      }
+    }
+
+    // Merge repo config into runtime config
+    if (repoConfig) {
+      mergeRepoConfig(config, repoConfig, rawInputs);
+    }
+
     ui.blank();
     ui.banner(
       'S L O P P Y',
@@ -52,18 +73,27 @@ async function run(): Promise<void> {
       hasOpenAIKey ? ui.c('OPENAI', ui.S.green) : '',
     ].filter(Boolean).join(ui.c(' / ', ui.S.gray)));
 
-    // Load custom prompts, plugins, and repo config
-    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    if (config.minSeverity !== 'low') {
+      ui.kv('Min severity', config.minSeverity);
+    }
+    if (config.app && Object.keys(config.app).length > 0) {
+      const appParts: string[] = [];
+      if (config.app.type) appParts.push(config.app.type);
+      if (config.app.exposure) appParts.push(config.app.exposure);
+      if (config.app.dataSensitivity) appParts.push(`${config.app.dataSensitivity}-sensitivity`);
+      ui.kv('App context', appParts.join(' / '));
+    }
+    if (config.framework) ui.kv('Framework', config.framework);
+    if (config.allow.length > 0) ui.kv('Allow rules', `${config.allow.length} suppression(s)`);
+    if (config.profile) ui.kv('Profile', config.profile);
+
+    // Load custom prompts, plugins
     const customPrompt = resolveCustomPrompt(config.customPrompt, config.customPromptFile, cwd);
     const plugins = config.pluginsEnabled ? loadPlugins(cwd) : [];
     const pluginCtx = buildPluginContext(plugins, customPrompt);
 
-    // Load .sloppy.yml repo config and merge into runtime
-    const repoConfig = loadRepoConfig(cwd);
+    // Merge ignore patterns from repo config into plugin filters
     if (repoConfig) {
-      mergeRepoConfig(config, repoConfig);
-
-      // Merge ignore patterns into plugin filters
       if (repoConfig.ignore && repoConfig.ignore.length > 0) {
         const existing = pluginCtx.filters['exclude-paths'] || [];
         pluginCtx.filters['exclude-paths'] = [...new Set([...existing, ...repoConfig.ignore])];
@@ -78,6 +108,11 @@ async function run(): Promise<void> {
         if (excludeTypes.size > 0) {
           pluginCtx.filters['exclude-types'] = [...excludeTypes];
         }
+      }
+
+      // Merge min-severity into plugin filters as well
+      if (repoConfig.minSeverity && config.minSeverity !== 'low') {
+        pluginCtx.filters['min-severity'] = config.minSeverity;
       }
     }
 

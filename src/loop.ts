@@ -8,7 +8,7 @@ import { installAgent, runAgent } from './agent';
 import { calculateScore, collectFiles, countSourceLOC } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
-import { runHook, applyFilters, formatCustomPromptSection } from './plugins';
+import { runHook, applyFilters, formatCustomPromptSection, applyAllowRules } from './plugins';
 import * as ui from './ui';
 
 // ---------------------------------------------------------------------------
@@ -788,7 +788,7 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     ui.kv('Plan', 'PLAN.md loaded');
   }
 
-  const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
+  const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx, config) : '';
 
   // Load preexisting issues from output file
   let seededIssues: Issue[] = [];
@@ -847,6 +847,26 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
         found = applyFilters(found, pluginCtx.filters);
         if (found.length < before) {
           core.info(`Plugin filters removed ${before - found.length} issues`);
+        }
+      }
+
+      // Apply min-severity filter
+      if (config.minSeverity !== 'low') {
+        const SRANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+        const minRank = SRANK[config.minSeverity] ?? 0;
+        const before = found.length;
+        found = found.filter(i => (SRANK[i.severity] ?? 0) >= minRank);
+        if (found.length < before) {
+          core.info(`  min-severity filter (${config.minSeverity}+) removed ${before - found.length} issues`);
+        }
+      }
+
+      // Apply allow-list (false positive suppressions)
+      if (config.allow.length > 0) {
+        const before = found.length;
+        found = applyAllowRules(found, config.allow);
+        if (found.length < before) {
+          core.info(`  Allow-list suppressed ${before - found.length} issues`);
         }
       }
 

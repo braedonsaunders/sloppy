@@ -13,6 +13,26 @@ export type AgentType = 'claude' | 'codex';
 
 export type ScanScope = 'auto' | 'pr' | 'full';
 
+export type AppType = 'web-app' | 'api' | 'cli' | 'library' | 'worker' | 'mobile' | 'desktop';
+export type AppExposure = 'public' | 'internal' | 'local';
+export type AppNetwork = 'internet' | 'vpn' | 'localhost';
+export type DataSensitivity = 'high' | 'medium' | 'low';
+
+/** Application context — helps the AI calibrate severity of findings. */
+export interface AppContext {
+  type?: AppType;
+  exposure?: AppExposure;
+  auth?: boolean;
+  network?: AppNetwork;
+  dataSensitivity?: DataSensitivity;
+}
+
+/** A false-positive suppression rule. */
+export interface AllowRule {
+  pattern: string;
+  reason: string;
+}
+
 export interface SloppyConfig {
   mode: 'scan' | 'fix';
   agent: AgentType;
@@ -23,6 +43,7 @@ export interface SloppyConfig {
   maxChains: number;
   fixTypes: IssueType[];
   strictness: 'low' | 'medium' | 'high';
+  minSeverity: Severity;
   model: string;
   githubModelsModel: string;
   testCommand: string;
@@ -36,16 +57,53 @@ export interface SloppyConfig {
   customPromptFile: string;
   pluginsEnabled: boolean;
   parallelAgents: number;
+  app: AppContext;
+  framework: string;
+  runtime: string;
+  trustInternal: string[];
+  trustUntrusted: string[];
+  allow: AllowRule[];
+  profile: string;
 }
 
-/** Repo-level .sloppy.yml configuration. */
+/** Repo-level .sloppy.yml configuration — the single source of truth. */
 export interface RepoConfig {
+  // Filtering
   ignore?: string[];
   rules?: Record<string, 'off' | Severity>;
   fixTypes?: IssueType[];
   testCommand?: string;
   strictness?: 'low' | 'medium' | 'high';
+  minSeverity?: Severity;
   failBelow?: number;
+
+  // Operational
+  mode?: 'scan' | 'fix';
+  agent?: AgentType;
+  timeout?: string;
+  maxCost?: string;
+  maxPasses?: number;
+  minPasses?: number;
+  maxChains?: number;
+  model?: string;
+  githubModelsModel?: string;
+  verbose?: boolean;
+  maxTurns?: number;
+  maxIssuesPerPass?: number;
+  scanScope?: ScanScope;
+  outputFile?: string;
+  customPrompt?: string;
+  customPromptFile?: string;
+  plugins?: boolean;
+  parallelAgents?: number;
+
+  // App context
+  app?: AppContext;
+  framework?: string;
+  runtime?: string;
+  trustInternal?: string[];
+  trustUntrusted?: string[];
+  allow?: AllowRule[];
 }
 
 export interface Issue {
