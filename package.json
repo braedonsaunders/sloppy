@@ -1,39 +1,36 @@
 {
   "name": "sloppy",
   "version": "1.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Transform AI-generated slop into production-ready code",
+  "description": "Relentless AI code cleanup. Scans free, fixes with your API key.",
+  "main": "dist/index.js",
   "scripts": {
-    "dev": "pnpm run kill-ports && turbo run dev",
-    "build": "turbo run build",
-    "test": "turbo run test",
-    "lint": "turbo run lint",
-    "clean": "turbo run clean",
-    "typecheck": "turbo run typecheck",
-    "dev:server": "pnpm --filter @sloppy/server dev",
-    "dev:ui": "pnpm --filter @sloppy/ui dev",
-    "cli": "pnpm --filter @sloppy/cli dev",
-    "start": "pnpm --filter @sloppy/server start",
-    "kill-ports": "node scripts/kill-ports.js",
-    "update": "node scripts/update.js",
-    "update:clean": "node scripts/update.js --clean"
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/braedonsaunders/sloppy"
+  },
+  "keywords": [
+    "github-action",
+    "code-quality",
+    "ai",
+    "claude",
+    "codex",
+    "lint",
+    "security",
+    "cleanup"
+  ],
+  "author": "Braeden Saunders",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/exec": "^1.1.1",
+    "@actions/github": "^6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "turbo": "^2.3.0",
+    "@vercel/ncc": "^0.38.3",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0",
-    "eslint": "^9.0.0",
-    "@eslint/js": "^9.0.0",
-    "typescript-eslint": "^8.0.0",
-    "prettier": "^3.4.0"
-  },
-  "packageManager": "pnpm@9.15.0",
-  "engines": {
-    "node": ">=22.0.0"
-  },
-  "workspaces": [
-    "packages/*"
-  ]
+    "@types/node": "^22.0.0"
+  }
 }
