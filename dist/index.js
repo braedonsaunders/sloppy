@@ -32230,7 +32230,11 @@ function compressFile(content, ext, maxChars) {
         return { content: compressed, compressed: true };
     }
     // Level 3: hard truncate
-    const marker = `\n\n// ... truncated (${Math.round(content.length / 1024)}KB original, showing first ${Math.round((maxChars * 100) / content.length)}%)\n`;
+    const marker = `\n// ... truncated (${Math.round(content.length / 1024)}KB original)\n`;
+    if (maxChars <= marker.length) {
+        // Budget too small for any real content — return just the marker trimmed to fit
+        return { content: marker.slice(0, maxChars), compressed: true };
+    }
     compressed = compressed.slice(0, maxChars - marker.length) + marker;
     return { content: compressed, compressed: true };
 }
