@@ -24,6 +24,8 @@ import {
   PluginContext,
   Issue,
   Severity,
+  SloppyConfig,
+  AllowRule,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -470,9 +472,83 @@ function matchGlob(filepath: string, pattern: string): boolean {
 
 /**
  * Format the custom prompt section for injection into scan/fix prompts.
- * Returns empty string if no custom content.
+ * Includes custom rules, app context, framework/runtime hints, and trust boundaries.
  */
-export function formatCustomPromptSection(ctx: PluginContext): string {
-  if (!ctx.customPrompt) return '';
-  return `\nCUSTOM RULES (from user configuration and plugins):\n${ctx.customPrompt}\n`;
+export function formatCustomPromptSection(ctx: PluginContext, config?: SloppyConfig): string {
+  const parts: string[] = [];
+
+  // App context — helps the AI calibrate severity of findings
+  if (config?.app && Object.keys(config.app).length > 0) {
+    const app = config.app;
+    const lines: string[] = [];
+    if (app.type) lines.push(`  Application type: ${app.type}`);
+    if (app.exposure) lines.push(`  Exposure: ${app.exposure}`);
+    if (app.auth !== undefined) lines.push(`  Has authentication: ${app.auth ? 'yes' : 'no'}`);
+    if (app.network) lines.push(`  Network: ${app.network}`);
+    if (app.dataSensitivity) lines.push(`  Data sensitivity: ${app.dataSensitivity}`);
+
+    parts.push(`APPLICATION CONTEXT (use this to calibrate severity of findings):\n${lines.join('\n')}\n`);
+
+    // Provide explicit guidance based on exposure
+    if (app.exposure === 'local' || app.network === 'localhost') {
+      parts.push(`NOTE: This is a local/non-networked application. Issues like SSRF, CSRF, XSS, and public endpoint exposure are lower severity unless the app processes untrusted input. Focus on data integrity, logic bugs, and actual exploitability in the local context.`);
+    } else if (app.exposure === 'internal') {
+      parts.push(`NOTE: This is an internal/private application (not public-facing). Network-based attacks (SSRF, XSS, CSRF) are lower severity since the app is behind a VPN or internal network. Focus on auth bypass, privilege escalation, and data handling issues.`);
+    } else if (app.exposure === 'public') {
+      parts.push(`NOTE: This is a PUBLIC-FACING application. All security issues should be treated with full severity. Pay special attention to input validation, auth, injection attacks, and data exposure.`);
+    }
+  }
+
+  // Framework/runtime hints
+  if (config?.framework || config?.runtime) {
+    const hints: string[] = [];
+    if (config.framework) hints.push(`Framework: ${config.framework}`);
+    if (config.runtime) hints.push(`Runtime: ${config.runtime}`);
+    parts.push(`TECHNOLOGY CONTEXT:\n  ${hints.join('\n  ')}\n  Use framework-idiomatic patterns when suggesting fixes. Understand framework conventions before flagging code as suspicious.`);
+  }
+
+  // Trust boundaries
+  if (config?.trustInternal && config.trustInternal.length > 0) {
+    parts.push(`TRUSTED PACKAGES (treat as first-party, do not flag imports from these as risky):\n${config.trustInternal.map(p => `  - ${p}`).join('\n')}`);
+  }
+  if (config?.trustUntrusted && config.trustUntrusted.length > 0) {
+    parts.push(`UNTRUSTED INPUT BOUNDARIES (these files handle external/user input — apply stricter security scrutiny):\n${config.trustUntrusted.map(p => `  - ${p}`).join('\n')}`);
+  }
+
+  // Allow rules — suppressions
+  if (config?.allow && config.allow.length > 0) {
+    const lines = config.allow.map(r => `  - Pattern: ${r.pattern}${r.reason ? ` — Reason: ${r.reason}` : ''}`);
+    parts.push(`ALLOWED PATTERNS (do NOT report issues matching these — they are intentional):\n${lines.join('\n')}`);
+  }
+
+  // Custom rules from plugins/user
+  if (ctx.customPrompt) {
+    parts.push(`CUSTOM RULES (from user configuration and plugins):\n${ctx.customPrompt}`);
+  }
+
+  if (parts.length === 0) return '';
+  return '\n' + parts.join('\n\n') + '\n';
+}
+
+/**
+ * Apply allow-list rules to filter out false positives.
+ * Issues whose description matches an allow pattern are removed.
+ */
+export function applyAllowRules(issues: Issue[], rules: AllowRule[]): Issue[] {
+  if (!rules || rules.length === 0) return issues;
+
+  const compiled = rules.map(r => {
+    try {
+      return { regex: new RegExp(r.pattern, 'i'), reason: r.reason };
+    } catch {
+      return null;
+    }
+  }).filter((r): r is { regex: RegExp; reason: string } => r !== null);
+
+  if (compiled.length === 0) return issues;
+
+  return issues.filter(issue => {
+    const text = `${issue.file}:${issue.description}`;
+    return !compiled.some(r => r.regex.test(text));
+  });
 }

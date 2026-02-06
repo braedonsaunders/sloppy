@@ -218,7 +218,7 @@ Disable any category: `fix-types: 'security,bugs,types'`
 
 ## All Inputs
 
-Every input is optional. Sloppy works with zero configuration.
+Every input is optional. Sloppy works with zero configuration. **All inputs can also be set in `.sloppy.yml`** (see [Repo Config](#repo-config)) so you don't need to modify your workflow file.
 
 | Input | Default | Description |
 |---|---|---|
@@ -231,6 +231,7 @@ Every input is optional. Sloppy works with zero configuration.
 | `min-passes` | `2` | Minimum consecutive clean passes to confirm the repo is truly clean |
 | `max-chains` | `3` | Max self-continuations for long runs (each chain gets up to 6h) |
 | `strictness` | `high` | Issue detection: `low`, `medium`, `high` |
+| `min-severity` | `low` | Minimum severity to report/fix: `critical`, `high`, `medium`, `low`. Issues below this are ignored. |
 | `fix-types` | `security,bugs,types,lint,dead-code,stubs,duplicates,coverage` | Comma-separated issue types to scan/fix |
 | `model` | *(auto)* | Override AI model for fix mode (e.g. `claude-sonnet-4-5-20250929`) |
 | `github-models-model` | `openai/gpt-4o-mini` | Model for scan via GitHub Models. Free: `openai/gpt-4o-mini`. Premium: `openai/gpt-4o`, `openai/o1-mini` |
@@ -247,6 +248,7 @@ Every input is optional. Sloppy works with zero configuration.
 | `custom-prompt-file` | *(empty)* | Path to a file containing custom prompt instructions (relative to repo root) |
 | `plugins` | `true` | Enable/disable the plugin system (loads from `.sloppy/plugins/`) |
 | `parallel-agents` | `1` | Number of parallel agents for fixing (1-8). Uses git worktrees. |
+| `profile` | *(empty)* | Load a config profile from `.sloppy/profiles/<name>.yml`. Profile values override `.sloppy.yml`. |
 | `chain_number` | `0` | Internal: chain continuation number (do not set manually) |
 
 ### Auto-Detected Test Commands
@@ -334,36 +336,204 @@ If score drops below 70, the action fails and blocks the PR.
 
 ## Repo Config
 
-Create `.sloppy.yml` (or `.sloppy.yaml`, `.sloppy/config.yml`, `.sloppy/config.yaml`) in your repo root:
+`.sloppy.yml` is the **single source of truth** for all non-secret settings. Create it in your repo root (or at `.sloppy.yaml`, `.sloppy/config.yml`, `.sloppy/config.yaml`):
 
 ```yaml
-ignore:
-  - "**/*.test.ts"
-  - "vendor/"
+# ──────────────────────────────────────────────
+# .sloppy.yml — Complete configuration reference
+# ──────────────────────────────────────────────
 
-rules:
-  lint: medium        # Override severity (critical, high, medium, low)
-  dead-code: off      # Disable entirely
+# ── Operational ───────────────────────────────
+mode: scan                          # scan | fix
+agent: claude                       # claude | codex
+timeout: 30m                        # e.g. 30m, 2h, 5h50m, 90s
+max-cost: "$5.00"                   # max API spend per run
+max-passes: 10                      # max scan/fix iterations
+min-passes: 2                       # consecutive clean passes to confirm clean
+max-chains: 3                       # max self-continuations (6h each)
+model: ""                           # override AI model (e.g. claude-sonnet-4-5-20250929)
+github-models-model: openai/gpt-4o-mini  # model for free scan tier
+scan-scope: auto                    # auto | pr | full
+verbose: false                      # stream agent output to logs
+max-turns: 30                       # max agent turns per invocation
+max-issues-per-pass: 0              # 0 = unlimited
+output-file: ""                     # path for full issues JSON export
+parallel-agents: 1                  # 1-8, uses git worktrees
+plugins: true                       # enable/disable plugin system
+custom-prompt: ""                   # inline custom prompt text
+custom-prompt-file: ""              # path to prompt file
 
-fix-types:
+# ── Filtering ─────────────────────────────────
+strictness: high                    # low | medium | high
+min-severity: low                   # critical | high | medium | low
+                                    #   Only report/fix issues at or above this level
+                                    #   Example: "high" → only critical + high issues
+fail-below: 0                       # fail action if score drops below this (0 = disabled)
+test-command: "npm run test:ci"     # override auto-detected test runner
+
+fix-types:                          # which issue types to scan/fix
   - security
   - bugs
+  - types
+  - lint
+  - dead-code
+  - stubs
+  - duplicates
+  - coverage
 
-test-command: "npm run test:ci"
-strictness: high
-fail-below: 70
+ignore:                             # glob patterns to exclude
+  - "**/*.test.ts"
+  - "vendor/"
+  - "generated/"
+
+rules:                              # per-type severity overrides
+  lint: medium                      #   critical | high | medium | low
+  dead-code: off                    #   'off' disables the type entirely
+
+# ── App Context ───────────────────────────────
+# Tells the AI about your application so it can calibrate severity.
+# A hardcoded localhost URL in a CLI tool is not a security issue.
+# An unauthenticated endpoint behind a VPN is different from a public API.
+app:
+  type: web-app                     # web-app | api | cli | library | worker | mobile | desktop
+  exposure: public                  # public | internal | local
+  auth: true                        # has authentication layer
+  network: internet                 # internet | vpn | localhost
+  data-sensitivity: high            # high | medium | low (PII, financial, public data)
+
+# ── Technology Context ────────────────────────
+framework: next.js                  # helps AI understand framework-specific patterns
+runtime: node-20                    # runtime version hint
+
+# ── Trust Boundaries ──────────────────────────
+trust-internal:                     # packages to treat as first-party (don't flag imports)
+  - "@myorg/*"
+  - "@mycompany/shared-utils"
+
+trust-untrusted:                    # files that handle external/user input (stricter scrutiny)
+  - "src/api/routes/*"
+  - "src/webhooks/*"
+
+# ── False Positive Suppressions ───────────────
+# Patterns matching issue descriptions or file paths are suppressed.
+allow:
+  - pattern: "eval\\("
+    reason: "Used in build-time template engine, not user input"
+  - pattern: "dangerouslySetInnerHTML"
+    reason: "Content is sanitized by DOMPurify upstream"
 ```
+
+### Config reference
 
 | Key | Type | Description |
 |---|---|---|
-| `ignore` | `string[]` | Glob patterns to exclude from scanning/fixing |
-| `rules` | `Record<type, severity \| 'off'>` | Per-type severity overrides. `off` disables the type. |
-| `fix-types` | `IssueType[]` | Which issue types to auto-fix |
-| `test-command` | `string` | Override test runner |
+| **Operational** | | |
+| `mode` | `scan \| fix` | Scan (report only) or fix (auto-fix + PR) |
+| `agent` | `claude \| codex` | AI agent to use |
+| `timeout` | `string` | Max run time (e.g. `30m`, `2h`) |
+| `max-cost` | `string` | Max API spend (e.g. `$5.00`) |
+| `max-passes` | `number` | Max scan/fix iterations |
+| `min-passes` | `number` | Consecutive clean passes required |
+| `max-chains` | `number` | Max self-continuations |
+| `model` | `string` | Override AI model |
+| `github-models-model` | `string` | Model for free scan tier |
+| `scan-scope` | `auto \| pr \| full` | What to scan |
+| `verbose` | `boolean` | Stream agent output |
+| `max-turns` | `number` | Max agent turns per invocation |
+| `max-issues-per-pass` | `number` | Cap issues per pass (0 = unlimited) |
+| `output-file` | `string` | Path for issues JSON export |
+| `parallel-agents` | `number` | Parallel agents (1-8) |
+| `plugins` | `boolean` | Enable/disable plugin system |
+| `custom-prompt` | `string` | Inline custom prompt text |
+| `custom-prompt-file` | `string` | Path to file with custom prompt |
+| **Filtering** | | |
 | `strictness` | `low \| medium \| high` | Issue detection strictness |
+| `min-severity` | `critical \| high \| medium \| low` | Minimum severity to report/fix |
 | `fail-below` | `number` | Minimum passing score (0-100) |
+| `test-command` | `string` | Override test runner |
+| `fix-types` | `IssueType[]` | Issue types to scan/fix |
+| `ignore` | `string[]` | Glob patterns to exclude |
+| `rules` | `Record<type, severity \| 'off'>` | Per-type severity overrides |
+| **App Context** | | |
+| `app.type` | `web-app \| api \| cli \| library \| worker \| mobile \| desktop` | Application type |
+| `app.exposure` | `public \| internal \| local` | Deployment exposure |
+| `app.auth` | `boolean` | Whether the app has authentication |
+| `app.network` | `internet \| vpn \| localhost` | Network boundary |
+| `app.data-sensitivity` | `high \| medium \| low` | Data sensitivity level |
+| **Technology** | | |
+| `framework` | `string` | Framework hint (e.g. `next.js`, `django`, `rails`) |
+| `runtime` | `string` | Runtime hint (e.g. `node-20`, `python-3.12`) |
+| **Trust** | | |
+| `trust-internal` | `string[]` | Package patterns treated as first-party |
+| `trust-untrusted` | `string[]` | File paths that handle untrusted input |
+| **Suppressions** | | |
+| `allow` | `{pattern, reason}[]` | Regex patterns to suppress (false positives) |
 
-Repo config overrides action.yml defaults but **not** explicit user inputs.
+### How it works
+
+Repo config overrides action.yml defaults but **not** explicit user inputs. Priority:
+
+1. Explicit action input (in workflow YAML) — highest
+2. Profile overlay (`.sloppy/profiles/<name>.yml`)
+3. `.sloppy.yml` base config
+4. Action defaults — lowest
+
+### App context and severity calibration
+
+The `app` block gives the AI real context about your application. This changes how it grades severity:
+
+| Scenario | Without context | With `exposure: local` |
+|---|---|---|
+| Hardcoded localhost URL | `medium` security issue | Not flagged |
+| SSRF via user input | `critical` | `low` (no network access) |
+| Missing CSRF token | `high` | `low` (local only) |
+| SQL injection | `critical` | Still `critical` (data integrity) |
+
+### min-severity examples
+
+```yaml
+# Only fix critical and high severity issues — ignore medium and low
+min-severity: high
+
+# Only fix critical issues (security emergencies)
+min-severity: critical
+```
+
+This is a pure output filter. The scanner still *finds* all issues internally, but issues below your threshold are dropped before reporting and fixing.
+
+### Profiles
+
+Profiles let you use different settings for different contexts. Create profile files in `.sloppy/profiles/`:
+
+```
+.sloppy/profiles/ci.yml       # Strict settings for CI
+.sloppy/profiles/local.yml    # Relaxed settings for local dev
+.sloppy/profiles/security.yml # Security-only audit
+```
+
+Each profile file uses the **same format** as `.sloppy.yml`. Profile values override the base config.
+
+**Example: `.sloppy/profiles/ci.yml`**
+```yaml
+strictness: high
+fail-below: 80
+min-severity: medium
+```
+
+**Example: `.sloppy/profiles/security.yml`**
+```yaml
+fix-types:
+  - security
+min-severity: high
+strictness: high
+```
+
+Activate a profile via the action input:
+```yaml
+- uses: braedonsaunders/sloppy@v1
+  with:
+    profile: ci
+```
 
 ---
 

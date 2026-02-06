@@ -14,7 +14,7 @@ import {
   SmartChunk,
 } from './smart-split';
 import { localScanAll } from './local-scan';
-import { runHook, applyFilters } from './plugins';
+import { runHook, applyFilters, applyAllowRules } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
 import * as ui from './ui';
@@ -370,6 +370,8 @@ async function scanChunk(
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
 
+import { formatCustomPromptSection } from './plugins';
+
 export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   const scanStart = Date.now();
@@ -476,7 +478,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
     // Run pre-scan hooks
     if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
 
-    const customPrompt = pluginCtx?.customPrompt || '';
+    const customPrompt = pluginCtx ? formatCustomPromptSection(pluginCtx, config) : '';
 
     if (useDeepScan) {
       ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
@@ -565,6 +567,34 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
     }
     allIssues.length = 0;
     allIssues.push(...filtered);
+  }
+
+  // ================================================================
+  // Apply min-severity filter
+  // ================================================================
+  if (config.minSeverity !== 'low') {
+    const SRANK: Record<string, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+    const minRank = SRANK[config.minSeverity] ?? 0;
+    const before = allIssues.length;
+    const sevFiltered = allIssues.filter(i => (SRANK[i.severity] ?? 0) >= minRank);
+    if (sevFiltered.length < before) {
+      core.info(`min-severity filter (${config.minSeverity}+) removed ${before - sevFiltered.length} issues`);
+    }
+    allIssues.length = 0;
+    allIssues.push(...sevFiltered);
+  }
+
+  // ================================================================
+  // Apply allow-list (false positive suppressions)
+  // ================================================================
+  if (config.allow.length > 0) {
+    const before = allIssues.length;
+    const allowFiltered = applyAllowRules(allIssues, config.allow);
+    if (allowFiltered.length < before) {
+      core.info(`Allow-list suppressed ${before - allowFiltered.length} issues`);
+    }
+    allIssues.length = 0;
+    allIssues.push(...allowFiltered);
   }
 
   // ================================================================

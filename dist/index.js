@@ -30564,6 +30564,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getRawActionInputs = getRawActionInputs;
 exports.getConfig = getConfig;
 const core = __importStar(__nccwpck_require__(7484));
 function parseTimeout(input) {
@@ -30578,11 +30579,48 @@ function parseTimeout(input) {
         default: return value * 60 * 1000;
     }
 }
+const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+/**
+ * Collect raw action input strings so mergeRepoConfig can detect which
+ * inputs were explicitly set vs left at default.
+ */
+function getRawActionInputs() {
+    return {
+        'mode': core.getInput('mode'),
+        'agent': core.getInput('agent'),
+        'timeout': core.getInput('timeout'),
+        'max-cost': core.getInput('max-cost'),
+        'max-passes': core.getInput('max-passes'),
+        'min-passes': core.getInput('min-passes'),
+        'max-chains': core.getInput('max-chains'),
+        'strictness': core.getInput('strictness'),
+        'fix-types': core.getInput('fix-types'),
+        'model': core.getInput('model'),
+        'github-models-model': core.getInput('github-models-model'),
+        'test-command': core.getInput('test-command'),
+        'fail-below': core.getInput('fail-below'),
+        'verbose': core.getInput('verbose'),
+        'max-turns': core.getInput('max-turns'),
+        'max-issues-per-pass': core.getInput('max-issues-per-pass'),
+        'scan-scope': core.getInput('scan-scope'),
+        'output-file': core.getInput('output-file'),
+        'custom-prompt': core.getInput('custom-prompt'),
+        'custom-prompt-file': core.getInput('custom-prompt-file'),
+        'plugins': core.getInput('plugins'),
+        'parallel-agents': core.getInput('parallel-agents'),
+        'min-severity': core.getInput('min-severity'),
+        'profile': core.getInput('profile'),
+    };
+}
 function getConfig() {
     const hasApiKey = !!(process.env.ANTHROPIC_API_KEY ||
         process.env.CLAUDE_CODE_OAUTH_TOKEN ||
         process.env.OPENAI_API_KEY);
     const modeInput = core.getInput('mode') || (hasApiKey ? 'fix' : 'scan');
+    const minSevInput = (core.getInput('min-severity') || 'low').toLowerCase();
+    const minSeverity = VALID_SEVERITIES.has(minSevInput)
+        ? minSevInput
+        : 'low';
     return {
         mode: modeInput,
         agent: (core.getInput('agent') || 'claude'),
@@ -30594,6 +30632,7 @@ function getConfig() {
         fixTypes: (core.getInput('fix-types') || 'security,bugs,types,lint,dead-code,stubs,duplicates,coverage')
             .split(',').map(s => s.trim()),
         strictness: (core.getInput('strictness') || 'high'),
+        minSeverity,
         model: core.getInput('model') || '',
         githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
         testCommand: core.getInput('test-command') || '',
@@ -30610,6 +30649,13 @@ function getConfig() {
         customPromptFile: core.getInput('custom-prompt-file') || '',
         pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
         parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3'), 1), 8),
+        app: {},
+        framework: '',
+        runtime: '',
+        trustInternal: [],
+        trustUntrusted: [],
+        allow: [],
+        profile: core.getInput('profile') || '',
     };
 }
 
@@ -31264,6 +31310,7 @@ const ui = __importStar(__nccwpck_require__(5125));
 async function run() {
     try {
         const config = (0, config_1.getConfig)();
+        const rawInputs = (0, config_1.getRawActionInputs)();
         // Bridge github-token input to GITHUB_TOKEN env var if not already set
         if (!process.env.GITHUB_TOKEN) {
             const inputToken = core.getInput('github-token');
@@ -31277,6 +31324,24 @@ async function run() {
         const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
         const hasClaudeOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
         const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+        // Load .sloppy.yml repo config and optional profile overlay
+        const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+        let repoConfig = (0, sloppy_config_1.loadRepoConfig)(cwd);
+        // Apply profile if specified (action input or repo config)
+        const profileName = config.profile || repoConfig?.mode; // profile comes from action input
+        if (config.profile) {
+            const profileOverlay = (0, sloppy_config_1.loadProfile)(cwd, config.profile);
+            if (profileOverlay && repoConfig) {
+                repoConfig = (0, sloppy_config_1.applyProfile)(repoConfig, profileOverlay);
+            }
+            else if (profileOverlay) {
+                repoConfig = profileOverlay;
+            }
+        }
+        // Merge repo config into runtime config
+        if (repoConfig) {
+            (0, sloppy_config_1.mergeRepoConfig)(config, repoConfig, rawInputs);
+        }
         ui.blank();
         ui.banner('S L O P P Y', `Code Quality Scanner & Auto-Fixer  v1`);
         ui.blank();
@@ -31288,16 +31353,31 @@ async function run() {
             hasClaudeOAuth ? ui.c('OAUTH', ui.S.green) : '',
             hasOpenAIKey ? ui.c('OPENAI', ui.S.green) : '',
         ].filter(Boolean).join(ui.c(' / ', ui.S.gray)));
-        // Load custom prompts, plugins, and repo config
-        const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+        if (config.minSeverity !== 'low') {
+            ui.kv('Min severity', config.minSeverity);
+        }
+        if (config.app && Object.keys(config.app).length > 0) {
+            const appParts = [];
+            if (config.app.type)
+                appParts.push(config.app.type);
+            if (config.app.exposure)
+                appParts.push(config.app.exposure);
+            if (config.app.dataSensitivity)
+                appParts.push(`${config.app.dataSensitivity}-sensitivity`);
+            ui.kv('App context', appParts.join(' / '));
+        }
+        if (config.framework)
+            ui.kv('Framework', config.framework);
+        if (config.allow.length > 0)
+            ui.kv('Allow rules', `${config.allow.length} suppression(s)`);
+        if (config.profile)
+            ui.kv('Profile', config.profile);
+        // Load custom prompts, plugins
         const customPrompt = (0, plugins_1.resolveCustomPrompt)(config.customPrompt, config.customPromptFile, cwd);
         const plugins = config.pluginsEnabled ? (0, plugins_1.loadPlugins)(cwd) : [];
         const pluginCtx = (0, plugins_1.buildPluginContext)(plugins, customPrompt);
-        // Load .sloppy.yml repo config and merge into runtime
-        const repoConfig = (0, sloppy_config_1.loadRepoConfig)(cwd);
+        // Merge ignore patterns from repo config into plugin filters
         if (repoConfig) {
-            (0, sloppy_config_1.mergeRepoConfig)(config, repoConfig);
-            // Merge ignore patterns into plugin filters
             if (repoConfig.ignore && repoConfig.ignore.length > 0) {
                 const existing = pluginCtx.filters['exclude-paths'] || [];
                 pluginCtx.filters['exclude-paths'] = [...new Set([...existing, ...repoConfig.ignore])];
@@ -31312,6 +31392,10 @@ async function run() {
                 if (excludeTypes.size > 0) {
                     pluginCtx.filters['exclude-types'] = [...excludeTypes];
                 }
+            }
+            // Merge min-severity into plugin filters as well
+            if (repoConfig.minSeverity && config.minSeverity !== 'low') {
+                pluginCtx.filters['min-severity'] = config.minSeverity;
             }
         }
         if (customPrompt) {
@@ -32411,7 +32495,7 @@ async function runFixLoop(config, pluginCtx) {
         plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
         ui.kv('Plan', 'PLAN.md loaded');
     }
-    const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx) : '';
+    const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx, config) : '';
     // Load preexisting issues from output file
     let seededIssues = [];
     if (!checkpoint && config.outputFile) {
@@ -32463,6 +32547,24 @@ async function runFixLoop(config, pluginCtx) {
                 found = (0, plugins_1.applyFilters)(found, pluginCtx.filters);
                 if (found.length < before) {
                     core.info(`Plugin filters removed ${before - found.length} issues`);
+                }
+            }
+            // Apply min-severity filter
+            if (config.minSeverity !== 'low') {
+                const SRANK = { low: 0, medium: 1, high: 2, critical: 3 };
+                const minRank = SRANK[config.minSeverity] ?? 0;
+                const before = found.length;
+                found = found.filter(i => (SRANK[i.severity] ?? 0) >= minRank);
+                if (found.length < before) {
+                    core.info(`  min-severity filter (${config.minSeverity}+) removed ${before - found.length} issues`);
+                }
+            }
+            // Apply allow-list (false positive suppressions)
+            if (config.allow.length > 0) {
+                const before = found.length;
+                found = (0, plugins_1.applyAllowRules)(found, config.allow);
+                if (found.length < before) {
+                    core.info(`  Allow-list suppressed ${before - found.length} issues`);
                 }
             }
             core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Scan complete ${ui.c(`(${scanDuration})`, ui.S.gray)}: found ${ui.c(String(found.length), ui.S.bold)} issues`);
@@ -32692,6 +32794,7 @@ exports.buildPluginContext = buildPluginContext;
 exports.runHook = runHook;
 exports.applyFilters = applyFilters;
 exports.formatCustomPromptSection = formatCustomPromptSection;
+exports.applyAllowRules = applyAllowRules;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -33114,12 +33217,86 @@ function matchGlob(filepath, pattern) {
 }
 /**
  * Format the custom prompt section for injection into scan/fix prompts.
- * Returns empty string if no custom content.
+ * Includes custom rules, app context, framework/runtime hints, and trust boundaries.
  */
-function formatCustomPromptSection(ctx) {
-    if (!ctx.customPrompt)
+function formatCustomPromptSection(ctx, config) {
+    const parts = [];
+    // App context — helps the AI calibrate severity of findings
+    if (config?.app && Object.keys(config.app).length > 0) {
+        const app = config.app;
+        const lines = [];
+        if (app.type)
+            lines.push(`  Application type: ${app.type}`);
+        if (app.exposure)
+            lines.push(`  Exposure: ${app.exposure}`);
+        if (app.auth !== undefined)
+            lines.push(`  Has authentication: ${app.auth ? 'yes' : 'no'}`);
+        if (app.network)
+            lines.push(`  Network: ${app.network}`);
+        if (app.dataSensitivity)
+            lines.push(`  Data sensitivity: ${app.dataSensitivity}`);
+        parts.push(`APPLICATION CONTEXT (use this to calibrate severity of findings):\n${lines.join('\n')}\n`);
+        // Provide explicit guidance based on exposure
+        if (app.exposure === 'local' || app.network === 'localhost') {
+            parts.push(`NOTE: This is a local/non-networked application. Issues like SSRF, CSRF, XSS, and public endpoint exposure are lower severity unless the app processes untrusted input. Focus on data integrity, logic bugs, and actual exploitability in the local context.`);
+        }
+        else if (app.exposure === 'internal') {
+            parts.push(`NOTE: This is an internal/private application (not public-facing). Network-based attacks (SSRF, XSS, CSRF) are lower severity since the app is behind a VPN or internal network. Focus on auth bypass, privilege escalation, and data handling issues.`);
+        }
+        else if (app.exposure === 'public') {
+            parts.push(`NOTE: This is a PUBLIC-FACING application. All security issues should be treated with full severity. Pay special attention to input validation, auth, injection attacks, and data exposure.`);
+        }
+    }
+    // Framework/runtime hints
+    if (config?.framework || config?.runtime) {
+        const hints = [];
+        if (config.framework)
+            hints.push(`Framework: ${config.framework}`);
+        if (config.runtime)
+            hints.push(`Runtime: ${config.runtime}`);
+        parts.push(`TECHNOLOGY CONTEXT:\n  ${hints.join('\n  ')}\n  Use framework-idiomatic patterns when suggesting fixes. Understand framework conventions before flagging code as suspicious.`);
+    }
+    // Trust boundaries
+    if (config?.trustInternal && config.trustInternal.length > 0) {
+        parts.push(`TRUSTED PACKAGES (treat as first-party, do not flag imports from these as risky):\n${config.trustInternal.map(p => `  - ${p}`).join('\n')}`);
+    }
+    if (config?.trustUntrusted && config.trustUntrusted.length > 0) {
+        parts.push(`UNTRUSTED INPUT BOUNDARIES (these files handle external/user input — apply stricter security scrutiny):\n${config.trustUntrusted.map(p => `  - ${p}`).join('\n')}`);
+    }
+    // Allow rules — suppressions
+    if (config?.allow && config.allow.length > 0) {
+        const lines = config.allow.map(r => `  - Pattern: ${r.pattern}${r.reason ? ` — Reason: ${r.reason}` : ''}`);
+        parts.push(`ALLOWED PATTERNS (do NOT report issues matching these — they are intentional):\n${lines.join('\n')}`);
+    }
+    // Custom rules from plugins/user
+    if (ctx.customPrompt) {
+        parts.push(`CUSTOM RULES (from user configuration and plugins):\n${ctx.customPrompt}`);
+    }
+    if (parts.length === 0)
         return '';
-    return `\nCUSTOM RULES (from user configuration and plugins):\n${ctx.customPrompt}\n`;
+    return '\n' + parts.join('\n\n') + '\n';
+}
+/**
+ * Apply allow-list rules to filter out false positives.
+ * Issues whose description matches an allow pattern are removed.
+ */
+function applyAllowRules(issues, rules) {
+    if (!rules || rules.length === 0)
+        return issues;
+    const compiled = rules.map(r => {
+        try {
+            return { regex: new RegExp(r.pattern, 'i'), reason: r.reason };
+        }
+        catch {
+            return null;
+        }
+    }).filter((r) => r !== null);
+    if (compiled.length === 0)
+        return issues;
+    return issues.filter(issue => {
+        const text = `${issue.file}:${issue.description}`;
+        return !compiled.some(r => r.regex.test(text));
+    });
 }
 
 
@@ -34199,6 +34376,7 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customP
 // ---------------------------------------------------------------------------
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
+const plugins_2 = __nccwpck_require__(6067);
 async function runScan(config, pluginCtx) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
@@ -34294,7 +34472,7 @@ async function runScan(config, pluginCtx) {
         // Run pre-scan hooks
         if (pluginCtx)
             await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
-        const customPrompt = pluginCtx?.customPrompt || '';
+        const customPrompt = pluginCtx ? (0, plugins_2.formatCustomPromptSection)(pluginCtx, config) : '';
         if (useDeepScan) {
             ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
             const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
@@ -34372,6 +34550,32 @@ async function runScan(config, pluginCtx) {
         allIssues.push(...filtered);
     }
     // ================================================================
+    // Apply min-severity filter
+    // ================================================================
+    if (config.minSeverity !== 'low') {
+        const SRANK = { low: 0, medium: 1, high: 2, critical: 3 };
+        const minRank = SRANK[config.minSeverity] ?? 0;
+        const before = allIssues.length;
+        const sevFiltered = allIssues.filter(i => (SRANK[i.severity] ?? 0) >= minRank);
+        if (sevFiltered.length < before) {
+            core.info(`min-severity filter (${config.minSeverity}+) removed ${before - sevFiltered.length} issues`);
+        }
+        allIssues.length = 0;
+        allIssues.push(...sevFiltered);
+    }
+    // ================================================================
+    // Apply allow-list (false positive suppressions)
+    // ================================================================
+    if (config.allow.length > 0) {
+        const before = allIssues.length;
+        const allowFiltered = (0, plugins_1.applyAllowRules)(allIssues, config.allow);
+        if (allowFiltered.length < before) {
+            core.info(`Allow-list suppressed ${before - allowFiltered.length} issues`);
+        }
+        allIssues.length = 0;
+        allIssues.push(...allowFiltered);
+    }
+    // ================================================================
     // Deduplicate & score
     // ================================================================
     const seen = new Set();
@@ -34427,13 +34631,43 @@ async function runScan(config, pluginCtx) {
 /**
  * .sloppy.yml repo config loader.
  *
+ * This is the single source of truth for all non-secret Sloppy settings.
+ * Everything that can be configured in the GitHub Action workflow YAML can
+ * also be configured here so users never need to touch the workflow file
+ * after initial setup.
+ *
  * Supports:
- *   ignore:       glob patterns to exclude files/dirs from scanning and fixing
- *   rules:        per-type overrides (e.g. dead-code: off, lint: low)
- *   fix-types:    which issue types to auto-fix
- *   test-command:  override test runner
- *   strictness:   low | medium | high
- *   fail-below:   minimum passing score
+ *   ignore           glob patterns to exclude files/dirs
+ *   rules            per-type overrides (e.g. dead-code: off, lint: low)
+ *   fix-types        which issue types to auto-fix
+ *   test-command     override test runner
+ *   strictness       low | medium | high
+ *   min-severity     minimum severity to report/fix (critical | high | medium | low)
+ *   fail-below       minimum passing score
+ *   mode             scan | fix
+ *   agent            claude | codex
+ *   timeout          e.g. 30m, 2h
+ *   max-cost         e.g. $5.00
+ *   max-passes       max scan/fix iterations
+ *   min-passes       min clean passes
+ *   max-chains       max self-continuations
+ *   model            override AI model
+ *   github-models-model  model for free scan tier
+ *   verbose          stream agent output
+ *   max-turns        max agent turns
+ *   max-issues-per-pass  cap issues per pass
+ *   scan-scope       auto | pr | full
+ *   output-file      path for issues JSON
+ *   custom-prompt    inline prompt text
+ *   custom-prompt-file   path to prompt file
+ *   plugins          enable/disable plugin system
+ *   parallel-agents  1-8
+ *   app              application context (type, exposure, auth, network, data-sensitivity)
+ *   framework        framework hint (e.g. next.js, express, django)
+ *   runtime          runtime hint (e.g. node-20, python-3.12)
+ *   trust-internal   list of trusted internal package patterns
+ *   trust-untrusted  list of paths that handle untrusted input
+ *   allow            false-positive suppression rules
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -34470,6 +34704,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.loadRepoConfig = loadRepoConfig;
+exports.loadProfile = loadProfile;
+exports.applyProfile = applyProfile;
 exports.mergeRepoConfig = mergeRepoConfig;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -34479,6 +34715,185 @@ const VALID_TYPES = new Set([
     'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
 ]);
 const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+const VALID_APP_TYPES = new Set(['web-app', 'api', 'cli', 'library', 'worker', 'mobile', 'desktop']);
+const VALID_EXPOSURES = new Set(['public', 'internal', 'local']);
+const VALID_NETWORKS = new Set(['internet', 'vpn', 'localhost']);
+const VALID_DATA_SENSITIVITY = new Set(['high', 'medium', 'low']);
+const VALID_MODES = new Set(['scan', 'fix']);
+const VALID_AGENTS = new Set(['claude', 'codex']);
+const VALID_SCOPES = new Set(['auto', 'pr', 'full']);
+function parseYamlConfig(raw) {
+    const data = (0, plugins_1.parseSimpleYaml)(raw);
+    const config = {};
+    // --- Filtering ---
+    // ignore: list of glob patterns
+    if (Array.isArray(data.ignore)) {
+        config.ignore = data.ignore.filter(s => typeof s === 'string' && s.trim());
+    }
+    // rules: map of type → 'off' | severity
+    if (data.rules && typeof data.rules === 'object') {
+        const rules = {};
+        for (const [key, val] of Object.entries(data.rules)) {
+            if (!VALID_TYPES.has(key))
+                continue;
+            const v = String(val).toLowerCase();
+            if (v === 'off' || VALID_SEVERITIES.has(v)) {
+                rules[key] = v;
+            }
+        }
+        if (Object.keys(rules).length > 0)
+            config.rules = rules;
+    }
+    // fix-types
+    if (Array.isArray(data['fix-types'])) {
+        config.fixTypes = data['fix-types'].filter(s => typeof s === 'string' && VALID_TYPES.has(s.trim()));
+    }
+    // test-command
+    if (typeof data['test-command'] === 'string' && data['test-command']) {
+        config.testCommand = data['test-command'];
+    }
+    // strictness
+    if (typeof data.strictness === 'string') {
+        const s = data.strictness.toLowerCase();
+        if (['low', 'medium', 'high'].includes(s)) {
+            config.strictness = s;
+        }
+    }
+    // min-severity
+    if (typeof data['min-severity'] === 'string') {
+        const s = data['min-severity'].toLowerCase();
+        if (VALID_SEVERITIES.has(s)) {
+            config.minSeverity = s;
+        }
+    }
+    // fail-below
+    if (data['fail-below'] !== undefined) {
+        const n = parseInt(String(data['fail-below']));
+        if (!isNaN(n) && n >= 0 && n <= 100)
+            config.failBelow = n;
+    }
+    // --- Operational settings ---
+    if (typeof data.mode === 'string' && VALID_MODES.has(data.mode.toLowerCase())) {
+        config.mode = data.mode.toLowerCase();
+    }
+    if (typeof data.agent === 'string' && VALID_AGENTS.has(data.agent.toLowerCase())) {
+        config.agent = data.agent.toLowerCase();
+    }
+    if (typeof data.timeout === 'string' && data.timeout) {
+        config.timeout = data.timeout;
+    }
+    if (typeof data['max-cost'] === 'string' && data['max-cost']) {
+        config.maxCost = data['max-cost'];
+    }
+    if (data['max-passes'] !== undefined) {
+        const n = parseInt(String(data['max-passes']));
+        if (!isNaN(n) && n > 0)
+            config.maxPasses = n;
+    }
+    if (data['min-passes'] !== undefined) {
+        const n = parseInt(String(data['min-passes']));
+        if (!isNaN(n) && n > 0)
+            config.minPasses = n;
+    }
+    if (data['max-chains'] !== undefined) {
+        const n = parseInt(String(data['max-chains']));
+        if (!isNaN(n) && n >= 0)
+            config.maxChains = n;
+    }
+    if (typeof data.model === 'string') {
+        config.model = data.model;
+    }
+    if (typeof data['github-models-model'] === 'string' && data['github-models-model']) {
+        config.githubModelsModel = data['github-models-model'];
+    }
+    if (typeof data.verbose === 'string') {
+        config.verbose = data.verbose.toLowerCase() === 'true';
+    }
+    if (data['max-turns'] !== undefined) {
+        const n = parseInt(String(data['max-turns']));
+        if (!isNaN(n) && n > 0)
+            config.maxTurns = n;
+    }
+    if (data['max-issues-per-pass'] !== undefined) {
+        const n = parseInt(String(data['max-issues-per-pass']));
+        if (!isNaN(n) && n >= 0)
+            config.maxIssuesPerPass = n;
+    }
+    if (typeof data['scan-scope'] === 'string' && VALID_SCOPES.has(data['scan-scope'].toLowerCase())) {
+        config.scanScope = data['scan-scope'].toLowerCase();
+    }
+    if (typeof data['output-file'] === 'string') {
+        config.outputFile = data['output-file'];
+    }
+    if (typeof data['custom-prompt'] === 'string' && data['custom-prompt']) {
+        config.customPrompt = data['custom-prompt'];
+    }
+    if (typeof data['custom-prompt-file'] === 'string' && data['custom-prompt-file']) {
+        config.customPromptFile = data['custom-prompt-file'];
+    }
+    if (typeof data.plugins === 'string') {
+        config.plugins = data.plugins.toLowerCase() !== 'false';
+    }
+    if (data['parallel-agents'] !== undefined) {
+        const n = parseInt(String(data['parallel-agents']));
+        if (!isNaN(n) && n >= 1 && n <= 8)
+            config.parallelAgents = n;
+    }
+    // --- App context ---
+    if (data.app && typeof data.app === 'object') {
+        const a = data.app;
+        const app = {};
+        if (a.type && VALID_APP_TYPES.has(a.type.toLowerCase())) {
+            app.type = a.type.toLowerCase();
+        }
+        if (a.exposure && VALID_EXPOSURES.has(a.exposure.toLowerCase())) {
+            app.exposure = a.exposure.toLowerCase();
+        }
+        if (a.auth !== undefined) {
+            app.auth = String(a.auth).toLowerCase() === 'true';
+        }
+        if (a.network && VALID_NETWORKS.has(a.network.toLowerCase())) {
+            app.network = a.network.toLowerCase();
+        }
+        const ds = a['data-sensitivity'] || a.dataSensitivity;
+        if (ds && VALID_DATA_SENSITIVITY.has(ds.toLowerCase())) {
+            app.dataSensitivity = ds.toLowerCase();
+        }
+        if (Object.keys(app).length > 0)
+            config.app = app;
+    }
+    // framework
+    if (typeof data.framework === 'string' && data.framework) {
+        config.framework = data.framework;
+    }
+    // runtime
+    if (typeof data.runtime === 'string' && data.runtime) {
+        config.runtime = data.runtime;
+    }
+    // trust-internal
+    if (Array.isArray(data['trust-internal'])) {
+        config.trustInternal = data['trust-internal'].filter(s => typeof s === 'string' && s.trim());
+    }
+    // trust-untrusted
+    if (Array.isArray(data['trust-untrusted'])) {
+        config.trustUntrusted = data['trust-untrusted'].filter(s => typeof s === 'string' && s.trim());
+    }
+    // allow: list of { pattern, reason }
+    if (Array.isArray(data.allow)) {
+        const rules = [];
+        for (const item of data.allow) {
+            if (typeof item === 'object' && item !== null) {
+                const obj = item;
+                if (obj.pattern) {
+                    rules.push({ pattern: obj.pattern, reason: obj.reason || '' });
+                }
+            }
+        }
+        if (rules.length > 0)
+            config.allow = rules;
+    }
+    return config;
+}
 function loadRepoConfig(cwd) {
     const candidates = [
         path.join(cwd, '.sloppy.yml'),
@@ -34497,47 +34912,7 @@ function loadRepoConfig(cwd) {
         return null;
     try {
         const raw = fs.readFileSync(configPath, 'utf-8');
-        const data = (0, plugins_1.parseSimpleYaml)(raw);
-        const config = {};
-        // ignore: list of glob patterns
-        if (Array.isArray(data.ignore)) {
-            config.ignore = data.ignore.filter(s => typeof s === 'string' && s.trim());
-        }
-        // rules: map of type → 'off' | severity
-        if (data.rules && typeof data.rules === 'object') {
-            const rules = {};
-            for (const [key, val] of Object.entries(data.rules)) {
-                if (!VALID_TYPES.has(key))
-                    continue;
-                const v = String(val).toLowerCase();
-                if (v === 'off' || VALID_SEVERITIES.has(v)) {
-                    rules[key] = v;
-                }
-            }
-            if (Object.keys(rules).length > 0)
-                config.rules = rules;
-        }
-        // fix-types
-        if (Array.isArray(data['fix-types'])) {
-            config.fixTypes = data['fix-types'].filter(s => typeof s === 'string' && VALID_TYPES.has(s.trim()));
-        }
-        // test-command
-        if (typeof data['test-command'] === 'string' && data['test-command']) {
-            config.testCommand = data['test-command'];
-        }
-        // strictness
-        if (typeof data.strictness === 'string') {
-            const s = data.strictness.toLowerCase();
-            if (['low', 'medium', 'high'].includes(s)) {
-                config.strictness = s;
-            }
-        }
-        // fail-below
-        if (data['fail-below'] !== undefined) {
-            const n = parseInt(String(data['fail-below']));
-            if (!isNaN(n) && n >= 0 && n <= 100)
-                config.failBelow = n;
-        }
+        const config = parseYamlConfig(raw);
         core.info(`Loaded repo config from ${path.relative(cwd, configPath)}`);
         return config;
     }
@@ -34547,23 +34922,210 @@ function loadRepoConfig(cwd) {
     }
 }
 /**
+ * Load a profile overlay from .sloppy/profiles/<name>.yml.
+ * Profile files use the same format as .sloppy.yml. Values from the
+ * profile override the base repo config.
+ */
+function loadProfile(cwd, profileName) {
+    if (!profileName)
+        return null;
+    const candidates = [
+        path.join(cwd, '.sloppy', 'profiles', `${profileName}.yml`),
+        path.join(cwd, '.sloppy', 'profiles', `${profileName}.yaml`),
+    ];
+    let profilePath;
+    for (const p of candidates) {
+        if (fs.existsSync(p)) {
+            profilePath = p;
+            break;
+        }
+    }
+    if (!profilePath) {
+        core.warning(`Profile '${profileName}' not found in .sloppy/profiles/`);
+        return null;
+    }
+    try {
+        const raw = fs.readFileSync(profilePath, 'utf-8');
+        const config = parseYamlConfig(raw);
+        core.info(`Loaded profile '${profileName}' from ${path.relative(cwd, profilePath)}`);
+        return config;
+    }
+    catch (e) {
+        core.warning(`Failed to parse profile '${profileName}': ${e}`);
+        return null;
+    }
+}
+/**
+ * Apply a profile overlay on top of a base repo config.
+ * Profile values override base values (non-undefined fields win).
+ */
+function applyProfile(base, profile) {
+    const merged = { ...base };
+    if (profile.ignore)
+        merged.ignore = profile.ignore;
+    if (profile.rules)
+        merged.rules = { ...base.rules, ...profile.rules };
+    if (profile.fixTypes)
+        merged.fixTypes = profile.fixTypes;
+    if (profile.testCommand)
+        merged.testCommand = profile.testCommand;
+    if (profile.strictness)
+        merged.strictness = profile.strictness;
+    if (profile.minSeverity)
+        merged.minSeverity = profile.minSeverity;
+    if (profile.failBelow !== undefined)
+        merged.failBelow = profile.failBelow;
+    if (profile.mode)
+        merged.mode = profile.mode;
+    if (profile.agent)
+        merged.agent = profile.agent;
+    if (profile.timeout)
+        merged.timeout = profile.timeout;
+    if (profile.maxCost)
+        merged.maxCost = profile.maxCost;
+    if (profile.maxPasses !== undefined)
+        merged.maxPasses = profile.maxPasses;
+    if (profile.minPasses !== undefined)
+        merged.minPasses = profile.minPasses;
+    if (profile.maxChains !== undefined)
+        merged.maxChains = profile.maxChains;
+    if (profile.model !== undefined)
+        merged.model = profile.model;
+    if (profile.githubModelsModel)
+        merged.githubModelsModel = profile.githubModelsModel;
+    if (profile.verbose !== undefined)
+        merged.verbose = profile.verbose;
+    if (profile.maxTurns !== undefined)
+        merged.maxTurns = profile.maxTurns;
+    if (profile.maxIssuesPerPass !== undefined)
+        merged.maxIssuesPerPass = profile.maxIssuesPerPass;
+    if (profile.scanScope)
+        merged.scanScope = profile.scanScope;
+    if (profile.outputFile !== undefined)
+        merged.outputFile = profile.outputFile;
+    if (profile.parallelAgents !== undefined)
+        merged.parallelAgents = profile.parallelAgents;
+    if (profile.app)
+        merged.app = { ...base.app, ...profile.app };
+    if (profile.framework)
+        merged.framework = profile.framework;
+    if (profile.runtime)
+        merged.runtime = profile.runtime;
+    if (profile.trustInternal)
+        merged.trustInternal = profile.trustInternal;
+    if (profile.trustUntrusted)
+        merged.trustUntrusted = profile.trustUntrusted;
+    if (profile.allow)
+        merged.allow = profile.allow;
+    return merged;
+}
+// Helper: check if an action input was left at its default value
+function isDefault(actual, defaultVal) {
+    return !actual || actual === defaultVal;
+}
+function parseTimeout(input) {
+    const match = input.match(/^(\d+)(s|m|h)?$/);
+    if (!match)
+        return 30 * 60 * 1000;
+    const value = parseInt(match[1]);
+    const unit = match[2] || 'm';
+    switch (unit) {
+        case 's': return value * 1000;
+        case 'h': return value * 60 * 60 * 1000;
+        default: return value * 60 * 1000;
+    }
+}
+/**
  * Merge a RepoConfig into the runtime SloppyConfig.
  * Repo config values override action.yml defaults but NOT explicit user inputs.
  */
-function mergeRepoConfig(config, repo) {
+function mergeRepoConfig(config, repo, actionInputs) {
     // Only override if the action input was left at default (empty / default value)
-    if (!config.testCommand && repo.testCommand) {
+    // Filtering
+    if (isDefault(actionInputs['test-command'], '') && repo.testCommand) {
         config.testCommand = repo.testCommand;
     }
-    if (config.strictness === 'high' && repo.strictness) {
+    if (isDefault(actionInputs['strictness'], 'high') && repo.strictness) {
         config.strictness = repo.strictness;
     }
-    if (repo.fixTypes && repo.fixTypes.length > 0) {
+    if (repo.fixTypes && repo.fixTypes.length > 0 && isDefault(actionInputs['fix-types'], 'security,bugs,types,lint,dead-code,stubs,duplicates,coverage')) {
         config.fixTypes = repo.fixTypes;
     }
-    if (config.failBelow === 0 && repo.failBelow !== undefined) {
+    if (isDefault(actionInputs['fail-below'], '0') && repo.failBelow !== undefined) {
         config.failBelow = repo.failBelow;
     }
+    if (isDefault(actionInputs['min-severity'], 'low') && repo.minSeverity) {
+        config.minSeverity = repo.minSeverity;
+    }
+    // Operational
+    if (isDefault(actionInputs['mode'], '') && repo.mode) {
+        config.mode = repo.mode;
+    }
+    if (isDefault(actionInputs['agent'], 'claude') && repo.agent) {
+        config.agent = repo.agent;
+    }
+    if (isDefault(actionInputs['timeout'], '30m') && repo.timeout) {
+        config.timeout = parseTimeout(repo.timeout);
+    }
+    if (isDefault(actionInputs['max-cost'], '$5.00') && repo.maxCost) {
+        config.maxCost = parseFloat(repo.maxCost.replace('$', '')) || 5;
+    }
+    if (isDefault(actionInputs['max-passes'], '10') && repo.maxPasses !== undefined) {
+        config.maxPasses = repo.maxPasses;
+    }
+    if (isDefault(actionInputs['min-passes'], '2') && repo.minPasses !== undefined) {
+        config.minPasses = repo.minPasses;
+    }
+    if (isDefault(actionInputs['max-chains'], '3') && repo.maxChains !== undefined) {
+        config.maxChains = repo.maxChains;
+    }
+    if (isDefault(actionInputs['model'], '') && repo.model !== undefined) {
+        config.model = repo.model;
+    }
+    if (isDefault(actionInputs['github-models-model'], 'openai/gpt-4o-mini') && repo.githubModelsModel) {
+        config.githubModelsModel = repo.githubModelsModel;
+    }
+    if (isDefault(actionInputs['verbose'], 'false') && repo.verbose !== undefined) {
+        config.verbose = repo.verbose;
+    }
+    if (isDefault(actionInputs['max-turns'], '') && repo.maxTurns !== undefined) {
+        config.maxTurns = { scan: repo.maxTurns, fix: Math.round(repo.maxTurns / 2) };
+    }
+    if (isDefault(actionInputs['max-issues-per-pass'], '0') && repo.maxIssuesPerPass !== undefined) {
+        config.maxIssuesPerPass = repo.maxIssuesPerPass;
+    }
+    if (isDefault(actionInputs['scan-scope'], 'auto') && repo.scanScope) {
+        config.scanScope = repo.scanScope;
+    }
+    if (isDefault(actionInputs['output-file'], '') && repo.outputFile) {
+        config.outputFile = repo.outputFile;
+    }
+    if (isDefault(actionInputs['custom-prompt'], '') && repo.customPrompt) {
+        config.customPrompt = repo.customPrompt;
+    }
+    if (isDefault(actionInputs['custom-prompt-file'], '') && repo.customPromptFile) {
+        config.customPromptFile = repo.customPromptFile;
+    }
+    if (isDefault(actionInputs['plugins'], 'true') && repo.plugins !== undefined) {
+        config.pluginsEnabled = repo.plugins;
+    }
+    if (isDefault(actionInputs['parallel-agents'], '3') && repo.parallelAgents !== undefined) {
+        config.parallelAgents = Math.min(Math.max(repo.parallelAgents, 1), 8);
+    }
+    // App context (always merge from repo config — no action input equivalent)
+    if (repo.app) {
+        config.app = { ...config.app, ...repo.app };
+    }
+    if (repo.framework)
+        config.framework = repo.framework;
+    if (repo.runtime)
+        config.runtime = repo.runtime;
+    if (repo.trustInternal)
+        config.trustInternal = repo.trustInternal;
+    if (repo.trustUntrusted)
+        config.trustUntrusted = repo.trustUntrusted;
+    if (repo.allow)
+        config.allow = repo.allow;
 }
 
 
