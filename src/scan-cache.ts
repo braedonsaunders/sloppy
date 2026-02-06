@@ -15,11 +15,14 @@ import { Issue } from './types';
 
 const CACHE_DIR = '.sloppy';
 const CACHE_FILE = 'scan-cache.json';
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+
+export type ScanStrategy = 'deep' | 'fingerprint';
 
 interface CacheEntry {
   hash: string;
   issues: Issue[];
+  strategy: ScanStrategy;
   scannedAt: string;
 }
 
@@ -82,6 +85,7 @@ export function partitionByCache(
   filePaths: string[],
   cwd: string,
   model: string,
+  strategy: ScanStrategy,
 ): {
   cachedIssues: Issue[];
   uncachedFiles: string[];
@@ -111,7 +115,7 @@ export function partitionByCache(
     const hash = hashFileContent(content);
     const entry = cache.entries[relativePath];
 
-    if (entry && entry.hash === hash) {
+    if (entry && entry.hash === hash && isStrategyCompatible(entry.strategy, strategy)) {
       // Cache hit — reuse previous results
       cachedIssues.push(...entry.issues);
       cacheHits++;
@@ -124,6 +128,17 @@ export function partitionByCache(
 }
 
 /**
+ * A deep-scan cache entry satisfies any request (it's the most thorough).
+ * A fingerprint-scan entry only satisfies fingerprint requests — a deep
+ * scan must re-analyze the file for full accuracy.
+ */
+function isStrategyCompatible(cached: ScanStrategy | undefined, requested: ScanStrategy): boolean {
+  if (!cached) return false;
+  if (cached === 'deep') return true;
+  return cached === requested;
+}
+
+/**
  * Update cache entries for files that were just scanned.
  * Call this after scanning to persist results for next run.
  */
@@ -132,6 +147,7 @@ export function updateCacheEntries(
   issues: Issue[],
   filePaths: string[],
   cwd: string,
+  strategy: ScanStrategy,
 ): void {
   // Group issues by file
   const issuesByFile = new Map<string, Issue[]>();
@@ -153,6 +169,7 @@ export function updateCacheEntries(
     cache.entries[relativePath] = {
       hash: hashFileContent(content),
       issues: issuesByFile.get(relativePath) || [],
+      strategy,
       scannedAt: new Date().toISOString(),
     };
   }

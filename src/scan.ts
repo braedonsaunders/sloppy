@@ -15,7 +15,7 @@ import {
 } from './smart-split';
 import { localScanAll } from './local-scan';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
-import { partitionByCache, updateCacheEntries, saveCache } from './scan-cache';
+import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -372,8 +372,13 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   // ================================================================
   // CACHE: Skip unchanged files
   // ================================================================
+  // Strategy is decided by total file count so cache keys stay stable
+  // across runs. Deep-scan entries satisfy any request; fingerprint
+  // entries only satisfy fingerprint requests.
+  const DEEP_SCAN_THRESHOLD = 15;
+  const scanStrategy: ScanStrategy = files.length <= DEEP_SCAN_THRESHOLD ? 'deep' : 'fingerprint';
   const { cachedIssues, uncachedFiles, cacheHits, cache } = partitionByCache(
-    files, cwd, config.githubModelsModel,
+    files, cwd, config.githubModelsModel, scanStrategy,
   );
 
   if (cacheHits > 0) {
@@ -412,8 +417,7 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     //   Compact representations (~100 tokens/file) let us pack 20+
     //   files per request, cutting 33 API calls to 3-5.
     // ================================================================
-    const DEEP_SCAN_THRESHOLD = 15;
-    const useDeepScan = filesToScan.length <= DEEP_SCAN_THRESHOLD;
+    const useDeepScan = scanStrategy === 'deep';
     let aiIssues: Issue[] = [];
 
     if (useDeepScan) {
@@ -471,7 +475,7 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
 
     // Update cache with new results
     const newIssues = [...localIssues, ...aiIssues];
-    updateCacheEntries(cache, newIssues, filesToScan, cwd);
+    updateCacheEntries(cache, newIssues, filesToScan, cwd, scanStrategy);
     saveCache(cwd, cache);
   }
 

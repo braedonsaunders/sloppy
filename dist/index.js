@@ -32260,7 +32260,7 @@ const path = __importStar(__nccwpck_require__(6928));
 const crypto = __importStar(__nccwpck_require__(6982));
 const CACHE_DIR = '.sloppy';
 const CACHE_FILE = 'scan-cache.json';
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 function getCachePath(cwd) {
     return path.join(cwd, CACHE_DIR, CACHE_FILE);
 }
@@ -32308,7 +32308,7 @@ function saveCache(cwd, cache) {
  *  - uncachedFiles: file paths that need scanning
  *  - cache: the cache object to update after scanning
  */
-function partitionByCache(filePaths, cwd, model) {
+function partitionByCache(filePaths, cwd, model, strategy) {
     const existing = loadCache(cwd, model);
     const cache = existing || {
         version: CACHE_VERSION,
@@ -32329,7 +32329,7 @@ function partitionByCache(filePaths, cwd, model) {
         }
         const hash = hashFileContent(content);
         const entry = cache.entries[relativePath];
-        if (entry && entry.hash === hash) {
+        if (entry && entry.hash === hash && isStrategyCompatible(entry.strategy, strategy)) {
             // Cache hit — reuse previous results
             cachedIssues.push(...entry.issues);
             cacheHits++;
@@ -32341,10 +32341,22 @@ function partitionByCache(filePaths, cwd, model) {
     return { cachedIssues, uncachedFiles, cacheHits, cache };
 }
 /**
+ * A deep-scan cache entry satisfies any request (it's the most thorough).
+ * A fingerprint-scan entry only satisfies fingerprint requests — a deep
+ * scan must re-analyze the file for full accuracy.
+ */
+function isStrategyCompatible(cached, requested) {
+    if (!cached)
+        return false;
+    if (cached === 'deep')
+        return true;
+    return cached === requested;
+}
+/**
  * Update cache entries for files that were just scanned.
  * Call this after scanning to persist results for next run.
  */
-function updateCacheEntries(cache, issues, filePaths, cwd) {
+function updateCacheEntries(cache, issues, filePaths, cwd, strategy) {
     // Group issues by file
     const issuesByFile = new Map();
     for (const issue of issues) {
@@ -32365,6 +32377,7 @@ function updateCacheEntries(cache, issues, filePaths, cwd) {
         cache.entries[relativePath] = {
             hash: hashFileContent(content),
             issues: issuesByFile.get(relativePath) || [],
+            strategy,
             scannedAt: new Date().toISOString(),
         };
     }
@@ -32743,7 +32756,12 @@ async function runScan(config) {
     // ================================================================
     // CACHE: Skip unchanged files
     // ================================================================
-    const { cachedIssues, uncachedFiles, cacheHits, cache } = (0, scan_cache_1.partitionByCache)(files, cwd, config.githubModelsModel);
+    // Strategy is decided by total file count so cache keys stay stable
+    // across runs. Deep-scan entries satisfy any request; fingerprint
+    // entries only satisfy fingerprint requests.
+    const DEEP_SCAN_THRESHOLD = 15;
+    const scanStrategy = files.length <= DEEP_SCAN_THRESHOLD ? 'deep' : 'fingerprint';
+    const { cachedIssues, uncachedFiles, cacheHits, cache } = (0, scan_cache_1.partitionByCache)(files, cwd, config.githubModelsModel, scanStrategy);
     if (cacheHits > 0) {
         core.info(`Cache: ${cacheHits} files unchanged (${cachedIssues.length} cached issues), ${uncachedFiles.length} files to scan`);
     }
@@ -32779,8 +32797,7 @@ async function runScan(config) {
         //   Compact representations (~100 tokens/file) let us pack 20+
         //   files per request, cutting 33 API calls to 3-5.
         // ================================================================
-        const DEEP_SCAN_THRESHOLD = 15;
-        const useDeepScan = filesToScan.length <= DEEP_SCAN_THRESHOLD;
+        const useDeepScan = scanStrategy === 'deep';
         let aiIssues = [];
         if (useDeepScan) {
             core.info('');
@@ -32829,7 +32846,7 @@ async function runScan(config) {
         allIssues.push(...aiIssues);
         // Update cache with new results
         const newIssues = [...localIssues, ...aiIssues];
-        (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd);
+        (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd, scanStrategy);
         (0, scan_cache_1.saveCache)(cwd, cache);
     }
     // ================================================================
