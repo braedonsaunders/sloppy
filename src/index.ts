@@ -9,6 +9,8 @@ import {
   postScanComment,
   updateBadge,
   appendHistory,
+  writeOutputFile,
+  loadOutputFile,
 } from './report';
 import { deployDashboard } from './dashboard';
 import { HistoryEntry, ScanResult, LoopState } from './types';
@@ -45,6 +47,11 @@ async function run(): Promise<void> {
       await postScanComment(result);
       await writeJobSummary(result);
       await updateBadge(result.score);
+
+      if (config.outputFile) {
+        const resolved = writeOutputFile(config.outputFile, result.issues, 'scan', result.score);
+        core.setOutput('output-file', resolved);
+      }
 
       // Point users to the Job Summary (native GitHub UI)
       const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
@@ -99,6 +106,11 @@ async function run(): Promise<void> {
 
       await writeJobSummary(state);
       await updateBadge(state.scoreAfter);
+
+      if (config.outputFile) {
+        const resolved = writeOutputFile(config.outputFile, state.issues, 'fix', state.scoreAfter, state.scoreBefore);
+        core.setOutput('output-file', resolved);
+      }
 
       // Point users to the Job Summary (native GitHub UI)
       const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
