@@ -7,7 +7,15 @@ import { AgentType } from './types';
 
 export async function installAgent(agent: AgentType): Promise<void> {
   if (agent === 'claude') {
-    await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
+    // Install both the CLI and the SDK — they are separate packages.
+    // @anthropic-ai/claude-code is CLI-only (no sdk.mjs).
+    // @anthropic-ai/claude-agent-sdk contains query() for streaming.
+    await exec.exec('npm', [
+      'install',
+      '-g',
+      '@anthropic-ai/claude-code',
+      '@anthropic-ai/claude-agent-sdk',
+    ]);
   } else {
     await exec.exec('npm', ['install', '-g', '@openai/codex']);
   }
@@ -35,7 +43,9 @@ async function loadQuery() {
     try {
       const mod = await import(pkg);
       if (mod.query) return mod.query;
-    } catch {}
+    } catch (e) {
+      process.stderr.write('import(' + pkg + '): ' + (e.code || e.message) + '\\n');
+    }
 
     // Try loading from global npm root via file URL
     if (globalRoot) {
@@ -47,9 +57,12 @@ async function loadQuery() {
         if (typeof entry === 'object') entry = entry.import || entry.default;
         if (!entry) entry = pkgJson.main || 'index.js';
         const fullPath = path.resolve(pkgDir, entry);
+        process.stderr.write('trying file URL: ' + fullPath + '\\n');
         const mod = await import(pathToFileURL(fullPath).href);
         if (mod.query) return mod.query;
-      } catch {}
+      } catch (e) {
+        process.stderr.write('file import(' + pkg + '): ' + (e.code || e.message) + '\\n');
+      }
     }
   }
   return null;
