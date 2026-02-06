@@ -30518,6 +30518,320 @@ function deployDashboard(history) {
 
 /***/ }),
 
+/***/ 2659:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Layer 1: Fingerprint scanning — compact file representations for AI triage.
+ *
+ * Instead of sending full file contents (~3000 tokens/file), we generate
+ * compact fingerprints (~80-150 tokens/file) containing:
+ *   - Function/class/method signatures
+ *   - Import graph
+ *   - "Hotspot" lines (security-sensitive patterns, error-prone constructs)
+ *   - File statistics
+ *
+ * This lets us pack 15-25 files per 8K-token request, reducing a 33-request
+ * scan to 3-5 requests. The model can detect most issue categories from
+ * fingerprints alone: security, stubs, dead-code, types, duplicates.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.generateFingerprint = generateFingerprint;
+exports.packFingerprints = packFingerprints;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const smart_split_1 = __nccwpck_require__(7487);
+const HOTSPOT_PATTERNS = [
+    // Security-sensitive
+    { regex: /\beval\s*\(/, label: 'EVAL' },
+    { regex: /\bexec\s*\(/, label: 'EXEC' },
+    { regex: /\bos\.system\s*\(/, label: 'SHELL', extensions: ['.py'] },
+    { regex: /\bsubprocess/, label: 'SUBPROCESS', extensions: ['.py'] },
+    { regex: /\bchild_process/, label: 'CHILD_PROC', extensions: ['.ts', '.js'] },
+    { regex: /dangerouslySetInnerHTML/, label: 'RAW_HTML', extensions: ['.tsx', '.jsx'] },
+    { regex: /innerHTML\s*=/, label: 'RAW_HTML' },
+    // SQL patterns
+    { regex: /f["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE)\b/i, label: 'SQL_FSTRING', extensions: ['.py'] },
+    { regex: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE)\b[^`]*\$\{/i, label: 'SQL_TEMPLATE', extensions: ['.ts', '.js'] },
+    { regex: /\.raw\s*\(|\.execute\s*\(/, label: 'RAW_QUERY' },
+    // Error handling
+    { regex: /except\s*(?:\w+\s*)?:\s*(?:pass|\.\.\.)\s*$/, label: 'EMPTY_EXCEPT', extensions: ['.py'] },
+    { regex: /catch\s*\([^)]*\)\s*\{\s*\}/, label: 'EMPTY_CATCH' },
+    // Secrets
+    { regex: /(?:password|secret|api_key|token)\s*[=:]\s*['"][^'"]{6,}/, label: 'HARDCODED_SECRET' },
+    // Stubs
+    { regex: /\bTODO\b|\bFIXME\b|\bHACK\b|\bXXX\b/, label: 'STUB' },
+    { regex: /NotImplementedError|not.implemented/i, label: 'NOT_IMPL' },
+    // Type safety
+    { regex: /:\s*any\b|as\s+any\b/, label: 'ANY_TYPE', extensions: ['.ts', '.tsx'] },
+    { regex: /type:\s*ignore/, label: 'TYPE_IGNORE', extensions: ['.py'] },
+    // Debugging leftovers
+    { regex: /console\.log\s*\(/, label: 'CONSOLE_LOG', extensions: ['.ts', '.tsx', '.js', '.jsx'] },
+    { regex: /\bprint\s*\((?!.*file\s*=)/, label: 'PRINT', extensions: ['.py'] },
+    { regex: /\bdebugger\b/, label: 'DEBUGGER', extensions: ['.ts', '.tsx', '.js', '.jsx'] },
+];
+function extractSignaturesFromContent(content, ext) {
+    const lines = content.split('\n');
+    const sigs = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trimStart();
+        if (['.py'].includes(ext)) {
+            // Python: def/async def/class
+            const fnMatch = trimmed.match(/^(async\s+)?def\s+(\w+)\s*\(([^)]*)\)(?:\s*->\s*(.+?))?:/);
+            if (fnMatch) {
+                sigs.push({
+                    kind: 'fn',
+                    name: fnMatch[2],
+                    line: i + 1,
+                    params: fnMatch[3]?.trim(),
+                    returns: fnMatch[4]?.trim(),
+                });
+                continue;
+            }
+            const classMatch = trimmed.match(/^class\s+(\w+)(?:\(([^)]*)\))?:/);
+            if (classMatch) {
+                sigs.push({ kind: 'class', name: classMatch[1], line: i + 1, params: classMatch[2]?.trim() });
+                continue;
+            }
+        }
+        if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+            // TS/JS: function, class, const arrow, export
+            const fnMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/);
+            if (fnMatch) {
+                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1, params: fnMatch[2]?.trim() });
+                continue;
+            }
+            const classMatch = trimmed.match(/^(?:export\s+)?class\s+(\w+)/);
+            if (classMatch) {
+                sigs.push({ kind: 'class', name: classMatch[1], line: i + 1 });
+                continue;
+            }
+            const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*\w+)?\s*=\s*(?:async\s*)?\(/);
+            if (constMatch) {
+                sigs.push({ kind: 'fn', name: constMatch[1], line: i + 1 });
+                continue;
+            }
+            const ifaceMatch = trimmed.match(/^(?:export\s+)?(?:interface|type)\s+(\w+)/);
+            if (ifaceMatch) {
+                sigs.push({ kind: 'type', name: ifaceMatch[1], line: i + 1 });
+                continue;
+            }
+        }
+        if (['.go'].includes(ext)) {
+            const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/);
+            if (fnMatch) {
+                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+                continue;
+            }
+            const typeMatch = trimmed.match(/^type\s+(\w+)\s+(?:struct|interface)/);
+            if (typeMatch) {
+                sigs.push({ kind: 'type', name: typeMatch[1], line: i + 1 });
+            }
+        }
+        if (['.java', '.kt'].includes(ext)) {
+            const fnMatch = trimmed.match(/(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)?(\w+)\s*\([^)]*\)\s*(?:throws\s+\w+\s*)?[{:]/);
+            if (fnMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(fnMatch[1])) {
+                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+            }
+        }
+    }
+    return sigs;
+}
+// ---------------------------------------------------------------------------
+// Import extraction (lightweight)
+// ---------------------------------------------------------------------------
+function extractImportLines(content, ext) {
+    const imports = [];
+    if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
+        for (const m of content.matchAll(/^import\s+.*?from\s+['"]([^'"]+)['"]/gm)) {
+            imports.push(m[1]);
+        }
+    }
+    else if (ext === '.py') {
+        for (const m of content.matchAll(/^(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))/gm)) {
+            imports.push(m[1] || m[2]);
+        }
+    }
+    else if (ext === '.go') {
+        for (const m of content.matchAll(/"([^"]+)"/g)) {
+            // Only project-local imports (no stdlib)
+            if (m[1].includes('.') || m[1].includes('/'))
+                imports.push(m[1]);
+        }
+    }
+    return imports;
+}
+function findHotspots(content, ext) {
+    const lines = content.split('\n');
+    const hotspots = [];
+    const seen = new Set(); // dedupe by line
+    for (const pattern of HOTSPOT_PATTERNS) {
+        if (pattern.extensions && !pattern.extensions.includes(ext))
+            continue;
+        for (let i = 0; i < lines.length; i++) {
+            const key = `${i}:${pattern.label}`;
+            if (seen.has(key))
+                continue;
+            if (pattern.regex.test(lines[i])) {
+                seen.add(key);
+                hotspots.push({
+                    line: i + 1,
+                    label: pattern.label,
+                    snippet: lines[i].trim().slice(0, 80),
+                });
+            }
+        }
+    }
+    return hotspots.sort((a, b) => a.line - b.line);
+}
+/**
+ * Generate a compact fingerprint for a single file.
+ * Typically 80-200 tokens depending on file size and complexity.
+ */
+function generateFingerprint(filePath, cwd) {
+    let content;
+    try {
+        content = fs.readFileSync(filePath, 'utf-8');
+    }
+    catch {
+        return null;
+    }
+    const relativePath = path.relative(cwd, filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const lines = content.split('\n');
+    const imports = extractImportLines(content, ext);
+    const signatures = extractSignaturesFromContent(content, ext);
+    const hotspots = findHotspots(content, ext);
+    // Build compact text representation
+    let text = `=== ${relativePath} (${lines.length} lines) ===\n`;
+    if (imports.length > 0) {
+        text += `IMPORTS: ${imports.slice(0, 10).join(', ')}`;
+        if (imports.length > 10)
+            text += ` +${imports.length - 10} more`;
+        text += '\n';
+    }
+    if (signatures.length > 0) {
+        const sigStrs = signatures.map(s => {
+            let str = `${s.name}`;
+            if (s.params !== undefined)
+                str += `(${s.params.slice(0, 60)})`;
+            if (s.returns)
+                str += `->${s.returns}`;
+            return str;
+        });
+        text += `DEFS: ${sigStrs.join(', ')}\n`;
+    }
+    if (hotspots.length > 0) {
+        text += 'FLAGS:\n';
+        for (const h of hotspots.slice(0, 8)) {
+            text += `  L${h.line} [${h.label}]: ${h.snippet}\n`;
+        }
+        if (hotspots.length > 8) {
+            text += `  +${hotspots.length - 8} more hotspots\n`;
+        }
+    }
+    const tokens = (0, smart_split_1.estimateTokens)(text);
+    return { relativePath, fullPath: filePath, lineCount: lines.length, ext, imports, signatures, hotspots, text, tokens };
+}
+/**
+ * Pack fingerprints into chunks that fit within the model's token budget.
+ * Returns ready-to-send prompt text for each chunk.
+ */
+function packFingerprints(fingerprints, model) {
+    const modelLimit = (0, smart_split_1.getModelInputLimit)(model);
+    // Budget: model limit - overhead (system msg ~25, schema ~150, prompt frame ~150, safety ~175)
+    const OVERHEAD = 500;
+    const budgetTokens = modelLimit - OVERHEAD;
+    const chunks = [];
+    let current = [];
+    let currentTokens = 0;
+    // Sort: hotspot-heavy files first (they're more interesting to scan)
+    const sorted = [...fingerprints].sort((a, b) => b.hotspots.length - a.hotspots.length);
+    for (const fp of sorted) {
+        if (currentTokens + fp.tokens > budgetTokens && current.length > 0) {
+            chunks.push(buildFingerprintChunk(current, currentTokens, chunks.length + 1));
+            current = [];
+            currentTokens = 0;
+        }
+        current.push(fp);
+        currentTokens += fp.tokens;
+    }
+    if (current.length > 0) {
+        chunks.push(buildFingerprintChunk(current, currentTokens, chunks.length + 1));
+    }
+    return chunks;
+}
+function buildFingerprintChunk(fingerprints, totalTokens, chunkNum) {
+    const fileCount = fingerprints.length;
+    const hotspotCount = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
+    let promptText = `Analyze these ${fileCount} file fingerprints for code quality issues.
+Each fingerprint shows: file path, line count, imports, function/class signatures, and flagged hotspot lines.
+
+You can detect most issues from this information:
+- SECURITY: Look at hotspot flags (EVAL, SQL_FSTRING, HARDCODED_SECRET, etc.) and function signatures that handle user input.
+- BUGS: Empty catch/except blocks, missing error handling in function signatures, suspicious patterns.
+- TYPES: ANY_TYPE flags, TYPE_IGNORE flags, function signatures missing return types.
+- STUBS: STUB and NOT_IMPL flags.
+- DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
+- DUPLICATES: Similar function signatures across different files.
+- LINT: CONSOLE_LOG/PRINT/DEBUGGER flags, unused imports.
+- COVERAGE: Public functions with no apparent test coverage.
+
+RULES:
+- Only report REAL issues visible from the fingerprints. No speculation.
+- Be specific: exact file, exact line number, exact description.
+- Hotspot flags are hints, not confirmed issues — verify from context before reporting.
+- If everything looks clean, return an empty issues array.
+
+${hotspotCount > 0 ? `Note: ${hotspotCount} hotspot lines flagged across ${fileCount} files.\n` : ''}
+FILE FINGERPRINTS:
+
+`;
+    for (const fp of fingerprints) {
+        promptText += fp.text + '\n';
+    }
+    return { fingerprints, totalTokens, promptText };
+}
+
+
+/***/ }),
+
 /***/ 7287:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -30816,6 +31130,228 @@ async function run() {
     }
 }
 run();
+
+
+/***/ }),
+
+/***/ 4708:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Layer 0: Local static analysis — zero API calls.
+ *
+ * Catches issues that don't need AI: hardcoded secrets, stubs, dangerous
+ * function calls, SQL injection patterns, empty catches, etc. These are
+ * reported directly and excluded from AI scanning to save token budget.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.localScanFile = localScanFile;
+exports.localScanAll = localScanAll;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const PATTERNS = [
+    // ── Security: hardcoded secrets ──────────────────────────────────
+    {
+        regex: /(?:password|passwd|secret|api_key|apikey|auth_token)\s*[=:]\s*['"][^'"]{8,}['"]/gi,
+        type: 'security',
+        severity: 'critical',
+        description: 'Hardcoded secret or password',
+    },
+    {
+        regex: /['"](?:sk[-_]|pk[-_]|key[-_]|ghp_|gho_|ghs_|github_pat_|glpat-|xox[bpsar]-|AKIA)[A-Za-z0-9_\-]{16,}['"]/g,
+        type: 'security',
+        severity: 'critical',
+        description: 'Hardcoded API key or token',
+    },
+    // ── Security: dangerous functions ────────────────────────────────
+    {
+        regex: /\beval\s*\([^)]*(?:req|request|input|user|data|param|query|body)/gi,
+        type: 'security',
+        severity: 'critical',
+        description: 'eval() called on user-controlled input',
+    },
+    {
+        regex: /\bexec\s*\([^)]*(?:req|request|input|user|data|param|query|body)/gi,
+        type: 'security',
+        severity: 'critical',
+        description: 'exec() called on user-controlled input',
+        extensions: ['.py'],
+    },
+    {
+        regex: /\bdangerouslySetInnerHTML\b/g,
+        type: 'security',
+        severity: 'high',
+        description: 'dangerouslySetInnerHTML usage — verify input is sanitized',
+        extensions: ['.tsx', '.jsx', '.js', '.ts'],
+    },
+    {
+        regex: /\bos\.system\s*\(/g,
+        type: 'security',
+        severity: 'high',
+        description: 'os.system() is vulnerable to shell injection — use subprocess with shell=False',
+        extensions: ['.py'],
+    },
+    // ── Security: SQL injection ──────────────────────────────────────
+    {
+        regex: /f["'](?:[^"']*?)(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^"']*?\{/gi,
+        type: 'security',
+        severity: 'critical',
+        description: 'Possible SQL injection via f-string interpolation',
+        extensions: ['.py'],
+    },
+    {
+        regex: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^`]*\$\{/gi,
+        type: 'security',
+        severity: 'critical',
+        description: 'Possible SQL injection via template literal interpolation',
+        extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    },
+    {
+        regex: /["']\s*\+\s*\w+\s*\+\s*["'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP)/gi,
+        type: 'security',
+        severity: 'high',
+        description: 'Possible SQL injection via string concatenation',
+    },
+    // ── Stubs ────────────────────────────────────────────────────────
+    {
+        regex: /\b(?:TODO|FIXME|HACK|XXX)\b[:\s]*.{0,80}/g,
+        type: 'stubs',
+        severity: 'medium',
+        description: 'TODO/FIXME marker',
+    },
+    {
+        regex: /raise\s+NotImplementedError/g,
+        type: 'stubs',
+        severity: 'medium',
+        description: 'NotImplementedError — stub implementation',
+        extensions: ['.py'],
+    },
+    {
+        regex: /throw\s+new\s+Error\s*\(\s*['"]not\s+implemented/gi,
+        type: 'stubs',
+        severity: 'medium',
+        description: 'Stub: throws "not implemented"',
+        extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    },
+    // ── Bugs: empty error handling ───────────────────────────────────
+    {
+        regex: /except\s*(?:\w+\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
+        type: 'bugs',
+        severity: 'high',
+        description: 'Empty except clause silently swallows errors',
+        extensions: ['.py'],
+    },
+    {
+        regex: /catch\s*\([^)]*\)\s*\{\s*\}/g,
+        type: 'bugs',
+        severity: 'high',
+        description: 'Empty catch block silently swallows errors',
+        extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
+    },
+];
+/**
+ * Run local static analysis on a single file.
+ * Returns issues found without any API calls.
+ */
+function localScanFile(filePath, cwd) {
+    let content;
+    try {
+        content = fs.readFileSync(filePath, 'utf-8');
+    }
+    catch {
+        return [];
+    }
+    const relativePath = path.relative(cwd, filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const lines = content.split('\n');
+    const issues = [];
+    for (const pattern of PATTERNS) {
+        if (pattern.extensions && pattern.extensions.length > 0) {
+            if (!pattern.extensions.includes(ext))
+                continue;
+        }
+        // Reset regex state
+        pattern.regex.lastIndex = 0;
+        let match;
+        while ((match = pattern.regex.exec(content)) !== null) {
+            // Find line number
+            const upToMatch = content.slice(0, match.index);
+            const lineNum = upToMatch.split('\n').length;
+            // Skip matches inside comments
+            const lineContent = lines[lineNum - 1] || '';
+            const trimmed = lineContent.trimStart();
+            if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) {
+                continue;
+            }
+            // For TODO/FIXME, extract the actual message
+            let desc = pattern.description;
+            if (pattern.type === 'stubs' && match[0]) {
+                desc = match[0].trim().slice(0, 100);
+            }
+            issues.push({
+                id: `local-${Date.now()}-${issues.length}`,
+                type: pattern.type,
+                severity: pattern.severity,
+                file: relativePath,
+                line: lineNum,
+                description: desc,
+                status: 'found',
+            });
+        }
+    }
+    return issues;
+}
+/**
+ * Run local scan on all files. Returns issues + set of files that had
+ * local findings (useful for prioritizing AI scanning).
+ */
+function localScanAll(filePaths, cwd) {
+    const allIssues = [];
+    const flaggedFiles = new Set();
+    for (const fp of filePaths) {
+        const fileIssues = localScanFile(fp, cwd);
+        if (fileIssues.length > 0) {
+            allIssues.push(...fileIssues);
+            flaggedFiles.add(path.relative(cwd, fp));
+        }
+    }
+    return { issues: allIssues, flaggedFiles };
+}
 
 
 /***/ }),
@@ -31599,6 +32135,182 @@ function appendHistory(entry) {
 
 /***/ }),
 
+/***/ 1629:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Scan result cache — skip unchanged files on repeat scans.
+ *
+ * Stores issues keyed by file content hash. On subsequent runs, files whose
+ * hash matches the cache are skipped entirely (zero API calls). For a 77-file
+ * repo where 5 files changed, this means 72 files are free.
+ *
+ * Cache is stored in .sloppy/scan-cache.json within the workspace.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.loadCache = loadCache;
+exports.saveCache = saveCache;
+exports.partitionByCache = partitionByCache;
+exports.updateCacheEntries = updateCacheEntries;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const crypto = __importStar(__nccwpck_require__(6982));
+const CACHE_DIR = '.sloppy';
+const CACHE_FILE = 'scan-cache.json';
+const CACHE_VERSION = 1;
+function getCachePath(cwd) {
+    return path.join(cwd, CACHE_DIR, CACHE_FILE);
+}
+function hashFileContent(content) {
+    return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+}
+/**
+ * Load the scan cache. Returns null if no cache exists or it's incompatible.
+ */
+function loadCache(cwd, model) {
+    try {
+        const cachePath = getCachePath(cwd);
+        if (!fs.existsSync(cachePath))
+            return null;
+        const raw = fs.readFileSync(cachePath, 'utf-8');
+        const data = JSON.parse(raw);
+        // Invalidate if version or model changed
+        if (data.version !== CACHE_VERSION || data.model !== model)
+            return null;
+        return data;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Save the scan cache.
+ */
+function saveCache(cwd, cache) {
+    try {
+        const dir = path.join(cwd, CACHE_DIR);
+        if (!fs.existsSync(dir))
+            fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(getCachePath(cwd), JSON.stringify(cache, null, 2));
+    }
+    catch {
+        // Non-fatal — cache is a performance optimization, not a requirement.
+    }
+}
+/**
+ * Partition files into cached (skip) and uncached (need scanning).
+ *
+ * Returns:
+ *  - cachedIssues: issues from cache for unchanged files
+ *  - uncachedFiles: file paths that need scanning
+ *  - cache: the cache object to update after scanning
+ */
+function partitionByCache(filePaths, cwd, model) {
+    const existing = loadCache(cwd, model);
+    const cache = existing || {
+        version: CACHE_VERSION,
+        model,
+        entries: {},
+    };
+    const cachedIssues = [];
+    const uncachedFiles = [];
+    let cacheHits = 0;
+    for (const fp of filePaths) {
+        const relativePath = path.relative(cwd, fp);
+        let content;
+        try {
+            content = fs.readFileSync(fp, 'utf-8');
+        }
+        catch {
+            continue;
+        }
+        const hash = hashFileContent(content);
+        const entry = cache.entries[relativePath];
+        if (entry && entry.hash === hash) {
+            // Cache hit — reuse previous results
+            cachedIssues.push(...entry.issues);
+            cacheHits++;
+        }
+        else {
+            uncachedFiles.push(fp);
+        }
+    }
+    return { cachedIssues, uncachedFiles, cacheHits, cache };
+}
+/**
+ * Update cache entries for files that were just scanned.
+ * Call this after scanning to persist results for next run.
+ */
+function updateCacheEntries(cache, issues, filePaths, cwd) {
+    // Group issues by file
+    const issuesByFile = new Map();
+    for (const issue of issues) {
+        if (!issuesByFile.has(issue.file))
+            issuesByFile.set(issue.file, []);
+        issuesByFile.get(issue.file).push(issue);
+    }
+    // Update cache for scanned files
+    for (const fp of filePaths) {
+        const relativePath = path.relative(cwd, fp);
+        let content;
+        try {
+            content = fs.readFileSync(fp, 'utf-8');
+        }
+        catch {
+            continue;
+        }
+        cache.entries[relativePath] = {
+            hash: hashFileContent(content),
+            issues: issuesByFile.get(relativePath) || [],
+            scannedAt: new Date().toISOString(),
+        };
+    }
+    // Prune entries for files that no longer exist
+    for (const key of Object.keys(cache.entries)) {
+        if (!fs.existsSync(path.join(cwd, key))) {
+            delete cache.entries[key];
+        }
+    }
+}
+
+
+/***/ }),
+
 /***/ 4798:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -31646,6 +32358,9 @@ const path = __importStar(__nccwpck_require__(6928));
 const github = __importStar(__nccwpck_require__(3228));
 const github_models_1 = __nccwpck_require__(7287);
 const smart_split_1 = __nccwpck_require__(7487);
+const local_scan_1 = __nccwpck_require__(4708);
+const fingerprint_1 = __nccwpck_require__(2659);
+const scan_cache_1 = __nccwpck_require__(1629);
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
     '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.swift', '.kt', '.scala',
@@ -31657,7 +32372,6 @@ const IGNORE_DIRS = new Set([
     '__pycache__', '.venv', 'venv', 'target', 'coverage', '.sloppy',
 ]);
 // Structured output schema — the model MUST conform to this exact shape.
-// No more "please respond with valid JSON" in the prompt.
 const ISSUES_SCHEMA = {
     type: 'json_schema',
     json_schema: {
@@ -31721,7 +32435,6 @@ async function collectPrFiles(cwd) {
         const octokit = github.getOctokit(token);
         const files = [];
         let page = 1;
-        // Paginate — PRs can touch hundreds of files
         while (true) {
             const { data } = await octokit.rest.pulls.listFiles({
                 ...ctx.repo,
@@ -31766,7 +32479,6 @@ function parseIssues(content) {
         }));
     }
     catch {
-        // Fallback: try to extract JSON from mixed content (shouldn't happen with structured outputs)
         try {
             const match = content.match(/\{[\s\S]*\}/);
             if (!match)
@@ -31807,13 +32519,60 @@ function formatDuration(ms) {
     const rem = s % 60;
     return rem > 0 ? `${m}m${rem}s` : `${m}m`;
 }
-/**
- * Scan a single chunk, with automatic retry on 413 (token limit exceeded).
- *
- * On 413, the chunk is split in half and each half is retried independently.
- * Files in the oversized half are further compressed before retrying.
- * This provides resilience against token estimation inaccuracies.
- */
+// ---------------------------------------------------------------------------
+// Layer 1: Fingerprint scanning (compact representations → fewer API calls)
+// ---------------------------------------------------------------------------
+async function runFingerprintScan(filePaths, cwd, model) {
+    // Generate fingerprints for all files
+    const fingerprints = filePaths
+        .map(fp => (0, fingerprint_1.generateFingerprint)(fp, cwd))
+        .filter((fp) => fp !== null);
+    if (fingerprints.length === 0)
+        return { issues: [], tokens: 0, apiCalls: 0 };
+    const totalHotspots = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
+    const avgTokens = Math.round(fingerprints.reduce((n, f) => n + f.tokens, 0) / fingerprints.length);
+    core.info(`  Generated ${fingerprints.length} fingerprints (avg ${avgTokens} tokens/file, ${totalHotspots} hotspots)`);
+    // Pack into token-budgeted chunks
+    const chunks = (0, fingerprint_1.packFingerprints)(fingerprints, model);
+    core.info(`  Packed into ${chunks.length} fingerprint chunks`);
+    core.info('');
+    const allIssues = [];
+    let totalTokens = 0;
+    let apiCalls = 0;
+    for (let i = 0; i < chunks.length; i++) {
+        const chunkStart = Date.now();
+        const fileCount = chunks[i].fingerprints.length;
+        const progress = Math.round(((i + 1) / chunks.length) * 100);
+        core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
+        try {
+            const { content, tokens } = await (0, github_models_1.callGitHubModels)([
+                { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+                { role: 'user', content: chunks[i].promptText },
+            ], model, { responseFormat: ISSUES_SCHEMA });
+            totalTokens += tokens;
+            apiCalls++;
+            const chunkIssues = parseIssues(content);
+            allIssues.push(...chunkIssues);
+            const elapsed = formatDuration(Date.now() - chunkStart);
+            if (chunkIssues.length > 0) {
+                core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+            }
+            else {
+                core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+            }
+        }
+        catch (e) {
+            core.warning(`         FAILED: ${e}`);
+        }
+        if (i < chunks.length - 1) {
+            await sleep(4500);
+        }
+    }
+    return { issues: allIssues, tokens: totalTokens, apiCalls };
+}
+// ---------------------------------------------------------------------------
+// Layer 2: Deep scan with full content (kept as fallback, used for smart-split)
+// ---------------------------------------------------------------------------
 async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
     const prompt = (0, smart_split_1.buildSmartPrompt)(chunk, chunkNum, totalChunks);
     try {
@@ -31826,18 +32585,16 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
     catch (e) {
         if (!(e instanceof github_models_1.TokenLimitError) || depth >= 2)
             throw e;
-        // 413 recovery: split the chunk and compress files further.
         core.info(`       Token limit hit — auto-splitting chunk and compressing (depth ${depth + 1})`);
         const modelLimit = (0, smart_split_1.getModelInputLimit)(model);
-        const halfBudget = Math.floor((0, smart_split_1.calculateCodeBudget)(modelLimit) * 0.45); // 45% each half for safety
+        const halfBudget = Math.floor((0, smart_split_1.calculateCodeBudget)(modelLimit) * 0.45);
         const mid = Math.ceil(chunk.files.length / 2);
         const halves = [chunk.files.slice(0, mid), chunk.files.slice(mid)];
-        let allIssues = [];
+        const allIssues = [];
         let allTokens = 0;
         for (const half of halves) {
             if (half.length === 0)
                 continue;
-            // Compress each file to fit the reduced budget
             const perFileBudget = Math.floor(halfBudget / half.length);
             for (const f of half) {
                 if (f.content.length > perFileBudget) {
@@ -31862,10 +32619,12 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
         return { issues: allIssues, tokens: allTokens };
     }
 }
+// ---------------------------------------------------------------------------
+// Main scan orchestrator: 3-layer pipeline
+// ---------------------------------------------------------------------------
 async function runScan(config) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
-    // Determine scan scope early so we can log it
     const scope = config.scanScope;
     const isPR = !!github.context.payload.pull_request;
     const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
@@ -31913,49 +32672,51 @@ async function runScan(config) {
         .map(([ext, count]) => `${ext}(${count})`)
         .join(', ');
     core.info(`File types: ${topExts}`);
-    // Smart chunking: token-aware, dependency-grouped, with compression + manifest
-    const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
-    const codeBudget = (0, smart_split_1.calculateCodeBudget)(modelLimit);
-    const chunks = (0, smart_split_1.prepareChunks)(files, cwd, config.githubModelsModel);
-    const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
-    core.info(`Split into ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
-    core.info('');
-    const allIssues = [];
-    let totalTokens = 0;
-    let successCount = 0;
-    let failCount = 0;
-    for (let i = 0; i < chunks.length; i++) {
-        const chunkStart = Date.now();
-        const chunkFileNames = chunks[i].files.map(f => f.relativePath);
-        const progress = Math.round(((i + 1) / chunks.length) * 100);
-        const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
-        const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-        core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
-        try {
-            const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel);
-            totalTokens += tokens;
-            allIssues.push(...chunkIssues);
-            successCount++;
-            const elapsed = formatDuration(Date.now() - chunkStart);
-            if (chunkIssues.length > 0) {
-                core.info(`       Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
-            }
-            else {
-                core.info(`       Clean (${tokens} tokens, ${elapsed})`);
-            }
-        }
-        catch (e) {
-            failCount++;
-            core.warning(`       FAILED: ${e}`);
-        }
-        // Space out requests to stay under RPM limits.
-        // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
-        // The retry logic in github-models.ts handles 429s, but spacing prevents them.
-        if (i < chunks.length - 1) {
-            await sleep(4500);
-        }
+    // ================================================================
+    // CACHE: Skip unchanged files
+    // ================================================================
+    const { cachedIssues, uncachedFiles, cacheHits, cache } = (0, scan_cache_1.partitionByCache)(files, cwd, config.githubModelsModel);
+    if (cacheHits > 0) {
+        core.info(`Cache: ${cacheHits} files unchanged (${cachedIssues.length} cached issues), ${uncachedFiles.length} files to scan`);
     }
-    // Deduplicate
+    const filesToScan = uncachedFiles;
+    const allIssues = [...cachedIssues];
+    let totalTokens = 0;
+    let totalApiCalls = 0;
+    if (filesToScan.length === 0) {
+        core.info('All files cached — no API calls needed!');
+    }
+    else {
+        // ================================================================
+        // LAYER 0: Local static analysis (zero API calls)
+        // ================================================================
+        core.info('');
+        core.info('── Layer 0: Local Analysis (no API calls) ──');
+        const { issues: localIssues, flaggedFiles } = (0, local_scan_1.localScanAll)(filesToScan, cwd);
+        if (localIssues.length > 0) {
+            core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
+            allIssues.push(...localIssues);
+        }
+        else {
+            core.info('  No local issues found');
+        }
+        // ================================================================
+        // LAYER 1: Fingerprint scan (compact representations, ~3-5 API calls)
+        // ================================================================
+        core.info('');
+        core.info('── Layer 1: Fingerprint Scan ──');
+        const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
+        allIssues.push(...fpResult.issues);
+        totalTokens += fpResult.tokens;
+        totalApiCalls += fpResult.apiCalls;
+        // Update cache with new results
+        const newIssues = [...localIssues, ...fpResult.issues];
+        (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd);
+        (0, scan_cache_1.saveCache)(cwd, cache);
+    }
+    // ================================================================
+    // Deduplicate & score
+    // ================================================================
     const seen = new Set();
     const unique = allIssues.filter(issue => {
         const key = `${issue.file}:${issue.line}:${issue.type}`;
@@ -31971,11 +32732,12 @@ async function runScan(config) {
     core.info('='.repeat(50));
     core.info('SCAN COMPLETE');
     core.info('='.repeat(50));
-    core.info(`Score:    ${score}/100`);
-    core.info(`Issues:   ${unique.length} found`);
-    core.info(`Chunks:   ${successCount} ok, ${failCount} failed`);
-    core.info(`Tokens:   ${totalTokens.toLocaleString()}`);
-    core.info(`Duration: ${totalElapsed}`);
+    core.info(`Score:      ${score}/100`);
+    core.info(`Issues:     ${unique.length} found`);
+    core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
+    core.info(`Cache hits: ${cacheHits}/${files.length} files`);
+    core.info(`Tokens:     ${totalTokens.toLocaleString()}`);
+    core.info(`Duration:   ${totalElapsed}`);
     if (unique.length > 0) {
         core.info('');
         core.info('Issue breakdown:');

@@ -13,6 +13,9 @@ import {
   calculateCodeBudget,
   SmartChunk,
 } from './smart-split';
+import { localScanAll } from './local-scan';
+import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
+import { partitionByCache, updateCacheEntries, saveCache } from './scan-cache';
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -27,7 +30,6 @@ const IGNORE_DIRS = new Set([
 ]);
 
 // Structured output schema — the model MUST conform to this exact shape.
-// No more "please respond with valid JSON" in the prompt.
 const ISSUES_SCHEMA = {
   type: 'json_schema' as const,
   json_schema: {
@@ -91,7 +93,6 @@ async function collectPrFiles(cwd: string): Promise<string[] | null> {
     const files: string[] = [];
     let page = 1;
 
-    // Paginate — PRs can touch hundreds of files
     while (true) {
       const { data } = await octokit.rest.pulls.listFiles({
         ...ctx.repo,
@@ -133,7 +134,6 @@ function parseIssues(content: string): Issue[] {
       status: 'found' as const,
     }));
   } catch {
-    // Fallback: try to extract JSON from mixed content (shouldn't happen with structured outputs)
     try {
       const match = content.match(/\{[\s\S]*\}/);
       if (!match) return [];
@@ -175,13 +175,77 @@ function formatDuration(ms: number): string {
   return rem > 0 ? `${m}m${rem}s` : `${m}m`;
 }
 
-/**
- * Scan a single chunk, with automatic retry on 413 (token limit exceeded).
- *
- * On 413, the chunk is split in half and each half is retried independently.
- * Files in the oversized half are further compressed before retrying.
- * This provides resilience against token estimation inaccuracies.
- */
+// ---------------------------------------------------------------------------
+// Layer 1: Fingerprint scanning (compact representations → fewer API calls)
+// ---------------------------------------------------------------------------
+
+async function runFingerprintScan(
+  filePaths: string[],
+  cwd: string,
+  model: string,
+): Promise<{ issues: Issue[]; tokens: number; apiCalls: number }> {
+  // Generate fingerprints for all files
+  const fingerprints = filePaths
+    .map(fp => generateFingerprint(fp, cwd))
+    .filter((fp): fp is NonNullable<typeof fp> => fp !== null);
+
+  if (fingerprints.length === 0) return { issues: [], tokens: 0, apiCalls: 0 };
+
+  const totalHotspots = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
+  const avgTokens = Math.round(fingerprints.reduce((n, f) => n + f.tokens, 0) / fingerprints.length);
+  core.info(`  Generated ${fingerprints.length} fingerprints (avg ${avgTokens} tokens/file, ${totalHotspots} hotspots)`);
+
+  // Pack into token-budgeted chunks
+  const chunks = packFingerprints(fingerprints, model);
+  core.info(`  Packed into ${chunks.length} fingerprint chunks`);
+  core.info('');
+
+  const allIssues: Issue[] = [];
+  let totalTokens = 0;
+  let apiCalls = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkStart = Date.now();
+    const fileCount = chunks[i].fingerprints.length;
+    const progress = Math.round(((i + 1) / chunks.length) * 100);
+    core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
+
+    try {
+      const { content, tokens } = await callGitHubModels(
+        [
+          { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+          { role: 'user', content: chunks[i].promptText },
+        ],
+        model,
+        { responseFormat: ISSUES_SCHEMA },
+      );
+      totalTokens += tokens;
+      apiCalls++;
+      const chunkIssues = parseIssues(content);
+      allIssues.push(...chunkIssues);
+
+      const elapsed = formatDuration(Date.now() - chunkStart);
+      if (chunkIssues.length > 0) {
+        core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+      } else {
+        core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+      }
+    } catch (e) {
+      core.warning(`         FAILED: ${e}`);
+    }
+
+    if (i < chunks.length - 1) {
+      await sleep(4500);
+    }
+  }
+
+  return { issues: allIssues, tokens: totalTokens, apiCalls };
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2: Deep scan with full content (kept as fallback, used for smart-split)
+// ---------------------------------------------------------------------------
+
 async function scanChunk(
   chunk: SmartChunk,
   chunkNum: number,
@@ -204,21 +268,19 @@ async function scanChunk(
   } catch (e) {
     if (!(e instanceof TokenLimitError) || depth >= 2) throw e;
 
-    // 413 recovery: split the chunk and compress files further.
     core.info(`       Token limit hit — auto-splitting chunk and compressing (depth ${depth + 1})`);
 
     const modelLimit = getModelInputLimit(model);
-    const halfBudget = Math.floor(calculateCodeBudget(modelLimit) * 0.45); // 45% each half for safety
+    const halfBudget = Math.floor(calculateCodeBudget(modelLimit) * 0.45);
 
     const mid = Math.ceil(chunk.files.length / 2);
     const halves = [chunk.files.slice(0, mid), chunk.files.slice(mid)];
-    let allIssues: Issue[] = [];
+    const allIssues: Issue[] = [];
     let allTokens = 0;
 
     for (const half of halves) {
       if (half.length === 0) continue;
 
-      // Compress each file to fit the reduced budget
       const perFileBudget = Math.floor(halfBudget / half.length);
       for (const f of half) {
         if (f.content.length > perFileBudget) {
@@ -247,11 +309,14 @@ async function scanChunk(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Main scan orchestrator: 3-layer pipeline
+// ---------------------------------------------------------------------------
+
 export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   const scanStart = Date.now();
 
-  // Determine scan scope early so we can log it
   const scope = config.scanScope;
   const isPR = !!github.context.payload.pull_request;
   const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
@@ -263,6 +328,7 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
   core.info('='.repeat(50));
   core.info('');
+
   let files: string[];
   let scopeLabel: string;
 
@@ -303,58 +369,57 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     .join(', ');
   core.info(`File types: ${topExts}`);
 
-  // Smart chunking: token-aware, dependency-grouped, with compression + manifest
-  const modelLimit = getModelInputLimit(config.githubModelsModel);
-  const codeBudget = calculateCodeBudget(modelLimit);
-  const chunks = prepareChunks(files, cwd, config.githubModelsModel);
-
-  const compressedCount = chunks.reduce(
-    (n, c) => n + c.files.filter(f => f.compressed).length, 0,
+  // ================================================================
+  // CACHE: Skip unchanged files
+  // ================================================================
+  const { cachedIssues, uncachedFiles, cacheHits, cache } = partitionByCache(
+    files, cwd, config.githubModelsModel,
   );
-  core.info(`Split into ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
-  core.info('');
 
-  const allIssues: Issue[] = [];
-  let totalTokens = 0;
-  let successCount = 0;
-  let failCount = 0;
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkStart = Date.now();
-    const chunkFileNames = chunks[i].files.map(f => f.relativePath);
-    const progress = Math.round(((i + 1) / chunks.length) * 100);
-    const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
-    const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
-
-    try {
-      const { issues: chunkIssues, tokens } = await scanChunk(
-        chunks[i], i + 1, chunks.length, config.githubModelsModel,
-      );
-      totalTokens += tokens;
-      allIssues.push(...chunkIssues);
-      successCount++;
-
-      const elapsed = formatDuration(Date.now() - chunkStart);
-      if (chunkIssues.length > 0) {
-        core.info(`       Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
-      } else {
-        core.info(`       Clean (${tokens} tokens, ${elapsed})`);
-      }
-    } catch (e) {
-      failCount++;
-      core.warning(`       FAILED: ${e}`);
-    }
-
-    // Space out requests to stay under RPM limits.
-    // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
-    // The retry logic in github-models.ts handles 429s, but spacing prevents them.
-    if (i < chunks.length - 1) {
-      await sleep(4500);
-    }
+  if (cacheHits > 0) {
+    core.info(`Cache: ${cacheHits} files unchanged (${cachedIssues.length} cached issues), ${uncachedFiles.length} files to scan`);
   }
 
-  // Deduplicate
+  const filesToScan = uncachedFiles;
+  const allIssues: Issue[] = [...cachedIssues];
+  let totalTokens = 0;
+  let totalApiCalls = 0;
+
+  if (filesToScan.length === 0) {
+    core.info('All files cached — no API calls needed!');
+  } else {
+    // ================================================================
+    // LAYER 0: Local static analysis (zero API calls)
+    // ================================================================
+    core.info('');
+    core.info('── Layer 0: Local Analysis (no API calls) ──');
+    const { issues: localIssues, flaggedFiles } = localScanAll(filesToScan, cwd);
+    if (localIssues.length > 0) {
+      core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
+      allIssues.push(...localIssues);
+    } else {
+      core.info('  No local issues found');
+    }
+
+    // ================================================================
+    // LAYER 1: Fingerprint scan (compact representations, ~3-5 API calls)
+    // ================================================================
+    core.info('');
+    core.info('── Layer 1: Fingerprint Scan ──');
+    const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel);
+    allIssues.push(...fpResult.issues);
+    totalTokens += fpResult.tokens;
+    totalApiCalls += fpResult.apiCalls;
+
+    // Update cache with new results
+    const newIssues = [...localIssues, ...fpResult.issues];
+    updateCacheEntries(cache, newIssues, filesToScan, cwd);
+    saveCache(cwd, cache);
+  }
+
+  // ================================================================
+  // Deduplicate & score
+  // ================================================================
   const seen = new Set<string>();
   const unique = allIssues.filter(issue => {
     const key = `${issue.file}:${issue.line}:${issue.type}`;
@@ -371,11 +436,12 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   core.info('='.repeat(50));
   core.info('SCAN COMPLETE');
   core.info('='.repeat(50));
-  core.info(`Score:    ${score}/100`);
-  core.info(`Issues:   ${unique.length} found`);
-  core.info(`Chunks:   ${successCount} ok, ${failCount} failed`);
-  core.info(`Tokens:   ${totalTokens.toLocaleString()}`);
-  core.info(`Duration: ${totalElapsed}`);
+  core.info(`Score:      ${score}/100`);
+  core.info(`Issues:     ${unique.length} found`);
+  core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
+  core.info(`Cache hits: ${cacheHits}/${files.length} files`);
+  core.info(`Tokens:     ${totalTokens.toLocaleString()}`);
+  core.info(`Duration:   ${totalElapsed}`);
 
   if (unique.length > 0) {
     core.info('');
