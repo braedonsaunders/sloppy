@@ -35,6 +35,7 @@ export interface SloppyConfig {
   customPrompt: string;
   customPromptFile: string;
   pluginsEnabled: boolean;
+  parallelAgents: number;
 }
 
 export interface Issue {

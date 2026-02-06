@@ -7,15 +7,8 @@ import { AgentType } from './types';
 
 export async function installAgent(agent: AgentType): Promise<void> {
   if (agent === 'claude') {
-    // Install both the CLI and the SDK — they are separate packages.
-    // @anthropic-ai/claude-code is CLI-only (no sdk.mjs).
-    // @anthropic-ai/claude-agent-sdk contains query() for streaming.
-    await exec.exec('npm', [
-      'install',
-      '-g',
-      '@anthropic-ai/claude-code',
-      '@anthropic-ai/claude-agent-sdk',
-    ]);
+    // @anthropic-ai/claude-code provides both the CLI and the SDK query() function.
+    await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
   } else {
     await exec.exec('npm', ['install', '-g', '@openai/codex']);
   }
@@ -36,7 +29,7 @@ import { pathToFileURL } from 'node:url';
 
 async function loadQuery() {
   const globalRoot = process.env.NODE_PATH || '';
-  const packages = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code'];
+  const packages = ['@anthropic-ai/claude-code'];
 
   for (const pkg of packages) {
     // Try bare specifier (works if in local node_modules)
@@ -112,6 +105,7 @@ export async function runAgent(
     model?: string;
     timeout?: number;
     verbose?: boolean;
+    cwd?: string;
   },
 ): Promise<{ output: string; exitCode: number }> {
   if (agent === 'claude') {
@@ -130,7 +124,7 @@ export async function runAgent(
 
 async function runClaudeSDK(
   prompt: string,
-  options?: { maxTurns?: number; model?: string; timeout?: number; verbose?: boolean },
+  options?: { maxTurns?: number; model?: string; timeout?: number; verbose?: boolean; cwd?: string },
 ): Promise<{ output: string; exitCode: number }> {
   const verbose = options?.verbose ?? false;
   const execStart = Date.now();
@@ -234,6 +228,7 @@ async function runClaudeSDK(
     },
     ignoreReturnCode: true,
     silent: true,
+    cwd: options?.cwd || undefined,
     env: {
       ...process.env,
       NODE_PATH: globalRoot,
@@ -267,7 +262,7 @@ async function runClaudeSDK(
 // CLI fallback for claude (--output-format json, no streaming)
 async function runClaudeCLI(
   prompt: string,
-  options?: { maxTurns?: number; model?: string; timeout?: number; verbose?: boolean },
+  options?: { maxTurns?: number; model?: string; timeout?: number; verbose?: boolean; cwd?: string },
 ): Promise<{ output: string; exitCode: number }> {
   const args = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
   if (options?.maxTurns) args.push('--max-turns', String(options.maxTurns));
@@ -279,7 +274,7 @@ async function runClaudeCLI(
 async function runCLI(
   cmd: string,
   args: string[],
-  options?: { timeout?: number; verbose?: boolean },
+  options?: { timeout?: number; verbose?: boolean; cwd?: string },
 ): Promise<{ output: string; exitCode: number }> {
   let stdout = '';
   let stderr = '';
@@ -319,6 +314,7 @@ async function runCLI(
     },
     ignoreReturnCode: true,
     silent: true,
+    cwd: options?.cwd || undefined,
     env: { ...process.env } as Record<string, string>,
   };
 
