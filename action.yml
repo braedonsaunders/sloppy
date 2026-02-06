@@ -52,7 +52,7 @@ inputs:
     required: false
     default: ''
   github-models-model:
-    description: 'Model for free scan tier via GitHub Models'
+    description: 'Model for scan via GitHub Models (free: openai/gpt-4o-mini, premium: openai/gpt-4o, openai/o1-mini, etc.)'
     required: false
     default: 'openai/gpt-4o-mini'
   test-command:
@@ -83,6 +83,10 @@ inputs:
     description: 'Max issues to fix per pass (0 = unlimited)'
     required: false
     default: '0'
+  scan-scope:
+    description: 'What to scan: auto (PR files on pull_request, full otherwise), pr (PR files only), full (entire repo)'
+    required: false
+    default: 'auto'
   chain_number:
     description: 'Internal: chain continuation number'
     required: false

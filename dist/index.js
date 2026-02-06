@@ -30266,6 +30266,7 @@ function getConfig() {
             fix: parseInt(core.getInput('max-turns') || '0') || 15,
         },
         maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+        scanScope: (core.getInput('scan-scope') || 'auto'),
     };
 }
 
@@ -31523,6 +31524,7 @@ exports.runScan = runScan;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+const github = __importStar(__nccwpck_require__(3228));
 const github_models_1 = __nccwpck_require__(7287);
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -31586,6 +31588,49 @@ function collectFiles(dir, files = []) {
         }
     }
     return files;
+}
+async function collectPrFiles(cwd) {
+    const ctx = github.context;
+    const prNumber = ctx.payload.pull_request?.number;
+    if (!prNumber)
+        return null;
+    const token = process.env.GITHUB_TOKEN || core.getInput('github-token');
+    if (!token)
+        return null;
+    try {
+        const octokit = github.getOctokit(token);
+        const files = [];
+        let page = 1;
+        // Paginate — PRs can touch hundreds of files
+        while (true) {
+            const { data } = await octokit.rest.pulls.listFiles({
+                ...ctx.repo,
+                pull_number: prNumber,
+                per_page: 100,
+                page,
+            });
+            if (data.length === 0)
+                break;
+            for (const file of data) {
+                if (file.status === 'removed')
+                    continue;
+                const ext = path.extname(file.filename).toLowerCase();
+                if (!CODE_EXTENSIONS.has(ext))
+                    continue;
+                const full = path.join(cwd, file.filename);
+                if (fs.existsSync(full))
+                    files.push(full);
+            }
+            if (data.length < 100)
+                break;
+            page++;
+        }
+        return files;
+    }
+    catch (e) {
+        core.warning(`Could not fetch PR files: ${e}. Falling back to full scan.`);
+        return null;
+    }
 }
 // 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
 // Larger chunks = fewer API requests = less likely to hit rate limits.
@@ -31719,15 +31764,38 @@ function formatDuration(ms) {
 async function runScan(config) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
+    // Determine scan scope early so we can log it
+    const scope = config.scanScope;
+    const isPR = !!github.context.payload.pull_request;
+    const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
     core.info('');
     core.info('='.repeat(50));
     core.info('SLOPPY FREE SCAN');
     core.info(`Model: ${config.githubModelsModel}`);
+    core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
     core.info('='.repeat(50));
     core.info('');
-    core.info('Collecting source files...');
-    const files = collectFiles(cwd);
-    core.info(`Found ${files.length} source files`);
+    let files;
+    let scopeLabel;
+    if (usePrDiff) {
+        core.info('Collecting PR changed files...');
+        const prFiles = await collectPrFiles(cwd);
+        if (prFiles && prFiles.length > 0) {
+            files = prFiles;
+            scopeLabel = `PR #${github.context.payload.pull_request?.number} (${files.length} changed files)`;
+        }
+        else {
+            core.info('No PR files found or not in PR context. Falling back to full repo scan.');
+            files = collectFiles(cwd);
+            scopeLabel = `full repo (${files.length} files)`;
+        }
+    }
+    else {
+        core.info('Collecting all source files...');
+        files = collectFiles(cwd);
+        scopeLabel = `full repo (${files.length} files)`;
+    }
+    core.info(`Scope: ${scopeLabel}`);
     if (files.length === 0) {
         core.info('No source files found — nothing to scan.');
         return { issues: [], score: 100, summary: 'No source files found.', tokens: 0 };

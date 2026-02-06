@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { SloppyConfig, IssueType } from './types';
+import { SloppyConfig, IssueType, ScanScope } from './types';
 
 function parseTimeout(input: string): number {
   const match = input.match(/^(\d+)(s|m|h)?$/);
@@ -42,5 +42,6 @@ export function getConfig(): SloppyConfig {
       fix: parseInt(core.getInput('max-turns') || '0') || 15,
     },
     maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+    scanScope: (core.getInput('scan-scope') || 'auto') as ScanScope,
   };
 }
