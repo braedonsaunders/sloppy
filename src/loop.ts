@@ -3,7 +3,7 @@ import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity, PluginContext } from './types';
+import { SloppyConfig, Issue, LoopState, PluginContext } from './types';
 import { installAgent, runAgent } from './agent';
 import { calculateScore, collectFiles, countSourceLOC } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
@@ -96,7 +96,7 @@ async function gitCommit(issue: Issue, cwd?: string): Promise<string> {
   if (cwd) execOpts.cwd = cwd;
 
   await exec.exec('git', ['add', '-A'], execOpts);
-  await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}`], execOpts);
+  await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}\n\n[skip ci]`], execOpts);
 
   let sha = '';
   await exec.exec('git', ['rev-parse', 'HEAD'], {
@@ -513,10 +513,16 @@ async function dispatchClusterSequential(
   // For a single-issue cluster, use the focused single-issue prompt
   if (cluster.issues.length === 1) {
     const issue = cluster.issues[0];
+    const timeRemaining = deadline - Date.now() - margin;
+    if (timeRemaining <= 0) {
+      issue.status = 'skipped';
+      issue.skipReason = 'Timeout — no time remaining';
+      return { fixed: [], skipped: [issue] };
+    }
     const result = await runAgent(config.agent, singleFixPrompt(issue, testCmd, customSection), {
       maxTurns: config.maxTurns.fix,
       model: config.model || undefined,
-      timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+      timeout: Math.min(3 * 60 * 1000, timeRemaining),
       verbose: config.verbose,
     });
 
@@ -550,9 +556,17 @@ async function dispatchClusterSequential(
 
   // Multi-issue cluster: give agent all issues at once with full autonomy
   const prompt = clusterFixPrompt(cluster, testCmd, customSection);
+  const clusterTimeRemaining = deadline - Date.now() - margin;
+  if (clusterTimeRemaining <= 0) {
+    for (const issue of cluster.issues) {
+      issue.status = 'skipped';
+      issue.skipReason = 'Timeout — no time remaining';
+    }
+    return { fixed: [], skipped: [...cluster.issues] };
+  }
   const timeoutMs = Math.min(
     5 * 60 * 1000 * Math.ceil(cluster.issues.length / 3),
-    deadline - Date.now() - margin,
+    clusterTimeRemaining,
   );
 
   const headBefore = await gitHead();
@@ -616,16 +630,20 @@ async function dispatchClustersParallel(
 
     // Dispatch agents in parallel via Promise.all
     const promises = workers.map(async (worker) => {
-      const timeoutMs = Math.min(
-        5 * 60 * 1000 * Math.ceil(worker.cluster.issues.length / 3),
-        deadline - Date.now() - margin,
-      );
+      const workerTimeRemaining = deadline - Date.now() - margin;
+      const timeoutMs = workerTimeRemaining <= 0
+        ? 0
+        : Math.min(5 * 60 * 1000 * Math.ceil(worker.cluster.issues.length / 3), workerTimeRemaining);
 
       const prompt = worker.cluster.issues.length === 1
         ? singleFixPrompt(worker.cluster.issues[0], testCmd, customSection)
         : clusterFixPrompt(worker.cluster, testCmd, customSection);
 
       core.info(`    [${worker.branch}] Fixing ${worker.cluster.issues.length} issues in ${worker.cluster.directory}/`);
+
+      if (timeoutMs <= 0) {
+        return { worker, result: { output: '', exitCode: 1 }, headBefore: '', timedOut: true };
+      }
 
       const headBefore = await gitHead(worker.worktree);
 
@@ -637,21 +655,43 @@ async function dispatchClustersParallel(
         cwd: worker.worktree,
       });
 
-      return { worker, result, headBefore };
+      return { worker, result, headBefore, timedOut: false };
     });
 
     const results = await Promise.all(promises);
 
     // Cherry-pick commits from each worker back to main branch
-    for (const { worker, result, headBefore } of results) {
+    for (const { worker, result, headBefore, timedOut } of results) {
       const { cluster } = worker;
+
+      if (timedOut) {
+        for (const issue of cluster.issues) {
+          issue.status = 'skipped';
+          issue.skipReason = 'Timeout — no time remaining';
+          allSkipped.push(issue);
+        }
+        await removeWorktree(worker.worktree, worker.branch);
+        continue;
+      }
 
       if (cluster.issues.length === 1) {
         const issue = cluster.issues[0];
-        if (result.output.includes('SKIP:') || result.exitCode !== 0) {
+        if (result.output.includes('SKIP:')) {
           issue.status = 'skipped';
           issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
           allSkipped.push(issue);
+        } else if (result.exitCode !== 0) {
+          // Agent exited with error — check if it still produced commits (e.g. timeout after committing)
+          const picked = await cherryPickCommits(worker.branch);
+          if (picked.length > 0) {
+            issue.status = 'fixed';
+            issue.commitSha = picked[0];
+            allFixed.push(issue);
+          } else {
+            issue.status = 'skipped';
+            issue.skipReason = 'Agent exited with error and made no changes';
+            allSkipped.push(issue);
+          }
         } else {
           const picked = await cherryPickCommits(worker.branch);
           if (picked.length > 0) {

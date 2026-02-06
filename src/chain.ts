@@ -21,7 +21,7 @@ export async function triggerChain(state: LoopState): Promise<void> {
 
   // Determine workflow filename from GITHUB_WORKFLOW_REF
   const workflowRef = process.env.GITHUB_WORKFLOW_REF || '';
-  let workflowFile = workflowRef.split('@')[0]?.split('/').pop() || 'sloppy.yml';
+  const workflowFile = workflowRef.split('@')[0]?.split('/').pop() || 'sloppy.yml';
 
   const nextChain = state.chainNumber + 1;
   core.info(`Triggering chain ${nextChain} via ${workflowFile}...`);

@@ -30431,7 +30431,7 @@ async function triggerChain(state) {
     const ref = (process.env.GITHUB_REF || 'main').replace('refs/heads/', '');
     // Determine workflow filename from GITHUB_WORKFLOW_REF
     const workflowRef = process.env.GITHUB_WORKFLOW_REF || '';
-    let workflowFile = workflowRef.split('@')[0]?.split('/').pop() || 'sloppy.yml';
+    const workflowFile = workflowRef.split('@')[0]?.split('/').pop() || 'sloppy.yml';
     const nextChain = state.chainNumber + 1;
     core.info(`Triggering chain ${nextChain} via ${workflowFile}...`);
     try {
@@ -30574,19 +30574,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getRawActionInputs = getRawActionInputs;
 exports.getConfig = getConfig;
 const core = __importStar(__nccwpck_require__(7484));
-function parseTimeout(input) {
-    const match = input.match(/^(\d+)(s|m|h)?$/);
-    if (!match)
-        return 30 * 60 * 1000;
-    const value = parseInt(match[1]);
-    const unit = match[2] || 'm';
-    switch (unit) {
-        case 's': return value * 1000;
-        case 'h': return value * 60 * 60 * 1000;
-        default: return value * 60 * 1000;
-    }
-}
-const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+const utils_1 = __nccwpck_require__(1798);
 /**
  * Collect raw action input strings so mergeRepoConfig can detect which
  * inputs were explicitly set vs left at default.
@@ -30625,17 +30613,17 @@ function getConfig() {
         process.env.OPENAI_API_KEY);
     const modeInput = core.getInput('mode') || (hasApiKey ? 'fix' : 'scan');
     const minSevInput = (core.getInput('min-severity') || 'low').toLowerCase();
-    const minSeverity = VALID_SEVERITIES.has(minSevInput)
+    const minSeverity = utils_1.VALID_SEVERITIES.has(minSevInput)
         ? minSevInput
         : 'low';
     return {
         mode: modeInput,
         agent: (core.getInput('agent') || 'claude'),
-        timeout: parseTimeout(core.getInput('timeout') || '30m'),
+        timeout: (0, utils_1.parseTimeout)(core.getInput('timeout') || '30m'),
         maxCost: parseFloat((core.getInput('max-cost') || '$5.00').replace('$', '')) || 5,
-        maxPasses: parseInt(core.getInput('max-passes') || '10'),
-        minPasses: parseInt(core.getInput('min-passes') || '2'),
-        maxChains: parseInt(core.getInput('max-chains') || '3'),
+        maxPasses: parseInt(core.getInput('max-passes') || '10') || 10,
+        minPasses: parseInt(core.getInput('min-passes') || '2') || 2,
+        maxChains: parseInt(core.getInput('max-chains') || '3') || 3,
         fixTypes: (core.getInput('fix-types') || 'security,bugs,types,lint,dead-code,stubs,duplicates,coverage')
             .split(',').map(s => s.trim()),
         strictness: (core.getInput('strictness') || 'high'),
@@ -30643,19 +30631,19 @@ function getConfig() {
         model: core.getInput('model') || '',
         githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
         testCommand: core.getInput('test-command') || '',
-        failBelow: parseInt(core.getInput('fail-below') || '0'),
+        failBelow: parseInt(core.getInput('fail-below') || '0') || 0,
         verbose: core.getInput('verbose') === 'true',
         maxTurns: {
             scan: parseInt(core.getInput('max-turns') || '0') || 30,
             fix: parseInt(core.getInput('max-turns') || '0') || 15,
         },
-        maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+        maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0') || 0,
         scanScope: (core.getInput('scan-scope') || 'auto'),
         outputFile: core.getInput('output-file') || '',
         customPrompt: core.getInput('custom-prompt') || '',
         customPromptFile: core.getInput('custom-prompt-file') || '',
         pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
-        parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3'), 1), 8),
+        parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3') || 3, 1), 8),
         app: {},
         framework: '',
         runtime: '',
@@ -30714,7 +30702,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const core = __importStar(__nccwpck_require__(7484));
 function generateDashboard(history) {
-    const data = JSON.stringify(history);
+    const data = JSON.stringify(history).replace(/</g, '\\u003c');
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -31333,7 +31321,6 @@ async function run() {
         const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
         let repoConfig = (0, sloppy_config_1.loadRepoConfig)(cwd);
         // Apply profile if specified (action input or repo config)
-        const profileName = config.profile || repoConfig?.mode; // profile comes from action input
         if (config.profile) {
             const profileOverlay = (0, sloppy_config_1.loadProfile)(cwd, config.profile);
             if (profileOverlay && repoConfig) {
@@ -31923,7 +31910,7 @@ async function gitCommit(issue, cwd) {
     if (cwd)
         execOpts.cwd = cwd;
     await exec.exec('git', ['add', '-A'], execOpts);
-    await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}`], execOpts);
+    await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}\n\n[skip ci]`], execOpts);
     let sha = '';
     await exec.exec('git', ['rev-parse', 'HEAD'], {
         ...execOpts,
@@ -32291,10 +32278,16 @@ async function dispatchClusterSequential(cluster, config, testCmd, customSection
     // For a single-issue cluster, use the focused single-issue prompt
     if (cluster.issues.length === 1) {
         const issue = cluster.issues[0];
+        const timeRemaining = deadline - Date.now() - margin;
+        if (timeRemaining <= 0) {
+            issue.status = 'skipped';
+            issue.skipReason = 'Timeout — no time remaining';
+            return { fixed: [], skipped: [issue] };
+        }
         const result = await (0, agent_1.runAgent)(config.agent, singleFixPrompt(issue, testCmd, customSection), {
             maxTurns: config.maxTurns.fix,
             model: config.model || undefined,
-            timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+            timeout: Math.min(3 * 60 * 1000, timeRemaining),
             verbose: config.verbose,
         });
         if (result.output.includes('SKIP:')) {
@@ -32323,7 +32316,15 @@ async function dispatchClusterSequential(cluster, config, testCmd, customSection
     }
     // Multi-issue cluster: give agent all issues at once with full autonomy
     const prompt = clusterFixPrompt(cluster, testCmd, customSection);
-    const timeoutMs = Math.min(5 * 60 * 1000 * Math.ceil(cluster.issues.length / 3), deadline - Date.now() - margin);
+    const clusterTimeRemaining = deadline - Date.now() - margin;
+    if (clusterTimeRemaining <= 0) {
+        for (const issue of cluster.issues) {
+            issue.status = 'skipped';
+            issue.skipReason = 'Timeout — no time remaining';
+        }
+        return { fixed: [], skipped: [...cluster.issues] };
+    }
+    const timeoutMs = Math.min(5 * 60 * 1000 * Math.ceil(cluster.issues.length / 3), clusterTimeRemaining);
     const headBefore = await gitHead();
     const result = await (0, agent_1.runAgent)(config.agent, prompt, {
         maxTurns: config.maxTurns.fix * 2,
@@ -32368,11 +32369,17 @@ async function dispatchClustersParallel(clusters, config, testCmd, customSection
         }
         // Dispatch agents in parallel via Promise.all
         const promises = workers.map(async (worker) => {
-            const timeoutMs = Math.min(5 * 60 * 1000 * Math.ceil(worker.cluster.issues.length / 3), deadline - Date.now() - margin);
+            const workerTimeRemaining = deadline - Date.now() - margin;
+            const timeoutMs = workerTimeRemaining <= 0
+                ? 0
+                : Math.min(5 * 60 * 1000 * Math.ceil(worker.cluster.issues.length / 3), workerTimeRemaining);
             const prompt = worker.cluster.issues.length === 1
                 ? singleFixPrompt(worker.cluster.issues[0], testCmd, customSection)
                 : clusterFixPrompt(worker.cluster, testCmd, customSection);
             core.info(`    [${worker.branch}] Fixing ${worker.cluster.issues.length} issues in ${worker.cluster.directory}/`);
+            if (timeoutMs <= 0) {
+                return { worker, result: { output: '', exitCode: 1 }, headBefore: '', timedOut: true };
+            }
             const headBefore = await gitHead(worker.worktree);
             const result = await (0, agent_1.runAgent)(config.agent, prompt, {
                 maxTurns: config.maxTurns.fix * 2,
@@ -32381,18 +32388,41 @@ async function dispatchClustersParallel(clusters, config, testCmd, customSection
                 verbose: config.verbose,
                 cwd: worker.worktree,
             });
-            return { worker, result, headBefore };
+            return { worker, result, headBefore, timedOut: false };
         });
         const results = await Promise.all(promises);
         // Cherry-pick commits from each worker back to main branch
-        for (const { worker, result, headBefore } of results) {
+        for (const { worker, result, headBefore, timedOut } of results) {
             const { cluster } = worker;
+            if (timedOut) {
+                for (const issue of cluster.issues) {
+                    issue.status = 'skipped';
+                    issue.skipReason = 'Timeout — no time remaining';
+                    allSkipped.push(issue);
+                }
+                await removeWorktree(worker.worktree, worker.branch);
+                continue;
+            }
             if (cluster.issues.length === 1) {
                 const issue = cluster.issues[0];
-                if (result.output.includes('SKIP:') || result.exitCode !== 0) {
+                if (result.output.includes('SKIP:')) {
                     issue.status = 'skipped';
                     issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
                     allSkipped.push(issue);
+                }
+                else if (result.exitCode !== 0) {
+                    // Agent exited with error — check if it still produced commits (e.g. timeout after committing)
+                    const picked = await cherryPickCommits(worker.branch);
+                    if (picked.length > 0) {
+                        issue.status = 'fixed';
+                        issue.commitSha = picked[0];
+                        allFixed.push(issue);
+                    }
+                    else {
+                        issue.status = 'skipped';
+                        issue.skipReason = 'Agent exited with error and made no changes';
+                        allSkipped.push(issue);
+                    }
                 }
                 else {
                     const picked = await cherryPickCommits(worker.branch);
@@ -33257,6 +33287,7 @@ function applyFilters(issues, filters) {
 /** Simple glob matcher supporting * and **. */
 function matchGlob(filepath, pattern) {
     const regexStr = pattern
+        .replace(/[+?()[\]{}^$|]/g, '\\$&')
         .replace(/\./g, '\\.')
         .replace(/\*\*/g, '{{DOUBLESTAR}}')
         .replace(/\*/g, '[^/]*')
@@ -34117,6 +34148,11 @@ const CODE_EXTENSIONS = new Set([
     '.vue', '.svelte', '.html', '.css', '.scss', '.sql', '.sh', '.yaml',
     '.yml', '.json', '.toml', '.xml', '.dockerfile',
 ]);
+/** Files without extensions that contain executable code. */
+const CODE_FILENAMES = new Set([
+    'Dockerfile', 'Makefile', 'Rakefile', 'Gemfile', 'Procfile',
+    'Vagrantfile', 'Jenkinsfile', 'Brewfile',
+]);
 const IGNORE_DIRS = new Set([
     'node_modules', '.git', 'dist', 'build', 'out', '.next', 'vendor',
     '__pycache__', '.venv', 'venv', 'target', 'coverage', '.sloppy',
@@ -34167,7 +34203,7 @@ function collectFiles(dir, files = []) {
         if (entry.isDirectory()) {
             collectFiles(full, files);
         }
-        else if (CODE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+        else if (CODE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) || CODE_FILENAMES.has(entry.name)) {
             files.push(full);
         }
     }
@@ -34408,7 +34444,6 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customP
 // ---------------------------------------------------------------------------
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
-const plugins_2 = __nccwpck_require__(6067);
 async function runScan(config, pluginCtx) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
@@ -34504,7 +34539,7 @@ async function runScan(config, pluginCtx) {
         // Run pre-scan hooks
         if (pluginCtx)
             await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
-        const customPrompt = pluginCtx ? (0, plugins_2.formatCustomPromptSection)(pluginCtx, config) : '';
+        const customPrompt = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx, config) : '';
         if (useDeepScan) {
             ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
             const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
@@ -34743,10 +34778,10 @@ const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const plugins_1 = __nccwpck_require__(6067);
+const utils_1 = __nccwpck_require__(1798);
 const VALID_TYPES = new Set([
     'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
 ]);
-const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
 const VALID_APP_TYPES = new Set(['web-app', 'api', 'cli', 'library', 'worker', 'mobile', 'desktop']);
 const VALID_EXPOSURES = new Set(['public', 'internal', 'local']);
 const VALID_NETWORKS = new Set(['internet', 'vpn', 'localhost']);
@@ -34769,7 +34804,7 @@ function parseYamlConfig(raw) {
             if (!VALID_TYPES.has(key))
                 continue;
             const v = String(val).toLowerCase();
-            if (v === 'off' || VALID_SEVERITIES.has(v)) {
+            if (v === 'off' || utils_1.VALID_SEVERITIES.has(v)) {
                 rules[key] = v;
             }
         }
@@ -34794,7 +34829,7 @@ function parseYamlConfig(raw) {
     // min-severity
     if (typeof data['min-severity'] === 'string') {
         const s = data['min-severity'].toLowerCase();
-        if (VALID_SEVERITIES.has(s)) {
+        if (utils_1.VALID_SEVERITIES.has(s)) {
             config.minSeverity = s;
         }
     }
@@ -35055,18 +35090,6 @@ function applyProfile(base, profile) {
 function isDefault(actual, defaultVal) {
     return !actual || actual === defaultVal;
 }
-function parseTimeout(input) {
-    const match = input.match(/^(\d+)(s|m|h)?$/);
-    if (!match)
-        return 30 * 60 * 1000;
-    const value = parseInt(match[1]);
-    const unit = match[2] || 'm';
-    switch (unit) {
-        case 's': return value * 1000;
-        case 'h': return value * 60 * 60 * 1000;
-        default: return value * 60 * 1000;
-    }
-}
 /**
  * Merge a RepoConfig into the runtime SloppyConfig.
  * Repo config values override action.yml defaults but NOT explicit user inputs.
@@ -35097,7 +35120,7 @@ function mergeRepoConfig(config, repo, actionInputs) {
         config.agent = repo.agent;
     }
     if (isDefault(actionInputs['timeout'], '30m') && repo.timeout) {
-        config.timeout = parseTimeout(repo.timeout);
+        config.timeout = (0, utils_1.parseTimeout)(repo.timeout);
     }
     if (isDefault(actionInputs['max-cost'], '$5.00') && repo.maxCost) {
         config.maxCost = parseFloat(repo.maxCost.replace('$', '')) || 5;
@@ -36051,8 +36074,10 @@ function finalResults() {
  * Extracted to eliminate duplication of formatDuration, sleep, and issue parsing.
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.VALID_SEVERITIES = void 0;
 exports.formatDuration = formatDuration;
 exports.sleep = sleep;
+exports.parseTimeout = parseTimeout;
 exports.mapRawToIssue = mapRawToIssue;
 exports.parseGitHubRepo = parseGitHubRepo;
 // ---------------------------------------------------------------------------
@@ -36077,13 +36102,29 @@ function formatDuration(ms) {
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
+/**
+ * Parse a timeout string like "30m", "2h", "90s" to milliseconds.
+ * Returns 30 minutes as default for unparseable input.
+ */
+function parseTimeout(input) {
+    const match = input.match(/^(\d+)(s|m|h)?$/);
+    if (!match)
+        return 30 * 60 * 1000;
+    const value = parseInt(match[1]);
+    const unit = match[2] || 'm';
+    switch (unit) {
+        case 's': return value * 1000;
+        case 'h': return value * 60 * 60 * 1000;
+        default: return value * 60 * 1000;
+    }
+}
 // ---------------------------------------------------------------------------
 // Issue parsing helpers
 // ---------------------------------------------------------------------------
 const VALID_ISSUE_TYPES = new Set([
     'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
 ]);
-const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+exports.VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
 /**
  * Map a raw JSON object to a validated Issue.
  * Returns null if the raw data doesn't have the minimum required shape.
@@ -36096,7 +36137,7 @@ function mapRawToIssue(raw, idPrefix, index) {
     return {
         id: `${idPrefix}-${Date.now()}-${index}`,
         type: (typeof r.type === 'string' && VALID_ISSUE_TYPES.has(r.type) ? r.type : 'lint'),
-        severity: (typeof r.severity === 'string' && VALID_SEVERITIES.has(r.severity) ? r.severity : 'medium'),
+        severity: (typeof r.severity === 'string' && exports.VALID_SEVERITIES.has(r.severity) ? r.severity : 'medium'),
         file: typeof r.file === 'string' && r.file ? r.file : 'unknown',
         line: typeof r.line === 'number' ? r.line : undefined,
         description: typeof r.description === 'string' && r.description ? r.description : 'Unknown issue',

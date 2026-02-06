@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LoopState, ScanResult, Issue, HistoryEntry, SloppyConfig } from './types';
+import { LoopState, ScanResult, Issue, HistoryEntry } from './types';
 import { formatDuration, parseGitHubRepo } from './utils';
 
 // --- Helpers ---

@@ -58,12 +58,11 @@ import {
   SloppyConfig,
 } from './types';
 import { parseSimpleYaml } from './plugins';
+import { parseTimeout, VALID_SEVERITIES } from './utils';
 
 const VALID_TYPES = new Set<string>([
   'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
 ]);
-
-const VALID_SEVERITIES = new Set<string>(['critical', 'high', 'medium', 'low']);
 const VALID_APP_TYPES = new Set<string>(['web-app', 'api', 'cli', 'library', 'worker', 'mobile', 'desktop']);
 const VALID_EXPOSURES = new Set<string>(['public', 'internal', 'local']);
 const VALID_NETWORKS = new Set<string>(['internet', 'vpn', 'localhost']);
@@ -381,18 +380,6 @@ export function applyProfile(base: RepoConfig, profile: RepoConfig): RepoConfig 
 // Helper: check if an action input was left at its default value
 function isDefault(actual: string, defaultVal: string): boolean {
   return !actual || actual === defaultVal;
-}
-
-function parseTimeout(input: string): number {
-  const match = input.match(/^(\d+)(s|m|h)?$/);
-  if (!match) return 30 * 60 * 1000;
-  const value = parseInt(match[1]);
-  const unit = match[2] || 'm';
-  switch (unit) {
-    case 's': return value * 1000;
-    case 'h': return value * 60 * 60 * 1000;
-    default:  return value * 60 * 1000;
-  }
 }
 
 /**

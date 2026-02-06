@@ -14,7 +14,7 @@ import {
   SmartChunk,
 } from './smart-split';
 import { localScanAll } from './local-scan';
-import { runHook, applyFilters, applyAllowRules } from './plugins';
+import { runHook, applyFilters, applyAllowRules, formatCustomPromptSection } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
 import * as ui from './ui';
@@ -25,6 +25,12 @@ const CODE_EXTENSIONS = new Set([
   '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.swift', '.kt', '.scala',
   '.vue', '.svelte', '.html', '.css', '.scss', '.sql', '.sh', '.yaml',
   '.yml', '.json', '.toml', '.xml', '.dockerfile',
+]);
+
+/** Files without extensions that contain executable code. */
+const CODE_FILENAMES = new Set([
+  'Dockerfile', 'Makefile', 'Rakefile', 'Gemfile', 'Procfile',
+  'Vagrantfile', 'Jenkinsfile', 'Brewfile',
 ]);
 
 const IGNORE_DIRS = new Set([
@@ -76,7 +82,7 @@ export function collectFiles(dir: string, files: string[] = []): string[] {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       collectFiles(full, files);
-    } else if (CODE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+    } else if (CODE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) || CODE_FILENAMES.has(entry.name)) {
       files.push(full);
     }
   }
@@ -354,8 +360,6 @@ async function scanChunk(
 // ---------------------------------------------------------------------------
 // Main scan orchestrator: 3-layer pipeline
 // ---------------------------------------------------------------------------
-
-import { formatCustomPromptSection } from './plugins';
 
 export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();

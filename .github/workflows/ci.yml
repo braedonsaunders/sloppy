@@ -23,6 +23,18 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm test
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -45,13 +57,17 @@ jobs:
   ci-success:
     name: CI
     runs-on: ubuntu-latest
-    needs: [typecheck, build]
+    needs: [typecheck, test, build]
     if: always()
     steps:
       - name: Check results
         run: |
           if [[ "${{ needs.typecheck.result }}" == "failure" ]]; then
             echo "Type check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test.result }}" == "failure" ]]; then
+            echo "Tests failed"
             exit 1
           fi
           if [[ "${{ needs.build.result }}" == "failure" ]]; then

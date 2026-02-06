@@ -28,6 +28,22 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Parse a timeout string like "30m", "2h", "90s" to milliseconds.
+ * Returns 30 minutes as default for unparseable input.
+ */
+export function parseTimeout(input: string): number {
+  const match = input.match(/^(\d+)(s|m|h)?$/);
+  if (!match) return 30 * 60 * 1000;
+  const value = parseInt(match[1]);
+  const unit = match[2] || 'm';
+  switch (unit) {
+    case 's': return value * 1000;
+    case 'h': return value * 60 * 60 * 1000;
+    default:  return value * 60 * 1000;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Issue parsing helpers
 // ---------------------------------------------------------------------------
@@ -36,7 +52,7 @@ const VALID_ISSUE_TYPES = new Set<string>([
   'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
 ]);
 
-const VALID_SEVERITIES = new Set<string>(['critical', 'high', 'medium', 'low']);
+export const VALID_SEVERITIES = new Set<string>(['critical', 'high', 'medium', 'low']);
 
 /**
  * Map a raw JSON object to a validated Issue.

@@ -13,7 +13,6 @@ import {
   loadOutputFile,
 } from './report';
 import { deployDashboard } from './dashboard';
-import { HistoryEntry, ScanResult, LoopState, PluginContext } from './types';
 import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
 import { loadRepoConfig, mergeRepoConfig, loadProfile, applyProfile } from './sloppy-config';
 import * as ui from './ui';
@@ -43,7 +42,6 @@ async function run(): Promise<void> {
     let repoConfig = loadRepoConfig(cwd);
 
     // Apply profile if specified (action input or repo config)
-    const profileName = config.profile || repoConfig?.mode; // profile comes from action input
     if (config.profile) {
       const profileOverlay = loadProfile(cwd, config.profile);
       if (profileOverlay && repoConfig) {
