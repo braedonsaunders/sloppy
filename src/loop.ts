@@ -9,6 +9,7 @@ import { calculateScore, collectFiles, countSourceLOC } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
 import { runHook, applyFilters, formatCustomPromptSection } from './plugins';
+import * as ui from './ui';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -700,25 +701,21 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   const useParallel = config.parallelAgents > 1;
 
   // Header
-  core.info('');
-  core.info('='.repeat(50));
-  core.info('SLOPPY FIX MODE');
-  core.info('='.repeat(50));
-  core.info(`Agent:      ${config.agent}`);
-  core.info(`Model:      ${config.model || 'default'}`);
-  core.info(`Timeout:    ${formatDuration(config.timeout)}`);
-  core.info(`Max passes: ${config.maxPasses}`);
-  core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
-  core.info(`Parallel:   ${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
-  core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
-  core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
-  core.info('='.repeat(50));
-  core.info('');
+  ui.section('FIX MODE');
+  ui.kv('Agent', config.agent);
+  ui.kv('Model', config.model || 'default');
+  ui.kv('Timeout', formatDuration(config.timeout));
+  ui.kv('Max passes', String(config.maxPasses));
+  ui.kv('Max issues', `${config.maxIssuesPerPass || 'unlimited'}/pass`);
+  ui.kv('Parallel', `${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
+  ui.kv('Verbose', config.verbose ? ui.c('ON', ui.S.green) + ui.c(' (streaming)', ui.S.gray) : 'off');
+  ui.kv('Chain', `${state.chainNumber}/${config.maxChains}`);
 
   // Install agent
-  core.info(`Installing ${config.agent} CLI...`);
+  ui.section('SETUP');
+  core.info(`  Installing ${config.agent}...`);
   await installAgent(config.agent);
-  core.info(`Done.`);
+  core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
 
   // Setup git
   await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
@@ -728,19 +725,15 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   if (!state.branchName) {
     state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
     await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
-    core.info(`Created branch: ${state.branchName}`);
+    ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
   } else {
     await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
-    core.info(`Resumed branch: ${state.branchName}`);
+    ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
   }
 
   // Detect test command
   const testCmd = await detectTestCommand(config);
-  if (testCmd) {
-    core.info(`Test command: ${testCmd}`);
-  } else {
-    core.info('No test command detected (fixes won\'t be test-verified)');
-  }
+  ui.kv('Tests', testCmd ? testCmd : ui.c('none detected', ui.S.yellow));
 
   // Load PLAN.md if it exists
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
@@ -748,7 +741,7 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   const planPath = path.join(cwd, 'PLAN.md');
   if (fs.existsSync(planPath)) {
     plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
-    core.info('Loaded PLAN.md for quality context');
+    ui.kv('Plan', 'PLAN.md loaded');
   }
 
   const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
@@ -756,7 +749,7 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   // Count LOC for normalized scoring
   const sourceFiles = collectFiles(cwd);
   const loc = countSourceLOC(sourceFiles);
-  core.info(`Source LOC: ${loc.toLocaleString()}`);
+  ui.kv('Source LOC', loc.toLocaleString());
 
   // Load preexisting issues from output file
   let seededIssues: Issue[] = [];
@@ -764,21 +757,16 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     const prior = loadOutputFile(config.outputFile);
     seededIssues = prior.filter(i => i.status === 'found');
     if (seededIssues.length > 0) {
-      core.info(`Loaded ${seededIssues.length} preexisting issues from ${config.outputFile}`);
+      ui.kv('Preexisting', `${seededIssues.length} issues from ${config.outputFile}`);
     }
   }
-
-  core.info('');
 
   // --- THE RELENTLESS LOOP ---
   while (Date.now() < deadline - margin && state.pass < config.maxPasses) {
     state.pass++;
     const passStart = Date.now();
 
-    core.info('');
-    core.info('='.repeat(50));
-    core.info(`PASS ${state.pass}/${config.maxPasses}  |  Time remaining: ${formatTimeRemaining(deadline)}  |  Fixed so far: ${state.totalFixed}`);
-    core.info('='.repeat(50));
+    ui.section(`PASS ${state.pass}/${config.maxPasses}  ${ui.c(ui.SYM.diamond, ui.S.gray)} ${ui.c(formatTimeRemaining(deadline) + ' left', ui.S.gray)}  ${ui.c(ui.SYM.diamond, ui.S.gray)} ${ui.c(state.totalFixed + ' fixed', ui.S.green)}`);
 
     const prevFixes = state.issues
       .filter(i => i.status === 'fixed')
@@ -790,13 +778,11 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     if (seededIssues.length > 0 && state.pass === 1) {
       found = seededIssues;
       seededIssues = [];
-      core.info('');
-      core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
+      core.info(`  Using ${ui.c(String(found.length), ui.S.bold)} preexisting issues ${ui.c('(skipping rescan)', ui.S.gray)}`);
     } else {
-      core.info('');
       if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
 
-      core.info(`Scanning repository (${config.agent})...`);
+      core.info(`  Scanning repository...`);
       const scanStart = Date.now();
       const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan, customSection), {
         maxTurns: config.maxTurns.scan,
@@ -825,30 +811,26 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
         }
       }
 
-      core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+      core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Scan complete ${ui.c(`(${scanDuration})`, ui.S.gray)}: found ${ui.c(String(found.length), ui.S.bold)} issues`);
     }
 
     if (found.length > 0) {
       const bySev: Record<string, number> = {};
       for (const issue of found) bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
-      const sevSummary = Object.entries(bySev)
-        .sort(([a], [b]) => (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9))
-        .map(([sev, count]) => `${count} ${sev}`)
-        .join(', ');
-      core.info(`Breakdown: ${sevSummary}`);
+      ui.severityBreakdown(bySev);
     }
 
     // Check if done
     if (found.length === 0 && state.pass >= config.minPasses) {
-      core.info('');
-      core.info('Repository is CLEAN. Verified across multiple passes.');
+      ui.blank();
+      core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} ${ui.c('Repository is CLEAN', ui.S.bold, ui.S.green)} ${ui.c('— verified across multiple passes', ui.S.gray)}`);
       state.complete = true;
       state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
       break;
     }
 
     if (found.length === 0) {
-      core.info(`No issues found, but need ${config.minPasses - state.pass + 1} more clean pass(es) to verify.`);
+      core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No issues found ${ui.c(`(${config.minPasses - state.pass + 1} more clean pass(es) needed)`, ui.S.gray)}`);
       state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
       continue;
     }
@@ -859,12 +841,13 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     const toFix = sorted.slice(0, limit);
 
     const clusters = clusterIssues(toFix);
-    core.info('');
-    core.info(`Clustered ${toFix.length} issues into ${clusters.length} groups:`);
-    for (const c of clusters) {
-      core.info(`  ${c.directory}/ — ${c.issues.length} issues across ${c.files.length} files`);
+    ui.blank();
+    core.info(`  Clustered ${ui.c(String(toFix.length), ui.S.bold)} issues into ${ui.c(String(clusters.length), ui.S.bold)} groups`);
+    for (let ci = 0; ci < clusters.length; ci++) {
+      const cl = clusters[ci];
+      const prefix = ci === clusters.length - 1 ? ui.SYM.cornerRight : ui.SYM.teeRight;
+      core.info(`  ${ui.c(prefix + ui.SYM.dash, ui.S.gray)} ${cl.directory}/ ${ui.c(`(${cl.issues.length} issues, ${cl.files.length} files)`, ui.S.gray)}`);
     }
-    core.info('');
 
     // PHASE 3: DISPATCH — parallel or sequential
     let passFixed = 0;
@@ -873,7 +856,8 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-fix', {});
 
     if (useParallel && clusters.length > 1) {
-      core.info(`Dispatching ${clusters.length} clusters across ${config.parallelAgents} parallel agents (worktree mode)...`);
+      ui.blank();
+      core.info(`  Dispatching ${ui.c(String(clusters.length), ui.S.bold)} clusters across ${ui.c(String(config.parallelAgents), ui.S.bold)} parallel agents`);
       const { fixed, skipped } = await dispatchClustersParallel(
         clusters, config, testCmd, customSection, deadline, margin, state.branchName,
       );
@@ -884,11 +868,11 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
       for (const issue of fixed) {
         state.totalFixed++;
-        core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}`);
+        ui.fixed(issue.file, issue.description, issue.commitSha);
       }
       for (const issue of skipped) {
         state.totalSkipped++;
-        core.info(`    -> SKIPPED ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}: ${issue.skipReason || ''}`);
+        ui.skipped(issue.file, issue.description, issue.skipReason);
       }
     } else {
       // Sequential cluster-based dispatch
@@ -899,10 +883,10 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
           break;
         }
 
-        const timeLeft = formatTimeRemaining(deadline);
-        core.info(`  [cluster ${ci + 1}/${clusters.length}] (${timeLeft} left) ${cluster.directory}/ — ${cluster.issues.length} issues`);
+        ui.blank();
+        ui.clusterHeader(ci + 1, clusters.length, cluster.directory, cluster.issues.length);
         for (const issue of cluster.issues) {
-          core.info(`    ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'} — ${issue.description}`);
+          ui.issueFound(issue.file, issue.line, issue.description, issue.severity, issue.type);
         }
 
         const clusterStart = Date.now();
@@ -916,11 +900,11 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
         for (const issue of fixed) {
           state.totalFixed++;
-          core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} (${clusterDur})`);
+          ui.fixed(issue.file, issue.description, issue.commitSha);
         }
         for (const issue of skipped) {
           state.totalSkipped++;
-          core.info(`    -> SKIPPED (${clusterDur}): ${issue.skipReason || ''}`);
+          ui.skipped(issue.file, issue.description, issue.skipReason, clusterDur);
         }
 
         if (pluginCtx) {
@@ -939,12 +923,12 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
     // PHASE 4: VERIFY — full test suite after all clusters in this pass
     if (testCmd && passFixed > 0) {
-      core.info('');
-      core.info('Running full test suite to verify all fixes...');
+      ui.blank();
+      core.info(`  Running full test suite...`);
       if (await runTests(testCmd)) {
-        core.info('All tests pass.');
+        core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} ${ui.c('All tests pass', ui.S.green)}`);
       } else {
-        core.warning('Full test suite failed after fixes — some commits may conflict.');
+        core.info(`  ${ui.c(ui.SYM.cross, ui.S.bold, ui.S.red)} ${ui.c('Test suite failed', ui.S.red)} ${ui.c('— some commits may conflict', ui.S.gray)}`);
       }
     }
 
@@ -956,11 +940,9 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
       durationMs: Date.now() - passStart,
     });
 
-    core.info('');
-    core.info('-'.repeat(50));
-    core.info(`Pass ${state.pass} summary: ${found.length} found, ${passFixed} fixed, ${passSkipped} skipped (${formatDuration(Date.now() - passStart)})`);
-    core.info(`Running totals: ${state.totalFixed} fixed, ${state.totalSkipped} skipped`);
-    core.info('-'.repeat(50));
+    ui.blank();
+    ui.passSummary(state.pass, passFixed, passSkipped, formatDuration(Date.now() - passStart));
+    core.info(`  ${ui.c('Running totals:', ui.S.gray)} ${ui.c(String(state.totalFixed), ui.S.bold, ui.S.green)} fixed, ${ui.c(String(state.totalSkipped), ui.S.yellow)} skipped`);
 
     saveCheckpoint(state);
 
@@ -979,27 +961,27 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
   // Push branch
   if (state.totalFixed > 0) {
-    core.info('');
-    core.info(`Pushing ${state.totalFixed} fixes on ${state.branchName}...`);
+    ui.section('PUSH');
+    core.info(`  Pushing ${ui.c(String(state.totalFixed), ui.S.bold)} fixes on ${ui.c(state.branchName, ui.S.cyan)}...`);
     const token = process.env.GITHUB_TOKEN || '';
     const repo = process.env.GITHUB_REPOSITORY || '';
     const remote = `https://x-access-token:${token}@github.com/${repo}.git`;
     await exec.exec('git', ['push', remote, state.branchName, '--force'], { ignoreReturnCode: true });
-    core.info('Push complete.');
+    core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} Push complete`);
   }
 
   // Final summary
-  core.info('');
-  core.info('='.repeat(50));
-  core.info('SLOPPY FIX COMPLETE');
-  core.info('='.repeat(50));
-  core.info(`Score:    ${state.scoreBefore} -> ${state.scoreAfter}`);
-  core.info(`Fixed:    ${state.totalFixed}`);
-  core.info(`Skipped:  ${state.totalSkipped}`);
-  core.info(`Passes:   ${state.passes.length}`);
-  core.info(`Duration: ${formatDuration(Date.now() - startTime)}`);
-  core.info(`Complete: ${state.complete ? 'YES' : 'NO (more work may remain)'}`);
-  core.info('='.repeat(50));
+  ui.blank();
+  ui.banner('FIX COMPLETE');
+  ui.scoreChange(state.scoreBefore, state.scoreAfter);
+  ui.stat('Fixed', String(state.totalFixed));
+  ui.stat('Skipped', String(state.totalSkipped));
+  ui.stat('Passes', String(state.passes.length));
+  ui.stat('Duration', formatDuration(Date.now() - startTime));
+  ui.stat('Complete', state.complete
+    ? ui.c('YES', ui.S.bold, ui.S.green)
+    : ui.c('NO', ui.S.yellow) + ui.c(' (more work may remain)', ui.S.gray));
+  core.info(ui.divider());
 
   saveCheckpoint(state);
   return state;

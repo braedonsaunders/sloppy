@@ -29968,6 +29968,7 @@ const exec = __importStar(__nccwpck_require__(5236));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const os = __importStar(__nccwpck_require__(857));
+const ui = __importStar(__nccwpck_require__(5125));
 async function installAgent(agent) {
     if (agent === 'claude') {
         // @anthropic-ai/claude-agent-sdk provides the SDK query() function for streaming.
@@ -30129,41 +30130,37 @@ async function runClaudeSDK(prompt, options) {
                                 : block.text;
                             for (const textLine of preview.split('\n')) {
                                 if (textLine.trim())
-                                    core.info(`  | ${textLine}`);
+                                    ui.agentText(textLine);
                             }
                         }
                         else if (block.type === 'tool_use') {
-                            core.info(`  | [tool: ${block.name}]`);
+                            ui.agentTool(block.name);
                         }
                     }
                 }
                 else if (event.type === 'tool_progress') {
-                    core.info(`  | [${event.tool_name}: ${event.elapsed_time_seconds}s]`);
+                    ui.agentToolProgress(event.tool_name, event.elapsed_time_seconds);
                 }
                 else if (event.type === 'tool_use_summary') {
-                    const preview = event.summary.length > 200
-                        ? event.summary.slice(0, 200) + '...'
-                        : event.summary;
-                    core.info(`  | ${preview}`);
+                    ui.agentToolSummary(event.summary);
                 }
                 else if (event.type === 'system') {
                     const sub = event.subtype || 'init';
                     if (sub === 'task_notification') {
-                        core.info(`  | [task ${event.status}: ${event.summary || event.task_id}]`);
+                        core.info(`  ${ui.c(ui.SYM.vline, ui.S.gray)} ${ui.c(`[task ${event.status}: ${event.summary || event.task_id}]`, ui.S.magenta)}`);
                     }
                     else {
-                        core.info(`  | [system: ${sub}]`);
+                        ui.agentSystem(sub);
                     }
                 }
                 else if (event.type === 'result') {
-                    const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : '';
-                    core.info(`  | [result: ${event.subtype}, ${event.num_turns} turns${cost}]`);
+                    ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd);
                 }
             }
         }
         catch {
             if (verbose)
-                core.info(`  | ${trimmed.slice(0, 300)}`);
+                ui.agentText(trimmed.slice(0, 300));
         }
     };
     // Heartbeat: log periodically so the user knows the agent is alive
@@ -30171,7 +30168,7 @@ async function runClaudeSDK(prompt, options) {
     if (verbose) {
         heartbeat = setInterval(() => {
             const elapsed = Math.round((Date.now() - execStart) / 1000);
-            core.info(`  ... agent running (${elapsed}s, ${eventCount} events)`);
+            ui.agentHeartbeat(elapsed, eventCount);
         }, 15_000);
     }
     const execOptions = {
@@ -30181,7 +30178,7 @@ async function runClaudeSDK(prompt, options) {
                 if (firstChunk && verbose) {
                     firstChunk = false;
                     const elapsed = Math.round((Date.now() - execStart) / 1000);
-                    core.info(`  [stream] First output after ${elapsed}s (${chunk.length} bytes)`);
+                    ui.agentStreamStart(elapsed, chunk.length);
                 }
                 lineBuffer += chunk;
                 const lines = lineBuffer.split('\n');
@@ -30196,7 +30193,7 @@ async function runClaudeSDK(prompt, options) {
                     for (const line of chunk.split('\n')) {
                         const trimmed = line.trim();
                         if (trimmed)
-                            core.info(`  |err| ${trimmed}`);
+                            ui.agentStderr(trimmed);
                     }
                 }
             },
@@ -30240,7 +30237,7 @@ async function runClaudeSDK(prompt, options) {
     }
     if (verbose) {
         const elapsed = Math.round((Date.now() - execStart) / 1000);
-        core.info(`  [stream] Agent finished in ${elapsed}s (${eventCount} events)`);
+        ui.agentDone(elapsed, eventCount);
     }
     if (stderr && exitCode !== 0) {
         core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
@@ -30266,7 +30263,7 @@ async function runCLI(cmd, args, options) {
     if (verbose) {
         heartbeat = setInterval(() => {
             const elapsed = Math.round((Date.now() - execStart) / 1000);
-            core.info(`  ... agent running (${elapsed}s, stdout: ${stdout.length} bytes)`);
+            ui.agentHeartbeat(elapsed, 0);
         }, 30_000);
     }
     const execOptions = {
@@ -30278,7 +30275,7 @@ async function runCLI(cmd, args, options) {
                     for (const line of chunk.split('\n')) {
                         const trimmed = line.trim();
                         if (trimmed)
-                            core.info(`  | ${trimmed.slice(0, 300)}`);
+                            ui.agentText(trimmed.slice(0, 300));
                     }
                 }
             },
@@ -30289,7 +30286,7 @@ async function runCLI(cmd, args, options) {
                     for (const line of chunk.split('\n')) {
                         const trimmed = line.trim();
                         if (trimmed)
-                            core.info(`  |err| ${trimmed}`);
+                            ui.agentStderr(trimmed);
                     }
                 }
             },
@@ -30317,7 +30314,7 @@ async function runCLI(cmd, args, options) {
     }
     if (verbose) {
         const elapsed = Math.round((Date.now() - execStart) / 1000);
-        core.info(`  [done] Agent finished in ${elapsed}s (stdout: ${stdout.length} bytes)`);
+        ui.agentDone(elapsed, 0);
     }
     if (stderr && exitCode !== 0) {
         core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
@@ -31238,6 +31235,7 @@ const report_1 = __nccwpck_require__(665);
 const dashboard_1 = __nccwpck_require__(4299);
 const plugins_1 = __nccwpck_require__(6067);
 const sloppy_config_1 = __nccwpck_require__(7316);
+const ui = __importStar(__nccwpck_require__(5125));
 async function run() {
     try {
         const config = (0, config_1.getConfig)();
@@ -31254,8 +31252,17 @@ async function run() {
         const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
         const hasClaudeOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
         const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
-        core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
-        core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
+        ui.blank();
+        ui.banner('S L O P P Y', `Code Quality Scanner & Auto-Fixer  v1`);
+        ui.blank();
+        ui.kv('Mode', config.mode);
+        ui.kv('Agent', config.agent);
+        ui.kv('Auth', [
+            hasGithubToken ? ui.c('GITHUB', ui.S.green) : ui.c('GITHUB', ui.S.red),
+            hasAnthropicKey ? ui.c('ANTHROPIC', ui.S.green) : '',
+            hasClaudeOAuth ? ui.c('OAUTH', ui.S.green) : '',
+            hasOpenAIKey ? ui.c('OPENAI', ui.S.green) : '',
+        ].filter(Boolean).join(ui.c(' / ', ui.S.gray)));
         // Load custom prompts, plugins, and repo config
         const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
         const customPrompt = (0, plugins_1.resolveCustomPrompt)(config.customPrompt, config.customPromptFile, cwd);
@@ -31326,7 +31333,11 @@ async function run() {
                 core.setFailed(`Score ${result.score} is below threshold ${config.failBelow}`);
                 return;
             }
-            core.info(`Done. Score: ${result.score}/100, Issues: ${result.issues.length}`);
+            ui.blank();
+            ui.finalResults();
+            ui.score(result.score);
+            ui.stat('Issues', `${result.issues.length} found`);
+            ui.blank();
         }
         else {
             // ---- FIX MODE: Claude Code or Codex CLI ----
@@ -31379,7 +31390,13 @@ async function run() {
                 core.setFailed(`Score ${state.scoreAfter} is below threshold ${config.failBelow}`);
                 return;
             }
-            core.info(`Done. Score: ${state.scoreBefore} → ${state.scoreAfter}, Fixed: ${state.totalFixed}`);
+            ui.blank();
+            ui.finalResults();
+            ui.scoreChange(state.scoreBefore, state.scoreAfter);
+            ui.stat('Fixed', `${state.totalFixed} issues`);
+            ui.stat('Skipped', `${state.totalSkipped} issues`);
+            ui.stat('Passes', String(state.passes.length));
+            ui.blank();
         }
     }
     catch (error) {
@@ -31686,6 +31703,7 @@ const scan_1 = __nccwpck_require__(4798);
 const checkpoint_1 = __nccwpck_require__(4213);
 const report_1 = __nccwpck_require__(665);
 const plugins_1 = __nccwpck_require__(6067);
+const ui = __importStar(__nccwpck_require__(5125));
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -32287,24 +32305,20 @@ async function runFixLoop(config, pluginCtx) {
     const margin = 2 * 60 * 1000;
     const useParallel = config.parallelAgents > 1;
     // Header
-    core.info('');
-    core.info('='.repeat(50));
-    core.info('SLOPPY FIX MODE');
-    core.info('='.repeat(50));
-    core.info(`Agent:      ${config.agent}`);
-    core.info(`Model:      ${config.model || 'default'}`);
-    core.info(`Timeout:    ${formatDuration(config.timeout)}`);
-    core.info(`Max passes: ${config.maxPasses}`);
-    core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
-    core.info(`Parallel:   ${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
-    core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
-    core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
-    core.info('='.repeat(50));
-    core.info('');
+    ui.section('FIX MODE');
+    ui.kv('Agent', config.agent);
+    ui.kv('Model', config.model || 'default');
+    ui.kv('Timeout', formatDuration(config.timeout));
+    ui.kv('Max passes', String(config.maxPasses));
+    ui.kv('Max issues', `${config.maxIssuesPerPass || 'unlimited'}/pass`);
+    ui.kv('Parallel', `${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
+    ui.kv('Verbose', config.verbose ? ui.c('ON', ui.S.green) + ui.c(' (streaming)', ui.S.gray) : 'off');
+    ui.kv('Chain', `${state.chainNumber}/${config.maxChains}`);
     // Install agent
-    core.info(`Installing ${config.agent} CLI...`);
+    ui.section('SETUP');
+    core.info(`  Installing ${config.agent}...`);
     await (0, agent_1.installAgent)(config.agent);
-    core.info(`Done.`);
+    core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
     // Setup git
     await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
     await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
@@ -32312,51 +32326,42 @@ async function runFixLoop(config, pluginCtx) {
     if (!state.branchName) {
         state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
         await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
-        core.info(`Created branch: ${state.branchName}`);
+        ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
     }
     else {
         await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
-        core.info(`Resumed branch: ${state.branchName}`);
+        ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
     }
     // Detect test command
     const testCmd = await detectTestCommand(config);
-    if (testCmd) {
-        core.info(`Test command: ${testCmd}`);
-    }
-    else {
-        core.info('No test command detected (fixes won\'t be test-verified)');
-    }
+    ui.kv('Tests', testCmd ? testCmd : ui.c('none detected', ui.S.yellow));
     // Load PLAN.md if it exists
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     let plan = '';
     const planPath = path.join(cwd, 'PLAN.md');
     if (fs.existsSync(planPath)) {
         plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
-        core.info('Loaded PLAN.md for quality context');
+        ui.kv('Plan', 'PLAN.md loaded');
     }
     const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx) : '';
     // Count LOC for normalized scoring
     const sourceFiles = (0, scan_1.collectFiles)(cwd);
     const loc = (0, scan_1.countSourceLOC)(sourceFiles);
-    core.info(`Source LOC: ${loc.toLocaleString()}`);
+    ui.kv('Source LOC', loc.toLocaleString());
     // Load preexisting issues from output file
     let seededIssues = [];
     if (!checkpoint && config.outputFile) {
         const prior = (0, report_1.loadOutputFile)(config.outputFile);
         seededIssues = prior.filter(i => i.status === 'found');
         if (seededIssues.length > 0) {
-            core.info(`Loaded ${seededIssues.length} preexisting issues from ${config.outputFile}`);
+            ui.kv('Preexisting', `${seededIssues.length} issues from ${config.outputFile}`);
         }
     }
-    core.info('');
     // --- THE RELENTLESS LOOP ---
     while (Date.now() < deadline - margin && state.pass < config.maxPasses) {
         state.pass++;
         const passStart = Date.now();
-        core.info('');
-        core.info('='.repeat(50));
-        core.info(`PASS ${state.pass}/${config.maxPasses}  |  Time remaining: ${formatTimeRemaining(deadline)}  |  Fixed so far: ${state.totalFixed}`);
-        core.info('='.repeat(50));
+        ui.section(`PASS ${state.pass}/${config.maxPasses}  ${ui.c(ui.SYM.diamond, ui.S.gray)} ${ui.c(formatTimeRemaining(deadline) + ' left', ui.S.gray)}  ${ui.c(ui.SYM.diamond, ui.S.gray)} ${ui.c(state.totalFixed + ' fixed', ui.S.green)}`);
         const prevFixes = state.issues
             .filter(i => i.status === 'fixed')
             .slice(-20)
@@ -32366,14 +32371,12 @@ async function runFixLoop(config, pluginCtx) {
         if (seededIssues.length > 0 && state.pass === 1) {
             found = seededIssues;
             seededIssues = [];
-            core.info('');
-            core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
+            core.info(`  Using ${ui.c(String(found.length), ui.S.bold)} preexisting issues ${ui.c('(skipping rescan)', ui.S.gray)}`);
         }
         else {
-            core.info('');
             if (pluginCtx)
                 await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
-            core.info(`Scanning repository (${config.agent})...`);
+            core.info(`  Scanning repository...`);
             const scanStart = Date.now();
             const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan, customSection), {
                 maxTurns: config.maxTurns.scan,
@@ -32398,28 +32401,24 @@ async function runFixLoop(config, pluginCtx) {
                     core.info(`Plugin filters removed ${before - found.length} issues`);
                 }
             }
-            core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Scan complete ${ui.c(`(${scanDuration})`, ui.S.gray)}: found ${ui.c(String(found.length), ui.S.bold)} issues`);
         }
         if (found.length > 0) {
             const bySev = {};
             for (const issue of found)
                 bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
-            const sevSummary = Object.entries(bySev)
-                .sort(([a], [b]) => (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9))
-                .map(([sev, count]) => `${count} ${sev}`)
-                .join(', ');
-            core.info(`Breakdown: ${sevSummary}`);
+            ui.severityBreakdown(bySev);
         }
         // Check if done
         if (found.length === 0 && state.pass >= config.minPasses) {
-            core.info('');
-            core.info('Repository is CLEAN. Verified across multiple passes.');
+            ui.blank();
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} ${ui.c('Repository is CLEAN', ui.S.bold, ui.S.green)} ${ui.c('— verified across multiple passes', ui.S.gray)}`);
             state.complete = true;
             state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
             break;
         }
         if (found.length === 0) {
-            core.info(`No issues found, but need ${config.minPasses - state.pass + 1} more clean pass(es) to verify.`);
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No issues found ${ui.c(`(${config.minPasses - state.pass + 1} more clean pass(es) needed)`, ui.S.gray)}`);
             state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
             continue;
         }
@@ -32428,30 +32427,32 @@ async function runFixLoop(config, pluginCtx) {
         const limit = config.maxIssuesPerPass > 0 ? config.maxIssuesPerPass : sorted.length;
         const toFix = sorted.slice(0, limit);
         const clusters = clusterIssues(toFix);
-        core.info('');
-        core.info(`Clustered ${toFix.length} issues into ${clusters.length} groups:`);
-        for (const c of clusters) {
-            core.info(`  ${c.directory}/ — ${c.issues.length} issues across ${c.files.length} files`);
+        ui.blank();
+        core.info(`  Clustered ${ui.c(String(toFix.length), ui.S.bold)} issues into ${ui.c(String(clusters.length), ui.S.bold)} groups`);
+        for (let ci = 0; ci < clusters.length; ci++) {
+            const cl = clusters[ci];
+            const prefix = ci === clusters.length - 1 ? ui.SYM.cornerRight : ui.SYM.teeRight;
+            core.info(`  ${ui.c(prefix + ui.SYM.dash, ui.S.gray)} ${cl.directory}/ ${ui.c(`(${cl.issues.length} issues, ${cl.files.length} files)`, ui.S.gray)}`);
         }
-        core.info('');
         // PHASE 3: DISPATCH — parallel or sequential
         let passFixed = 0;
         let passSkipped = 0;
         if (pluginCtx)
             await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-fix', {});
         if (useParallel && clusters.length > 1) {
-            core.info(`Dispatching ${clusters.length} clusters across ${config.parallelAgents} parallel agents (worktree mode)...`);
+            ui.blank();
+            core.info(`  Dispatching ${ui.c(String(clusters.length), ui.S.bold)} clusters across ${ui.c(String(config.parallelAgents), ui.S.bold)} parallel agents`);
             const { fixed, skipped } = await dispatchClustersParallel(clusters, config, testCmd, customSection, deadline, margin, state.branchName);
             passFixed = fixed.length;
             passSkipped = skipped.length;
             state.issues.push(...fixed, ...skipped);
             for (const issue of fixed) {
                 state.totalFixed++;
-                core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}`);
+                ui.fixed(issue.file, issue.description, issue.commitSha);
             }
             for (const issue of skipped) {
                 state.totalSkipped++;
-                core.info(`    -> SKIPPED ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}: ${issue.skipReason || ''}`);
+                ui.skipped(issue.file, issue.description, issue.skipReason);
             }
         }
         else {
@@ -32462,10 +32463,10 @@ async function runFixLoop(config, pluginCtx) {
                     core.warning('Timeout approaching — stopping');
                     break;
                 }
-                const timeLeft = formatTimeRemaining(deadline);
-                core.info(`  [cluster ${ci + 1}/${clusters.length}] (${timeLeft} left) ${cluster.directory}/ — ${cluster.issues.length} issues`);
+                ui.blank();
+                ui.clusterHeader(ci + 1, clusters.length, cluster.directory, cluster.issues.length);
                 for (const issue of cluster.issues) {
-                    core.info(`    ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'} — ${issue.description}`);
+                    ui.issueFound(issue.file, issue.line, issue.description, issue.severity, issue.type);
                 }
                 const clusterStart = Date.now();
                 const { fixed, skipped } = await dispatchClusterSequential(cluster, config, testCmd, customSection, deadline, margin);
@@ -32474,11 +32475,11 @@ async function runFixLoop(config, pluginCtx) {
                 passSkipped += skipped.length;
                 for (const issue of fixed) {
                     state.totalFixed++;
-                    core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} (${clusterDur})`);
+                    ui.fixed(issue.file, issue.description, issue.commitSha);
                 }
                 for (const issue of skipped) {
                     state.totalSkipped++;
-                    core.info(`    -> SKIPPED (${clusterDur}): ${issue.skipReason || ''}`);
+                    ui.skipped(issue.file, issue.description, issue.skipReason, clusterDur);
                 }
                 if (pluginCtx) {
                     for (const issue of [...fixed, ...skipped]) {
@@ -32494,13 +32495,13 @@ async function runFixLoop(config, pluginCtx) {
         }
         // PHASE 4: VERIFY — full test suite after all clusters in this pass
         if (testCmd && passFixed > 0) {
-            core.info('');
-            core.info('Running full test suite to verify all fixes...');
+            ui.blank();
+            core.info(`  Running full test suite...`);
             if (await runTests(testCmd)) {
-                core.info('All tests pass.');
+                core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} ${ui.c('All tests pass', ui.S.green)}`);
             }
             else {
-                core.warning('Full test suite failed after fixes — some commits may conflict.');
+                core.info(`  ${ui.c(ui.SYM.cross, ui.S.bold, ui.S.red)} ${ui.c('Test suite failed', ui.S.red)} ${ui.c('— some commits may conflict', ui.S.gray)}`);
             }
         }
         state.passes.push({
@@ -32510,11 +32511,9 @@ async function runFixLoop(config, pluginCtx) {
             skipped: passSkipped,
             durationMs: Date.now() - passStart,
         });
-        core.info('');
-        core.info('-'.repeat(50));
-        core.info(`Pass ${state.pass} summary: ${found.length} found, ${passFixed} fixed, ${passSkipped} skipped (${formatDuration(Date.now() - passStart)})`);
-        core.info(`Running totals: ${state.totalFixed} fixed, ${state.totalSkipped} skipped`);
-        core.info('-'.repeat(50));
+        ui.blank();
+        ui.passSummary(state.pass, passFixed, passSkipped, formatDuration(Date.now() - passStart));
+        core.info(`  ${ui.c('Running totals:', ui.S.gray)} ${ui.c(String(state.totalFixed), ui.S.bold, ui.S.green)} fixed, ${ui.c(String(state.totalSkipped), ui.S.yellow)} skipped`);
         (0, checkpoint_1.saveCheckpoint)(state);
         if (config.outputFile) {
             const remaining = state.issues.filter(i => i.status !== 'fixed');
@@ -32530,26 +32529,26 @@ async function runFixLoop(config, pluginCtx) {
         state.scoreBefore = (0, scan_1.calculateScore)(allFound, loc);
     // Push branch
     if (state.totalFixed > 0) {
-        core.info('');
-        core.info(`Pushing ${state.totalFixed} fixes on ${state.branchName}...`);
+        ui.section('PUSH');
+        core.info(`  Pushing ${ui.c(String(state.totalFixed), ui.S.bold)} fixes on ${ui.c(state.branchName, ui.S.cyan)}...`);
         const token = process.env.GITHUB_TOKEN || '';
         const repo = process.env.GITHUB_REPOSITORY || '';
         const remote = `https://x-access-token:${token}@github.com/${repo}.git`;
         await exec.exec('git', ['push', remote, state.branchName, '--force'], { ignoreReturnCode: true });
-        core.info('Push complete.');
+        core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} Push complete`);
     }
     // Final summary
-    core.info('');
-    core.info('='.repeat(50));
-    core.info('SLOPPY FIX COMPLETE');
-    core.info('='.repeat(50));
-    core.info(`Score:    ${state.scoreBefore} -> ${state.scoreAfter}`);
-    core.info(`Fixed:    ${state.totalFixed}`);
-    core.info(`Skipped:  ${state.totalSkipped}`);
-    core.info(`Passes:   ${state.passes.length}`);
-    core.info(`Duration: ${formatDuration(Date.now() - startTime)}`);
-    core.info(`Complete: ${state.complete ? 'YES' : 'NO (more work may remain)'}`);
-    core.info('='.repeat(50));
+    ui.blank();
+    ui.banner('FIX COMPLETE');
+    ui.scoreChange(state.scoreBefore, state.scoreAfter);
+    ui.stat('Fixed', String(state.totalFixed));
+    ui.stat('Skipped', String(state.totalSkipped));
+    ui.stat('Passes', String(state.passes.length));
+    ui.stat('Duration', formatDuration(Date.now() - startTime));
+    ui.stat('Complete', state.complete
+        ? ui.c('YES', ui.S.bold, ui.S.green)
+        : ui.c('NO', ui.S.yellow) + ui.c(' (more work may remain)', ui.S.gray));
+    core.info(ui.divider());
     (0, checkpoint_1.saveCheckpoint)(state);
     return state;
 }
@@ -33812,6 +33811,7 @@ const local_scan_1 = __nccwpck_require__(4708);
 const plugins_1 = __nccwpck_require__(6067);
 const fingerprint_1 = __nccwpck_require__(2659);
 const scan_cache_1 = __nccwpck_require__(1629);
+const ui = __importStar(__nccwpck_require__(5125));
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
     '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.swift', '.kt', '.scala',
@@ -34005,11 +34005,10 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
         return { issues: [], tokens: 0, apiCalls: 0 };
     const totalHotspots = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
     const avgTokens = Math.round(fingerprints.reduce((n, f) => n + f.tokens, 0) / fingerprints.length);
-    core.info(`  Generated ${fingerprints.length} fingerprints (avg ${avgTokens} tokens/file, ${totalHotspots} hotspots)`);
+    core.info(`  ${fingerprints.length} fingerprints ${ui.c(`(avg ${avgTokens} tokens, ${totalHotspots} hotspots)`, ui.S.gray)}`);
     // Pack into token-budgeted chunks
     const chunks = (0, fingerprint_1.packFingerprints)(fingerprints, model);
-    core.info(`  Packed into ${chunks.length} fingerprint chunks`);
-    core.info('');
+    core.info(`  ${chunks.length} chunks to scan`);
     const allIssues = [];
     let totalTokens = 0;
     let apiCalls = 0;
@@ -34017,7 +34016,7 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
         const chunkStart = Date.now();
         const fileCount = chunks[i].fingerprints.length;
         const progress = Math.round(((i + 1) / chunks.length) * 100);
-        core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Fingerprint scan: ${fileCount} files (~${chunks[i].totalTokens} tokens)`);
+        core.info(ui.progressBar(i + 1, chunks.length, 20, `${fileCount} files (~${chunks[i].totalTokens} tokens)`));
         try {
             const systemMsg = customPrompt
                 ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
@@ -34032,14 +34031,14 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
             allIssues.push(...chunkIssues);
             const elapsed = formatDuration(Date.now() - chunkStart);
             if (chunkIssues.length > 0) {
-                core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+                core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
             }
             else {
-                core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+                core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
             }
         }
         catch (e) {
-            core.warning(`         FAILED: ${e}`);
+            core.warning(`    FAILED: ${e}`);
         }
         if (i < chunks.length - 1) {
             await sleep(4500);
@@ -34108,36 +34107,32 @@ async function runScan(config, pluginCtx) {
     const scope = config.scanScope;
     const isPR = !!github.context.payload.pull_request;
     const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
-    core.info('');
-    core.info('='.repeat(50));
-    core.info('SLOPPY FREE SCAN');
-    core.info(`Model: ${config.githubModelsModel}`);
-    core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
-    core.info('='.repeat(50));
-    core.info('');
+    ui.section('SCAN');
+    ui.kv('Model', config.githubModelsModel);
+    ui.kv('Scope', `${scope}${scope === 'auto' ? (isPR ? ' \u2192 pr' : ' \u2192 full') : ''}`);
     let files;
     let scopeLabel;
     if (usePrDiff) {
-        core.info('Collecting PR changed files...');
+        core.info(`  Collecting PR changed files...`);
         const prFiles = await collectPrFiles(cwd);
         if (prFiles && prFiles.length > 0) {
             files = prFiles;
             scopeLabel = `PR #${github.context.payload.pull_request?.number} (${files.length} changed files)`;
         }
         else {
-            core.info('No PR files found or not in PR context. Falling back to full repo scan.');
+            core.info(`  No PR files found. Falling back to full repo scan.`);
             files = collectFiles(cwd);
             scopeLabel = `full repo (${files.length} files)`;
         }
     }
     else {
-        core.info('Collecting all source files...');
+        core.info(`  Collecting source files...`);
         files = collectFiles(cwd);
         scopeLabel = `full repo (${files.length} files)`;
     }
-    core.info(`Scope: ${scopeLabel}`);
+    ui.kv('Files', scopeLabel);
     if (files.length === 0) {
-        core.info('No source files found — nothing to scan.');
+        core.info(`  ${ui.c('No source files found', ui.S.gray)} — nothing to scan.`);
         return { issues: [], score: 100, summary: 'No source files found.', tokens: 0 };
     }
     // Log file type breakdown
@@ -34151,7 +34146,7 @@ async function runScan(config, pluginCtx) {
         .slice(0, 5)
         .map(([ext, count]) => `${ext}(${count})`)
         .join(', ');
-    core.info(`File types: ${topExts}`);
+    ui.kv('File types', topExts);
     // ================================================================
     // CACHE: Skip unchanged files
     // ================================================================
@@ -34162,29 +34157,28 @@ async function runScan(config, pluginCtx) {
     const scanStrategy = files.length <= DEEP_SCAN_THRESHOLD ? 'deep' : 'fingerprint';
     const { cachedIssues, uncachedFiles, cacheHits, cache } = (0, scan_cache_1.partitionByCache)(files, cwd, config.githubModelsModel, scanStrategy);
     if (cacheHits > 0) {
-        core.info(`Cache: ${cacheHits} files unchanged (${cachedIssues.length} cached issues), ${uncachedFiles.length} files to scan`);
+        ui.kv('Cache', `${cacheHits} files cached, ${uncachedFiles.length} to scan`);
     }
     const filesToScan = uncachedFiles;
     const allIssues = [...cachedIssues];
     let totalTokens = 0;
     let totalApiCalls = 0;
     if (filesToScan.length === 0) {
-        core.info('All files cached — no API calls needed!');
+        core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} All files cached — no API calls needed`);
     }
     else {
         // ================================================================
         // LAYER 0: Local static analysis (zero API calls)
         // ================================================================
-        core.info('');
-        core.info('── Layer 0: Local Analysis (no API calls) ──');
+        ui.section('Layer 0: Local Analysis');
         const extraPatterns = pluginCtx?.extraPatterns || [];
         const { issues: localIssues, flaggedFiles } = (0, local_scan_1.localScanAll)(filesToScan, cwd, extraPatterns);
         if (localIssues.length > 0) {
-            core.info(`  Found ${localIssues.length} issues locally (${flaggedFiles.size} files flagged)`);
+            core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files)`, ui.S.gray)}`);
             allIssues.push(...localIssues);
         }
         else {
-            core.info('  No local issues found');
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No local issues found`);
         }
         // ================================================================
         // LAYER 1: AI scan — strategy depends on file count
@@ -34204,21 +34198,19 @@ async function runScan(config, pluginCtx) {
             await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
         const customPrompt = pluginCtx?.customPrompt || '';
         if (useDeepScan) {
-            core.info('');
-            core.info(`── Layer 1: Deep Scan (${filesToScan.length} files — full content) ──`);
+            ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
             const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
             const codeBudget = (0, smart_split_1.calculateCodeBudget)(modelLimit);
             const chunks = (0, smart_split_1.prepareChunks)(filesToScan, cwd, config.githubModelsModel);
             const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
-            core.info(`  ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
-            core.info('');
+            core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
             for (let i = 0; i < chunks.length; i++) {
                 const chunkStart = Date.now();
                 const chunkFileNames = chunks[i].files.map(f => f.relativePath);
                 const progress = Math.round(((i + 1) / chunks.length) * 100);
                 const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
                 const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-                core.info(`  [${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
+                core.info(ui.progressBar(i + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
                 try {
                     const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
                     totalTokens += tokens;
@@ -34226,10 +34218,10 @@ async function runScan(config, pluginCtx) {
                     aiIssues.push(...chunkIssues);
                     const elapsed = formatDuration(Date.now() - chunkStart);
                     if (chunkIssues.length > 0) {
-                        core.info(`         Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+                        core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
                     }
                     else {
-                        core.info(`         Clean (${tokens} tokens, ${elapsed})`);
+                        core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
                     }
                 }
                 catch (e) {
@@ -34240,8 +34232,7 @@ async function runScan(config, pluginCtx) {
             }
         }
         else {
-            core.info('');
-            core.info(`── Layer 1: Fingerprint Scan (${filesToScan.length} files — compact) ──`);
+            ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
             const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
             aiIssues = fpResult.issues;
             totalTokens += fpResult.tokens;
@@ -34283,34 +34274,32 @@ async function runScan(config, pluginCtx) {
     const score = calculateScore(unique, loc);
     const totalElapsed = formatDuration(Date.now() - scanStart);
     // Summary
-    core.info('');
-    core.info('='.repeat(50));
-    core.info('SCAN COMPLETE');
-    core.info('='.repeat(50));
-    core.info(`Score:      ${score}/100 (${loc.toLocaleString()} LOC)`);
-    core.info(`Issues:     ${unique.length} found`);
-    core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
-    core.info(`Cache hits: ${cacheHits}/${files.length} files`);
-    core.info(`Tokens:     ${totalTokens.toLocaleString()}`);
-    core.info(`Duration:   ${totalElapsed}`);
+    ui.blank();
+    ui.banner('SCAN COMPLETE');
+    ui.score(score, `Score`);
+    ui.stat('LOC', loc.toLocaleString());
+    ui.stat('Issues', `${unique.length} found`);
+    ui.stat('API calls', String(totalApiCalls));
+    ui.stat('Cache', `${cacheHits}/${files.length} files`);
+    ui.stat('Tokens', totalTokens.toLocaleString());
+    ui.stat('Duration', totalElapsed);
     if (unique.length > 0) {
-        core.info('');
-        core.info('Issue breakdown:');
-        const byType = {};
+        ui.blank();
         const bySev = {};
+        const byType = {};
         for (const issue of unique) {
             byType[issue.type] = (byType[issue.type] || 0) + 1;
             bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
         }
-        for (const [sev, count] of Object.entries(bySev).sort()) {
-            core.info(`  ${sev}: ${count}`);
-        }
-        core.info('');
-        for (const [type, count] of Object.entries(byType).sort()) {
-            core.info(`  ${type}: ${count}`);
-        }
+        ui.severityBreakdown(bySev);
+        ui.blank();
+        const typeSummary = Object.entries(byType)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, count]) => `${type}(${count})`)
+            .join('  ');
+        core.info(`  ${ui.c(typeSummary, ui.S.gray)}`);
     }
-    core.info('='.repeat(50));
+    core.info(ui.divider());
     const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
     return { issues: unique, score, summary, tokens: totalTokens };
 }
@@ -35045,6 +35034,315 @@ function prepareChunks(filePaths, cwd, model) {
         return { files: group, totalCodeTokens, manifest };
     });
     return chunks;
+}
+
+
+/***/ }),
+
+/***/ 5125:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.S = exports.SYM = void 0;
+exports.divider = divider;
+exports.thinDivider = thinDivider;
+exports.blank = blank;
+exports.banner = banner;
+exports.section = section;
+exports.kv = kv;
+exports.fixed = fixed;
+exports.skipped = skipped;
+exports.issueFound = issueFound;
+exports.severityBreakdown = severityBreakdown;
+exports.progressBar = progressBar;
+exports.clusterHeader = clusterHeader;
+exports.treeItem = treeItem;
+exports.scoreChange = scoreChange;
+exports.score = score;
+exports.stat = stat;
+exports.agentText = agentText;
+exports.agentTool = agentTool;
+exports.agentToolProgress = agentToolProgress;
+exports.agentToolSummary = agentToolSummary;
+exports.agentSystem = agentSystem;
+exports.agentResult = agentResult;
+exports.agentHeartbeat = agentHeartbeat;
+exports.agentStreamStart = agentStreamStart;
+exports.agentDone = agentDone;
+exports.agentStderr = agentStderr;
+exports.startGroup = startGroup;
+exports.endGroup = endGroup;
+exports.passSummary = passSummary;
+exports.finalResults = finalResults;
+exports.c = c;
+const core = __importStar(__nccwpck_require__(7484));
+// ---------------------------------------------------------------------------
+// ANSI styling — GitHub Actions supports ANSI but resets styles on every
+// newline, so each line must be self-contained with its own escape codes.
+// ---------------------------------------------------------------------------
+const ESC = '\x1b';
+const S = {
+    reset: `${ESC}[0m`,
+    bold: `${ESC}[1m`,
+    dim: `${ESC}[2m`,
+    red: `${ESC}[31m`,
+    green: `${ESC}[32m`,
+    yellow: `${ESC}[33m`,
+    blue: `${ESC}[34m`,
+    magenta: `${ESC}[35m`,
+    cyan: `${ESC}[36m`,
+    white: `${ESC}[37m`,
+    gray: `${ESC}[90m`,
+    brightGreen: `${ESC}[92m`,
+    brightYellow: `${ESC}[93m`,
+    brightCyan: `${ESC}[96m`,
+    brightWhite: `${ESC}[97m`,
+};
+exports.S = S;
+// Apply ANSI styles to text. Must call on every line.
+function c(text, ...styles) {
+    if (!styles.length)
+        return text;
+    return styles.join('') + text + S.reset;
+}
+// ---------------------------------------------------------------------------
+// Unicode symbols (NOT emoji — these render reliably in monospace fonts)
+// ---------------------------------------------------------------------------
+exports.SYM = {
+    check: '\u2713', // ✓
+    cross: '\u2717', // ✗
+    bullet: '\u25CF', // ●
+    diamond: '\u25C6', // ◆
+    arrow: '\u25B8', // ▸
+    bar: '\u2588', // █
+    barLight: '\u2591', // ░
+    dash: '\u2500', // ─
+    doubleDash: '\u2550', // ═
+    vline: '\u2502', // │
+    teeRight: '\u251C', // ├
+    cornerRight: '\u2514', // └
+    dotted: '\u2504', // ┄
+};
+// ---------------------------------------------------------------------------
+// Layout primitives
+// ---------------------------------------------------------------------------
+const W = 64; // Standard width for dividers
+function divider(char = exports.SYM.doubleDash) {
+    return c(char.repeat(W), S.cyan);
+}
+function thinDivider() {
+    return c(exports.SYM.dash.repeat(W), S.gray);
+}
+function blank() {
+    core.info('');
+}
+// ---------------------------------------------------------------------------
+// Banner — the main header block
+// ---------------------------------------------------------------------------
+function banner(title, subtitle) {
+    core.info(divider());
+    core.info(c(`  ${title}`, S.bold, S.brightWhite));
+    if (subtitle) {
+        core.info(c(`  ${subtitle}`, S.gray));
+    }
+    core.info(divider());
+}
+// ---------------------------------------------------------------------------
+// Section headers
+// ---------------------------------------------------------------------------
+function section(title) {
+    const padded = ` ${title} `;
+    const remaining = Math.max(0, W - padded.length - 2);
+    const line = exports.SYM.dash.repeat(2) + padded + exports.SYM.dash.repeat(remaining);
+    blank();
+    core.info(c(line, S.bold, S.cyan));
+}
+// ---------------------------------------------------------------------------
+// Key-value pairs (aligned)
+// ---------------------------------------------------------------------------
+function kv(key, value, indent = 2) {
+    const pad = ' '.repeat(indent);
+    const keyPad = key.padEnd(14);
+    core.info(`${pad}${c(keyPad, S.gray)}${value}`);
+}
+// ---------------------------------------------------------------------------
+// Status indicators for fix results
+// ---------------------------------------------------------------------------
+function fixed(file, desc, sha) {
+    const shaStr = sha ? c(` ${sha.slice(0, 7)}`, S.gray) : '';
+    core.info(`  ${c(exports.SYM.check, S.bold, S.green)} ${c('FIXED', S.bold, S.green)}${shaStr}  ${file} ${c(exports.SYM.dash, S.gray)} ${desc}`);
+}
+function skipped(file, desc, reason, duration) {
+    const dur = duration ? c(` (${duration})`, S.gray) : '';
+    const rsn = reason ? c(`: ${reason}`, S.gray) : '';
+    core.info(`  ${c(exports.SYM.cross, S.yellow)} ${c('SKIP', S.yellow)}${dur}  ${file} ${c(exports.SYM.dash, S.gray)} ${desc}${rsn}`);
+}
+function issueFound(file, line, desc, severity, type) {
+    const sevColor = severity === 'critical' || severity === 'high' ? S.red
+        : severity === 'medium' ? S.yellow
+            : S.gray;
+    const lineStr = line ? `:${line}` : '';
+    core.info(`  ${c(exports.SYM.bullet, sevColor)} ${c(`[${severity}/${type}]`, sevColor)} ${file}${lineStr} ${c(exports.SYM.dash, S.gray)} ${desc}`);
+}
+// ---------------------------------------------------------------------------
+// Severity breakdown
+// ---------------------------------------------------------------------------
+function severityBreakdown(counts) {
+    const order = ['critical', 'high', 'medium', 'low'];
+    const parts = [];
+    for (const sev of order) {
+        const n = counts[sev] || 0;
+        if (n === 0)
+            continue;
+        const col = sev === 'critical' ? S.red
+            : sev === 'high' ? S.red
+                : sev === 'medium' ? S.yellow
+                    : S.gray;
+        parts.push(`${c(exports.SYM.bullet, col)} ${c(String(n), S.bold)} ${sev}`);
+    }
+    if (parts.length > 0) {
+        core.info(`  ${parts.join('   ')}`);
+    }
+}
+// ---------------------------------------------------------------------------
+// Progress bar
+// ---------------------------------------------------------------------------
+function progressBar(current, total, width = 30, label) {
+    const pct = total > 0 ? current / total : 0;
+    const filled = Math.round(pct * width);
+    const empty = width - filled;
+    const bar = c(exports.SYM.bar.repeat(filled), S.green) + c(exports.SYM.barLight.repeat(empty), S.gray);
+    const pctStr = c(`${Math.round(pct * 100)}%`, S.bold);
+    const lbl = label ? `  ${c(label, S.gray)}` : '';
+    return `  ${bar}  ${pctStr}${lbl}`;
+}
+// ---------------------------------------------------------------------------
+// Cluster display
+// ---------------------------------------------------------------------------
+function clusterHeader(idx, total, dir, issueCount) {
+    core.info(`  ${c(`[${idx}/${total}]`, S.bold, S.cyan)} ${c(dir, S.bold)}${c(`/`, S.gray)} ${c(`(${issueCount} issue${issueCount !== 1 ? 's' : ''})`, S.gray)}`);
+}
+// ---------------------------------------------------------------------------
+// Tree structure for agent output
+// ---------------------------------------------------------------------------
+function treeItem(text, isLast) {
+    const prefix = isLast ? exports.SYM.cornerRight : exports.SYM.teeRight;
+    core.info(`    ${c(prefix + exports.SYM.dash, S.gray)} ${text}`);
+}
+// ---------------------------------------------------------------------------
+// Score display
+// ---------------------------------------------------------------------------
+function scoreChange(before, after) {
+    const diff = after - before;
+    const diffStr = diff > 0 ? c(`(+${diff})`, S.bold, S.green)
+        : diff < 0 ? c(`(${diff})`, S.red)
+            : c('(no change)', S.gray);
+    core.info(`  ${c('Score', S.gray).padEnd(28)}${c(String(before), S.dim)} ${c(exports.SYM.arrow, S.cyan)} ${c(String(after), S.bold, S.brightWhite)}  ${diffStr}`);
+}
+function score(value, label = 'Score') {
+    const col = value >= 80 ? S.green : value >= 50 ? S.yellow : S.red;
+    core.info(`  ${c(label.padEnd(14), S.gray)}${c(`${value}/100`, S.bold, col)}`);
+}
+// ---------------------------------------------------------------------------
+// Stat line
+// ---------------------------------------------------------------------------
+function stat(label, value) {
+    core.info(`  ${c(label.padEnd(14), S.gray)}${c(String(value), S.brightWhite)}`);
+}
+// ---------------------------------------------------------------------------
+// Agent streaming output helpers
+// ---------------------------------------------------------------------------
+function agentText(text) {
+    core.info(c(`  ${exports.SYM.vline} ${text}`, S.dim));
+}
+function agentTool(name) {
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`[tool: ${name}]`, S.blue)}`);
+}
+function agentToolProgress(name, elapsed) {
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`${exports.SYM.arrow} ${name}`, S.blue)} ${c(`${elapsed}s`, S.gray)}`);
+}
+function agentToolSummary(summary) {
+    const preview = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${preview}`);
+}
+function agentSystem(subtype) {
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`[${subtype}]`, S.magenta)}`);
+}
+function agentResult(subtype, turns, cost) {
+    const costStr = cost ? c(` $${cost.toFixed(3)}`, S.gray) : '';
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`[result: ${subtype}, ${turns} turns${costStr ? ',' : ''}${costStr}]`, S.cyan)}`);
+}
+function agentHeartbeat(elapsed, events) {
+    core.info(c(`  ${exports.SYM.dotted} agent running (${elapsed}s, ${events} events)`, S.gray));
+}
+function agentStreamStart(elapsed, bytes) {
+    core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`stream started after ${elapsed}s (${bytes} bytes)`, S.gray)}`);
+}
+function agentDone(elapsed, events) {
+    core.info(`  ${c(exports.SYM.check, S.green)} ${c(`Agent finished in ${elapsed}s (${events} events)`, S.gray)}`);
+}
+function agentStderr(line) {
+    core.info(`  ${c(exports.SYM.vline, S.red)} ${c(line, S.red)}`);
+}
+// ---------------------------------------------------------------------------
+// Groups (collapsible sections in GitHub Actions)
+// ---------------------------------------------------------------------------
+function startGroup(name) {
+    core.startGroup(name);
+}
+function endGroup() {
+    core.endGroup();
+}
+// ---------------------------------------------------------------------------
+// Pass summary block
+// ---------------------------------------------------------------------------
+function passSummary(pass, fixedCount, skippedCount, duration) {
+    core.info(thinDivider());
+    core.info(`  ${c(`Pass ${pass}`, S.bold)}  ${c(exports.SYM.check, S.green)} ${c(String(fixedCount), S.bold, S.green)} fixed  ${c(exports.SYM.cross, S.yellow)} ${c(String(skippedCount), S.yellow)} skipped  ${c(exports.SYM.diamond, S.gray)} ${c(duration, S.gray)}`);
+}
+// ---------------------------------------------------------------------------
+// Final results block
+// ---------------------------------------------------------------------------
+function finalResults() {
+    blank();
+    core.info(divider());
+    core.info(c('  R E S U L T S', S.bold, S.brightWhite));
+    core.info(divider());
 }
 
 
