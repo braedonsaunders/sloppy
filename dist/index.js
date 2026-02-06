@@ -29965,6 +29965,9 @@ exports.installAgent = installAgent;
 exports.runAgent = runAgent;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const os = __importStar(__nccwpck_require__(857));
 async function installAgent(agent) {
     if (agent === 'claude') {
         await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
@@ -29973,16 +29976,97 @@ async function installAgent(agent) {
         await exec.exec('npm', ['install', '-g', '@openai/codex']);
     }
 }
+// Runner script executed in a separate Node.js process to use the SDK.
+// This gives us real-time streaming events via stdout JSONL, bypassing
+// the CLI's -p mode which buffers all output until completion.
+const CLAUDE_RUNNER = `
+const fs = require('fs');
+
+async function main() {
+  const prompt = fs.readFileSync(process.argv[2], 'utf-8');
+  const opts = JSON.parse(process.argv[3]);
+
+  // Try both package names (package was renamed)
+  let query;
+  try { query = require('@anthropic-ai/claude-code').query; } catch {}
+  if (!query) {
+    try { query = require('@anthropic-ai/claude-agent-sdk').query; } catch {}
+  }
+  if (!query) {
+    process.stderr.write('SDK_NOT_FOUND\\n');
+    process.exit(2);
+  }
+
+  const controller = new AbortController();
+  if (opts.timeout > 0) {
+    setTimeout(() => controller.abort(), opts.timeout);
+  }
+
+  try {
+    for await (const msg of query({
+      prompt,
+      options: {
+        maxTurns: opts.maxTurns || undefined,
+        model: opts.model || undefined,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+        abortController: controller,
+      },
+    })) {
+      process.stdout.write(JSON.stringify(msg) + '\\n');
+    }
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      process.stderr.write('TIMEOUT\\n');
+      process.exit(1);
+    }
+    process.stderr.write((err.message || String(err)) + '\\n');
+    process.exit(1);
+  }
+}
+
+main();
+`;
 async function runAgent(agent, prompt, options) {
-    let stdout = '';
-    let stderr = '';
-    let agentResult = '';
-    let lineBuffer = '';
+    if (agent === 'claude') {
+        const result = await runClaudeSDK(prompt, options);
+        // Exit code 2 = SDK not found, fall back to CLI
+        if (result.exitCode === 2) {
+            core.warning('Claude SDK query() not available, falling back to CLI (no streaming)');
+            return runClaudeCLI(prompt, options);
+        }
+        return result;
+    }
+    // Codex: CLI only
+    return runCLI('codex', ['exec', '--full-auto', '--quiet', prompt], options);
+}
+async function runClaudeSDK(prompt, options) {
     const verbose = options?.verbose ?? false;
     const execStart = Date.now();
-    let firstStdoutChunk = true;
+    let agentResult = '';
+    let lineBuffer = '';
     let eventCount = 0;
-    const processStreamLine = (line) => {
+    let firstChunk = true;
+    let stderr = '';
+    // Write runner script and prompt to temp files
+    const tmpDir = os.tmpdir();
+    const ts = Date.now();
+    const scriptPath = path.join(tmpDir, `sloppy-runner-${ts}.js`);
+    const promptPath = path.join(tmpDir, `sloppy-prompt-${ts}.txt`);
+    fs.writeFileSync(scriptPath, CLAUDE_RUNNER);
+    fs.writeFileSync(promptPath, prompt);
+    const opts = JSON.stringify({
+        maxTurns: options?.maxTurns || 0,
+        model: options?.model || '',
+        timeout: options?.timeout || 0,
+    });
+    // Find global module path so the runner script can require the SDK
+    let globalRoot = '';
+    await exec.exec('npm', ['root', '-g'], {
+        listeners: { stdout: (d) => { globalRoot += d.toString().trim(); } },
+        silent: true,
+    });
+    const processLine = (line) => {
         const trimmed = line.trim();
         if (!trimmed)
             return;
@@ -30009,30 +30093,107 @@ async function runAgent(agent, prompt, options) {
                         }
                     }
                 }
-                else if (event.type === 'tool_use') {
-                    const name = event.tool?.name || event.name || 'unknown';
-                    core.info(`  | [tool: ${name}]`);
-                }
-                else if (event.type === 'tool_result') {
-                    // tool completed, no extra logging needed
-                }
                 else if (event.type === 'system') {
                     core.info(`  | [system: ${event.subtype || 'init'}]`);
                 }
             }
         }
         catch {
-            // Not valid JSON — log raw line in verbose mode
             if (verbose)
                 core.info(`  | ${trimmed.slice(0, 300)}`);
         }
     };
-    // Heartbeat: log every 30s while agent is running so the user knows it's alive
+    // Heartbeat: log periodically so the user knows the agent is alive
     let heartbeat;
     if (verbose) {
         heartbeat = setInterval(() => {
             const elapsed = Math.round((Date.now() - execStart) / 1000);
-            core.info(`  ... agent running (${elapsed}s, ${eventCount} events, stdout: ${stdout.length} bytes)`);
+            core.info(`  ... agent running (${elapsed}s, ${eventCount} events)`);
+        }, 30_000);
+    }
+    const execOptions = {
+        listeners: {
+            stdout: (data) => {
+                const chunk = data.toString();
+                if (firstChunk && verbose) {
+                    firstChunk = false;
+                    const elapsed = Math.round((Date.now() - execStart) / 1000);
+                    core.info(`  [stream] First output after ${elapsed}s (${chunk.length} bytes)`);
+                }
+                lineBuffer += chunk;
+                const lines = lineBuffer.split('\n');
+                lineBuffer = lines.pop() || '';
+                for (const line of lines)
+                    processLine(line);
+            },
+            stderr: (data) => {
+                const chunk = data.toString();
+                stderr += chunk;
+                if (verbose) {
+                    for (const line of chunk.split('\n')) {
+                        const trimmed = line.trim();
+                        if (trimmed)
+                            core.info(`  |err| ${trimmed}`);
+                    }
+                }
+            },
+        },
+        ignoreReturnCode: true,
+        silent: true,
+        env: {
+            ...process.env,
+            NODE_PATH: globalRoot,
+        },
+    };
+    let exitCode;
+    try {
+        // Safety timeout in parent (+30s buffer so the runner's internal abort fires first)
+        const parentTimeout = options?.timeout ? options.timeout + 30_000 : undefined;
+        exitCode = await execWithTimeout('node', [scriptPath, promptPath, opts], execOptions, parentTimeout);
+        if (lineBuffer.trim())
+            processLine(lineBuffer);
+    }
+    finally {
+        if (heartbeat)
+            clearInterval(heartbeat);
+        try {
+            fs.unlinkSync(scriptPath);
+        }
+        catch { }
+        try {
+            fs.unlinkSync(promptPath);
+        }
+        catch { }
+    }
+    if (verbose) {
+        const elapsed = Math.round((Date.now() - execStart) / 1000);
+        core.info(`  [stream] Agent finished in ${elapsed}s (${eventCount} events)`);
+    }
+    if (stderr && exitCode !== 0) {
+        core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
+    }
+    return { output: agentResult, exitCode };
+}
+// CLI fallback for claude (--output-format json, no streaming)
+async function runClaudeCLI(prompt, options) {
+    const args = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
+    if (options?.maxTurns)
+        args.push('--max-turns', String(options.maxTurns));
+    if (options?.model)
+        args.push('--model', options.model);
+    return runCLI('claude', args, options);
+}
+// Generic CLI runner with heartbeat and timeout
+async function runCLI(cmd, args, options) {
+    let stdout = '';
+    let stderr = '';
+    const verbose = options?.verbose ?? false;
+    const execStart = Date.now();
+    let heartbeat;
+    if (verbose) {
+        heartbeat = setInterval(() => {
+            const elapsed = Math.round((Date.now() - execStart) / 1000);
+            core.info(`  ... agent running (${elapsed}s, stdout: ${stdout.length} bytes)`);
         }, 30_000);
     }
     const execOptions = {
@@ -30040,24 +30201,11 @@ async function runAgent(agent, prompt, options) {
             stdout: (data) => {
                 const chunk = data.toString();
                 stdout += chunk;
-                if (firstStdoutChunk && verbose) {
-                    firstStdoutChunk = false;
-                    const elapsed = Math.round((Date.now() - execStart) / 1000);
-                    core.info(`  [stream] First output received after ${elapsed}s (${chunk.length} bytes)`);
-                }
-                if (agent === 'claude') {
-                    lineBuffer += chunk;
-                    const lines = lineBuffer.split('\n');
-                    lineBuffer = lines.pop() || '';
-                    for (const line of lines) {
-                        processStreamLine(line);
-                    }
-                }
-                else if (verbose) {
+                if (verbose) {
                     for (const line of chunk.split('\n')) {
                         const trimmed = line.trim();
                         if (trimmed)
-                            core.info(`  | ${trimmed}`);
+                            core.info(`  | ${trimmed.slice(0, 300)}`);
                     }
                 }
             },
@@ -30079,25 +30227,7 @@ async function runAgent(agent, prompt, options) {
     };
     let exitCode;
     try {
-        if (agent === 'claude') {
-            const args = ['-p', prompt, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
-            if (options?.maxTurns)
-                args.push('--max-turns', String(options.maxTurns));
-            if (options?.model)
-                args.push('--model', options.model);
-            if (verbose)
-                args.push('--verbose');
-            exitCode = await execWithTimeout('claude', args, execOptions, options?.timeout);
-            // Process any remaining buffered data
-            if (lineBuffer.trim())
-                processStreamLine(lineBuffer);
-        }
-        else {
-            const args = ['exec', '--full-auto', '--quiet', prompt];
-            if (options?.model)
-                args.push('--model', options.model);
-            exitCode = await execWithTimeout('codex', args, execOptions, options?.timeout);
-        }
+        exitCode = await execWithTimeout(cmd, args, execOptions, options?.timeout);
     }
     finally {
         if (heartbeat)
@@ -30105,13 +30235,12 @@ async function runAgent(agent, prompt, options) {
     }
     if (verbose) {
         const elapsed = Math.round((Date.now() - execStart) / 1000);
-        core.info(`  [stream] Agent finished in ${elapsed}s (${eventCount} events, stdout: ${stdout.length} bytes, stderr: ${stderr.length} bytes)`);
+        core.info(`  [done] Agent finished in ${elapsed}s (stdout: ${stdout.length} bytes)`);
     }
     if (stderr && exitCode !== 0) {
         core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
     }
-    const output = agent === 'claude' ? agentResult : stdout;
-    return { output, exitCode };
+    return { output: stdout, exitCode };
 }
 async function execWithTimeout(cmd, args, options, timeoutMs) {
     if (!timeoutMs || timeoutMs <= 0) {
@@ -30130,7 +30259,6 @@ async function execWithTimeout(cmd, args, options, timeoutMs) {
     const exitCode = await Promise.race([execPromise, timeoutPromise]);
     clearTimeout(timer);
     if (timedOut) {
-        // The process may still be running, but the caller will treat this as a failure
         core.warning('Agent process may still be running in background after timeout');
     }
     return exitCode;
