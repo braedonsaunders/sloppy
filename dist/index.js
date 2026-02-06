@@ -32060,22 +32060,61 @@ const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 // --- Helpers ---
 function severityIcon(s) {
-    const map = { critical: '!!', high: '!', medium: '~', low: '.' };
-    return map[s] || '?';
+    const map = { critical: '\u{1F534}', high: '\u{1F7E0}', medium: '\u{1F7E1}', low: '\u{1F535}' };
+    return map[s] || '\u26AA';
+}
+function severityLabel(s) {
+    const map = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
+    return map[s] || s;
+}
+function typeIcon(t) {
+    const map = {
+        security: '\u{1F512}', bugs: '\u{1F41B}', types: '\u{1F4DD}', lint: '\u{1F9F9}',
+        'dead-code': '\u{1F480}', stubs: '\u{1F3D7}\uFE0F', duplicates: '\u{1F4CB}', coverage: '\u{1F9EA}',
+    };
+    return map[t] || '\u{1F4CC}';
+}
+function scoreEmoji(score) {
+    if (score >= 90)
+        return '\u{1F7E2}';
+    if (score >= 70)
+        return '\u{1F535}';
+    if (score >= 50)
+        return '\u{1F7E1}';
+    if (score >= 30)
+        return '\u{1F7E0}';
+    return '\u{1F534}';
 }
 function scoreGrade(score) {
     if (score >= 90)
-        return 'excellent';
+        return 'Excellent';
     if (score >= 70)
-        return 'good';
+        return 'Good';
     if (score >= 50)
-        return 'fair';
+        return 'Fair';
     if (score >= 30)
-        return 'poor';
-    return 'critical';
+        return 'Poor';
+    return 'Critical';
+}
+function scoreLetter(score) {
+    if (score >= 90)
+        return 'A';
+    if (score >= 70)
+        return 'B';
+    if (score >= 50)
+        return 'C';
+    if (score >= 30)
+        return 'D';
+    return 'F';
 }
 function progressBar(score, w = 20) {
     const filled = Math.round((score / 100) * w);
+    return '\u2588'.repeat(filled) + '\u2591'.repeat(w - filled);
+}
+function miniBar(count, max, w = 10) {
+    if (max === 0)
+        return '\u2591'.repeat(w);
+    const filled = Math.max(1, Math.round((count / max) * w));
     return '\u2588'.repeat(filled) + '\u2591'.repeat(w - filled);
 }
 function fmtDuration(ms) {
@@ -32094,6 +32133,16 @@ function groupBy(issues) {
         (g[i.type] ??= []).push(i);
     return g;
 }
+function severityOrder(s) {
+    const order = ['critical', 'high', 'medium', 'low'];
+    const idx = order.indexOf(s);
+    return idx >= 0 ? idx : 999;
+}
+function worstSeverity(issues) {
+    return issues.reduce((w, i) => {
+        return severityOrder(i.severity) < severityOrder(w) ? i.severity : w;
+    }, 'low');
+}
 // --- PR Body for Fix Mode ---
 function buildFixPRBody(state) {
     const fixed = state.issues.filter(i => i.status === 'fixed');
@@ -32101,145 +32150,253 @@ function buildFixPRBody(state) {
     const byType = groupBy(fixed);
     const dur = state.passes.reduce((s, p) => s + p.durationMs, 0);
     const delta = state.scoreAfter - state.scoreBefore;
-    let md = `## Sloppy Report\n\n`;
-    md += `**Score: ${state.scoreBefore} → ${state.scoreAfter}** (${delta >= 0 ? '+' : ''}${delta})\n\n`;
-    md += `${progressBar(state.scoreAfter)} ${state.scoreAfter}/100\n\n---\n\n`;
-    md += `| Metric | Value |\n|--------|-------|\n`;
-    md += `| Fixed | **${state.totalFixed}** |\n`;
-    md += `| Skipped | ${state.totalSkipped} |\n`;
-    md += `| Passes | ${state.passes.length} |\n`;
-    md += `| Duration | ${fmtDuration(dur)} |\n\n`;
+    const sign = delta >= 0 ? '+' : '';
+    let md = `<div align="center">\n\n`;
+    md += `## \u{1F9F9} Sloppy Fix Report\n\n`;
+    md += `<table>\n<tr>\n`;
+    md += `<td align="center" width="120">\n\n${scoreEmoji(state.scoreBefore)}\n### ${state.scoreBefore}\n**Before**\n\n</td>\n`;
+    md += `<td align="center" width="60">\n\n### \u2192\n\n</td>\n`;
+    md += `<td align="center" width="120">\n\n${scoreEmoji(state.scoreAfter)}\n### ${state.scoreAfter}\n**After**\n\n</td>\n`;
+    md += `<td align="center" width="100">\n\n### ${sign}${delta}\n**Delta**\n\n</td>\n`;
+    md += `</tr>\n</table>\n\n`;
+    md += `\`${progressBar(state.scoreAfter)}\` ${state.scoreAfter}/100 \u00B7 **${scoreGrade(state.scoreAfter)}**\n\n`;
+    md += `</div>\n\n---\n\n`;
+    md += `<table>\n<tr>\n`;
+    md += `<td align="center">\n\n**${state.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
+    md += `<td align="center">\n\n**${state.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
+    md += `<td align="center">\n\n**${state.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
+    md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+    md += `</tr>\n</table>\n\n`;
     if (fixed.length > 0) {
-        md += `### Fixed (${fixed.length})\n\n`;
-        for (const [type, issues] of Object.entries(byType)) {
-            md += `<details>\n<summary>${type} (${issues.length})</summary>\n\n`;
-            md += `| File | Issue | Commit |\n|------|-------|--------|\n`;
+        const sortedTypes = Object.entries(byType).sort((a, b) => b[1].length - a[1].length);
+        md += `### \u2705 Fixed Issues (${fixed.length})\n\n`;
+        for (const [type, issues] of sortedTypes) {
+            md += `<details open>\n<summary>${typeIcon(type)} <strong>${type}</strong> \u2014 ${issues.length} fixed</summary>\n\n`;
+            md += `| | File | Issue | Commit |\n|:---:|:-----|:------|:-------|\n`;
             for (const i of issues) {
                 const sha = i.commitSha?.slice(0, 7) || '-';
                 const loc = i.line ? `${i.file}:${i.line}` : i.file;
-                md += `| \`${loc}\` | ${i.description} | \`${sha}\` |\n`;
+                md += `| ${severityIcon(i.severity)} | \`${loc}\` | ${i.description} | \`${sha}\` |\n`;
             }
             md += `\n</details>\n\n`;
         }
     }
     if (skipped.length > 0) {
-        md += `<details>\n<summary>Skipped (${skipped.length})</summary>\n\n`;
-        md += `| File | Issue | Reason |\n|------|-------|--------|\n`;
+        md += `<details>\n<summary>\u23ED\uFE0F Skipped Issues (${skipped.length})</summary>\n\n`;
+        md += `| | File | Issue | Reason |\n|:---:|:-----|:------|:-------|\n`;
         for (const i of skipped) {
-            md += `| \`${i.file}\` | ${i.description} | ${i.skipReason || '-'} |\n`;
+            md += `| ${severityIcon(i.severity)} | \`${i.file}\` | ${i.description} | ${i.skipReason || '-'} |\n`;
         }
         md += `\n</details>\n\n`;
     }
-    md += `<details open>\n<summary>Pass Breakdown</summary>\n\n`;
-    md += `| Pass | Found | Fixed | Skipped | Duration |\n|------|-------|-------|---------|----------|\n`;
+    md += `<details>\n<summary>\u{1F504} Pass Breakdown</summary>\n\n`;
+    md += `| Pass | Found | Fixed | Skipped | Duration |\n|:----:|:-----:|:-----:|:-------:|:--------:|\n`;
     for (const p of state.passes) {
-        md += `| ${p.number} | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+        md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
     }
     md += `\n</details>\n\n---\n\n`;
-    md += `Merge to accept all fixes. Close to reject. Revert individual commits as needed.\n\n`;
-    md += `*[Sloppy](https://github.com/braedonsaunders/sloppy) — relentless AI code cleanup*`;
+    md += `> **Merge** to accept all fixes \u00B7 **Close** to reject \u00B7 Revert individual commits as needed\n\n`;
+    md += `<div align="center">\n<sub>\u{1F9F9} <a href="https://github.com/braedonsaunders/sloppy">Sloppy</a> \u2014 relentless AI code cleanup</sub>\n</div>\n`;
     return md;
 }
 // --- PR Comment for Scan Mode ---
 function buildScanComment(result) {
     const grouped = groupBy(result.issues);
-    let md = `## Sloppy Scan\n\n`;
-    md += `**Score: ${result.score}/100** — ${scoreGrade(result.score)}\n\n`;
-    md += `${progressBar(result.score)} ${result.score}/100\n\n`;
+    let md = `<div align="center">\n\n`;
+    md += `## \u{1F9F9} Sloppy Scan\n\n`;
+    md += `${scoreEmoji(result.score)} **${result.score}/100** \u00B7 ${scoreGrade(result.score)} \u00B7 Grade ${scoreLetter(result.score)}\n\n`;
+    md += `\`${progressBar(result.score)}\`\n\n`;
+    md += `</div>\n\n`;
     if (result.issues.length === 0) {
-        md += `No issues found. Code is clean.\n`;
+        md += `> [!NOTE]\n> No issues found \u2014 your code is clean! \u2728\n`;
         return md;
     }
-    md += `| Type | Count | Worst |\n|------|-------|-------|\n`;
-    for (const [type, issues] of Object.entries(grouped)) {
-        const worst = issues.reduce((w, i) => {
-            const order = ['critical', 'high', 'medium', 'low'];
-            return order.indexOf(i.severity) < order.indexOf(w) ? i.severity : w;
-        }, 'low');
-        md += `| ${type} | ${issues.length} | ${worst} |\n`;
+    const sortedTypes = Object.entries(grouped).sort((a, b) => {
+        return severityOrder(worstSeverity(a[1])) - severityOrder(worstSeverity(b[1]));
+    });
+    const maxCount = Math.max(...Object.values(grouped).map(g => g.length));
+    md += `| | Category | Issues | Severity | Distribution |\n`;
+    md += `|:---:|:---------|:------:|:--------:|:-------------|\n`;
+    for (const [type, issues] of sortedTypes) {
+        const worst = worstSeverity(issues);
+        md += `| ${typeIcon(type)} | **${type}** | ${issues.length} | ${severityIcon(worst)} ${severityLabel(worst)} | \`${miniBar(issues.length, maxCount, 10)}\` |\n`;
     }
-    md += `\nAdd an API key and set \`mode: fix\` to auto-fix these issues.\n\n`;
-    md += `*[Sloppy](https://github.com/braedonsaunders/sloppy)*`;
+    md += `\n> [!TIP]\n> Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more \u2192](https://github.com/braedonsaunders/sloppy)\n\n`;
+    md += `<div align="center">\n<sub>\u{1F9F9} <a href="https://github.com/braedonsaunders/sloppy">Sloppy</a> \u2014 relentless AI code cleanup</sub>\n</div>\n`;
     return md;
 }
 // --- Job Summary ---
 async function writeJobSummary(data) {
-    let md = `## Sloppy Results\n\n`;
+    let md = '';
     if ('summary' in data) {
+        // ===================== SCAN MODE =====================
         const r = data;
-        md += `### Score: ${r.score}/100 — ${scoreGrade(r.score)}\n\n`;
-        md += `${progressBar(r.score)} ${r.score}/100\n\n`;
+        const grade = scoreGrade(r.score);
+        const emoji = scoreEmoji(r.score);
+        const letter = scoreLetter(r.score);
+        // ---- Hero header ----
+        md += `<div align="center">\n\n`;
+        md += `# \u{1F9F9} Sloppy \u2014 Code Quality Report\n\n`;
+        // ---- Score card ----
+        md += `<table>\n<tr>\n`;
+        md += `<td align="center" width="200">\n\n`;
+        md += `${emoji}\n### ${r.score} / 100\n\n`;
+        md += `\`${progressBar(r.score, 16)}\`\n\n`;
+        md += `**${grade}** \u00B7 Grade **${letter}**\n\n`;
+        md += `</td>\n<td>\n\n`;
         md += `${r.summary}\n\n`;
         if (r.issues.length > 0) {
-            // Issue summary table
-            md += `| Type | Count | Worst Severity |\n|------|-------|---------|\n`;
-            for (const [type, issues] of Object.entries(groupBy(r.issues))) {
-                const worst = issues.reduce((w, i) => {
-                    const order = ['critical', 'high', 'medium', 'low'];
-                    return order.indexOf(i.severity) < order.indexOf(w) ? i.severity : w;
-                }, 'low');
-                md += `| ${type} | ${issues.length} | ${worst} |\n`;
+            const catCount = Object.keys(groupBy(r.issues)).length;
+            md += `\u{1F50D} **${r.issues.length} issue${r.issues.length !== 1 ? 's' : ''}** found across **${catCount} categor${catCount !== 1 ? 'ies' : 'y'}**\n\n`;
+        }
+        else {
+            md += `\u2728 **No issues found** \u2014 your code is clean!\n\n`;
+        }
+        md += `</td>\n</tr>\n</table>\n\n`;
+        md += `</div>\n\n`;
+        if (r.issues.length > 0) {
+            md += `---\n\n`;
+            // ---- Issue breakdown ----
+            const grouped = groupBy(r.issues);
+            const maxCount = Math.max(...Object.values(grouped).map(g => g.length));
+            const sortedTypes = Object.entries(grouped).sort((a, b) => {
+                return severityOrder(worstSeverity(a[1])) - severityOrder(worstSeverity(b[1]));
+            });
+            md += `### \u{1F4CA} Issue Breakdown\n\n`;
+            md += `| | Category | Issues | Severity | Distribution |\n`;
+            md += `|:---:|:---------|:------:|:--------:|:-------------|\n`;
+            for (const [type, issues] of sortedTypes) {
+                const worst = worstSeverity(issues);
+                md += `| ${typeIcon(type)} | **${type}** | ${issues.length} | ${severityIcon(worst)} ${severityLabel(worst)} | \`${miniBar(issues.length, maxCount, 12)}\` |\n`;
             }
             md += '\n';
-            // Full issues list (collapsible)
-            md += `<details>\n<summary>All issues (${r.issues.length})</summary>\n\n`;
-            md += `| Severity | Type | File | Line | Description |\n|----------|------|------|------|-------------|\n`;
-            const sorted = [...r.issues].sort((a, b) => {
-                const order = ['critical', 'high', 'medium', 'low'];
-                return order.indexOf(a.severity) - order.indexOf(b.severity);
-            });
-            for (const i of sorted) {
-                md += `| ${i.severity} | ${i.type} | \`${i.file}\` | ${i.line || '-'} | ${i.description} |\n`;
+            // ---- Severity alerts ----
+            const bySeverity = {};
+            for (const i of r.issues)
+                bySeverity[i.severity] = (bySeverity[i.severity] || 0) + 1;
+            if (bySeverity['critical']) {
+                md += `> [!CAUTION]\n`;
+                md += `> **${bySeverity['critical']} critical issue${bySeverity['critical'] > 1 ? 's' : ''}** require immediate attention.\n\n`;
+            }
+            else if (bySeverity['high']) {
+                md += `> [!WARNING]\n`;
+                md += `> **${bySeverity['high']} high-severity issue${bySeverity['high'] > 1 ? 's' : ''}** should be addressed soon.\n\n`;
+            }
+            // ---- Severity distribution ----
+            md += `<details>\n<summary>\u{1F3AF} Severity Distribution</summary>\n\n`;
+            md += `| | Severity | Count | Share |\n|:---:|:---------|:------:|:-----:|\n`;
+            for (const sev of ['critical', 'high', 'medium', 'low']) {
+                if (bySeverity[sev]) {
+                    const pct = Math.round((bySeverity[sev] / r.issues.length) * 100);
+                    md += `| ${severityIcon(sev)} | ${severityLabel(sev)} | **${bySeverity[sev]}** | ${pct}% |\n`;
+                }
             }
             md += `\n</details>\n\n`;
-            // Mermaid pie chart
-            md += `\`\`\`mermaid\npie title Issues by Type\n`;
-            for (const [type, issues] of Object.entries(groupBy(r.issues))) {
-                md += `    "${type}" : ${issues.length}\n`;
+            // ---- Full issues list ----
+            const sorted = [...r.issues].sort((a, b) => severityOrder(a.severity) - severityOrder(b.severity));
+            md += `<details>\n<summary>\u{1F4CB} All Issues (${r.issues.length})</summary>\n\n`;
+            md += `| | Severity | Type | File | Line | Description |\n`;
+            md += `|:---:|:---------|:-----|:-----|:----:|:------------|\n`;
+            for (const i of sorted) {
+                md += `| ${severityIcon(i.severity)} | ${severityLabel(i.severity)} | ${typeIcon(i.type)} ${i.type} | \`${i.file}\` | ${i.line || '-'} | ${i.description} |\n`;
             }
-            md += `\`\`\`\n\n`;
+            md += `\n</details>\n\n`;
+            // ---- Mermaid pie chart ----
+            md += `<details>\n<summary>\u{1F4C8} Issue Distribution Chart</summary>\n\n`;
+            md += `\`\`\`mermaid\npie showData title Issues by Category\n`;
+            for (const [type, issues] of sortedTypes) {
+                md += `    "${typeIcon(type)} ${type}" : ${issues.length}\n`;
+            }
+            md += `\`\`\`\n\n</details>\n\n`;
         }
-        md += `---\n*Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more](https://github.com/braedonsaunders/sloppy)*\n`;
+        // ---- Footer ----
+        md += `---\n\n`;
+        if (r.issues.length > 0) {
+            md += `> [!TIP]\n`;
+            md += `> Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more \u2192](https://github.com/braedonsaunders/sloppy)\n\n`;
+        }
+        md += `<div align="center">\n<sub>\u{1F9F9} <a href="https://github.com/braedonsaunders/sloppy">Sloppy</a> \u2014 relentless AI code cleanup</sub>\n</div>\n`;
     }
     else {
+        // ===================== FIX MODE =====================
         const s = data;
         const dur = s.passes.reduce((sum, p) => sum + p.durationMs, 0);
         const d = s.scoreAfter - s.scoreBefore;
-        md += `### Score: ${s.scoreBefore} → ${s.scoreAfter} (${d >= 0 ? '+' : ''}${d})\n\n`;
-        md += `${progressBar(s.scoreAfter)} ${s.scoreAfter}/100\n\n`;
-        md += `| Metric | Value |\n|--------|-------|\n`;
-        md += `| Passes | ${s.passes.length} |\n`;
-        md += `| Fixed | **${s.totalFixed}** |\n`;
-        md += `| Skipped | ${s.totalSkipped} |\n`;
-        md += `| Duration | ${fmtDuration(dur)} |\n\n`;
+        const sign = d >= 0 ? '+' : '';
+        // ---- Hero header ----
+        md += `<div align="center">\n\n`;
+        md += `# \u{1F9F9} Sloppy \u2014 Fix Report\n\n`;
+        // ---- Before / After score card ----
+        md += `<table>\n<tr>\n`;
+        md += `<td align="center" width="140">\n\n`;
+        md += `${scoreEmoji(s.scoreBefore)}\n### ${s.scoreBefore}\n**Before**\n\n</td>\n`;
+        md += `<td align="center" width="60">\n\n`;
+        md += `### \u2192\n\n</td>\n`;
+        md += `<td align="center" width="140">\n\n`;
+        md += `${scoreEmoji(s.scoreAfter)}\n### ${s.scoreAfter}\n**After**\n\n</td>\n`;
+        md += `<td align="center" width="120">\n\n`;
+        md += `### ${sign}${d}\n**Delta**\n\n</td>\n`;
+        md += `</tr>\n</table>\n\n`;
+        md += `\`${progressBar(s.scoreAfter)}\` ${s.scoreAfter}/100 \u00B7 **${scoreGrade(s.scoreAfter)}**\n\n`;
+        md += `</div>\n\n`;
+        md += `---\n\n`;
+        // ---- Key metrics row ----
+        md += `### \u{1F4CA} Summary\n\n`;
+        md += `<table>\n<tr>\n`;
+        md += `<td align="center">\n\n**${s.totalFixed}**\n\n\u{1F527} Fixed\n\n</td>\n`;
+        md += `<td align="center">\n\n**${s.totalSkipped}**\n\n\u23ED\uFE0F Skipped\n\n</td>\n`;
+        md += `<td align="center">\n\n**${s.passes.length}**\n\n\u{1F504} Passes\n\n</td>\n`;
+        md += `<td align="center">\n\n**${fmtDuration(dur)}**\n\n\u23F1\uFE0F Duration\n\n</td>\n`;
+        md += `</tr>\n</table>\n\n`;
+        if (d > 0) {
+            md += `> [!IMPORTANT]\n`;
+            md += `> Score improved by **${d} points** across **${s.passes.length} pass${s.passes.length !== 1 ? 'es' : ''}** in **${fmtDuration(dur)}**\n\n`;
+        }
+        // ---- Fixed issues by type ----
         if (s.totalFixed > 0) {
             const fixed = s.issues.filter(i => i.status === 'fixed');
             const byType = groupBy(fixed);
-            md += `<details open>\n<summary>Fixed issues (${fixed.length})</summary>\n\n`;
-            for (const [type, issues] of Object.entries(byType)) {
-                md += `**${type}** (${issues.length})\n\n`;
-                md += `| File | Issue | Commit |\n|------|-------|--------|\n`;
+            const sortedTypes = Object.entries(byType).sort((a, b) => b[1].length - a[1].length);
+            md += `### \u2705 Fixed Issues (${fixed.length})\n\n`;
+            for (const [type, issues] of sortedTypes) {
+                md += `<details open>\n<summary>${typeIcon(type)} <strong>${type}</strong> \u2014 ${issues.length} fixed</summary>\n\n`;
+                md += `| | File | Issue | Commit |\n|:---:|:-----|:------|:-------|\n`;
                 for (const i of issues) {
                     const sha = i.commitSha?.slice(0, 7) || '-';
-                    md += `| \`${i.file}:${i.line || '?'}\` | ${i.description} | \`${sha}\` |\n`;
+                    md += `| ${severityIcon(i.severity)} | \`${i.file}:${i.line || '?'}\` | ${i.description} | \`${sha}\` |\n`;
                 }
-                md += '\n';
+                md += `\n</details>\n\n`;
             }
-            md += `</details>\n\n`;
-            md += `\`\`\`mermaid\npie title Fixed by Type\n`;
-            for (const [type, issues] of Object.entries(byType)) {
-                md += `    "${type}" : ${issues.length}\n`;
+            // ---- Mermaid chart ----
+            md += `<details>\n<summary>\u{1F4C8} Fix Distribution Chart</summary>\n\n`;
+            md += `\`\`\`mermaid\npie showData title Fixed by Category\n`;
+            for (const [type, issues] of sortedTypes) {
+                md += `    "${typeIcon(type)} ${type}" : ${issues.length}\n`;
             }
-            md += `\`\`\`\n\n`;
+            md += `\`\`\`\n\n</details>\n\n`;
         }
-        // Pass breakdown
-        md += `<details>\n<summary>Pass breakdown</summary>\n\n`;
-        md += `| Pass | Found | Fixed | Skipped | Duration |\n|------|-------|-------|---------|----------|\n`;
+        // ---- Skipped issues ----
+        const skipped = s.issues.filter(i => i.status === 'skipped');
+        if (skipped.length > 0) {
+            md += `<details>\n<summary>\u23ED\uFE0F Skipped Issues (${skipped.length})</summary>\n\n`;
+            md += `| | File | Issue | Reason |\n|:---:|:-----|:------|:-------|\n`;
+            for (const i of skipped) {
+                md += `| ${severityIcon(i.severity)} | \`${i.file}\` | ${i.description} | ${i.skipReason || '-'} |\n`;
+            }
+            md += `\n</details>\n\n`;
+        }
+        // ---- Pass breakdown with progress bars ----
+        md += `<details>\n<summary>\u{1F504} Pass Breakdown</summary>\n\n`;
+        md += `| Pass | Found | Fixed | Skipped | Duration | Progress |\n`;
+        md += `|:----:|:-----:|:-----:|:-------:|:--------:|:---------|\n`;
+        const maxFixed = Math.max(...s.passes.map(p => p.fixed), 1);
         for (const p of s.passes) {
-            md += `| ${p.number} | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+            md += `| **${p.number}** | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} | \`${miniBar(p.fixed, maxFixed, 8)}\` |\n`;
         }
         md += `\n</details>\n\n`;
-        md += `---\n*[Sloppy](https://github.com/braedonsaunders/sloppy) — relentless AI code cleanup*\n`;
+        // ---- Footer ----
+        md += `---\n\n`;
+        md += `<div align="center">\n<sub>\u{1F9F9} <a href="https://github.com/braedonsaunders/sloppy">Sloppy</a> \u2014 relentless AI code cleanup</sub>\n</div>\n`;
     }
     await core.summary.addRaw(md).write();
 }
