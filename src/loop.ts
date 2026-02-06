@@ -13,6 +13,21 @@ function sortBySeverity(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
 }
 
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return rem > 0 ? `${m}m${rem}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? `${h}h${remM}m` : `${h}h`;
+}
+
+function formatTimeRemaining(deadline: number): string {
+  return formatDuration(Math.max(0, deadline - Date.now()));
+}
+
 async function detectTestCommand(config: SloppyConfig): Promise<string> {
   if (config.testCommand) return config.testCommand;
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
@@ -65,48 +80,83 @@ async function gitRevert(): Promise<void> {
 }
 
 function scanPrompt(pass: number, previousFixes: string[], plan: string): string {
-  const planSection = plan ? `\n\nReference this quality plan:\n${plan}\n` : '';
+  const planSection = plan ? `\nQUALITY PLAN (from PLAN.md):\n${plan}\n` : '';
 
   if (pass === 1) {
-    return `Scan this ENTIRE repository. Check EVERY file. Find ALL code quality issues.
+    return `You are a senior code quality auditor performing a comprehensive codebase review.
 
-Look for: security vulnerabilities, bugs, type errors, lint violations, dead code, TODOs/stubs, code duplication, missing test coverage.
+TASK: Scan every file in this repository. Find all code quality issues.
 
-Be EXHAUSTIVE. Miss NOTHING.${planSection}
+ISSUE CATEGORIES (use these exact type values):
+  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
+  bugs        — null/undefined derefs, off-by-one, race conditions, wrong logic, unhandled errors
+  types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
+  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
+  dead-code   — functions/classes/exports never called or imported anywhere
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks, mock data
+  duplicates  — copy-pasted logic that should be extracted to a shared function
+  coverage    — public functions with zero test coverage, untested error paths, missing edge cases
 
-Respond ONLY with valid JSON (no markdown fences):
-{"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path","line":0,"description":"brief description"}]}`;
+SEVERITY LEVELS:
+  critical — exploitable in production (data loss, auth bypass, RCE, credential leak)
+  high     — will cause bugs in normal usage or data corruption
+  medium   — code smell, maintainability risk, potential future bugs
+  low      — style issue, minor improvement, naming consistency
+${planSection}
+RULES:
+- Check EVERY file. Do not skip any directory.
+- Only report REAL issues with specific file paths and line numbers.
+- Do not invent issues. If code is clean, return empty issues array.
+- Be precise: exact file, exact line, exact description of what's wrong.
+- Prioritize: security > bugs > types > everything else.
+
+Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
+{"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path/to/file.ts","line":42,"description":"what is wrong and why it matters"}]}`;
   }
 
-  return `Previous pass fixed:
-${previousFixes.map(f => `- ${f}`).join('\n')}
+  return `You are a senior code quality auditor performing pass #${pass} of a multi-pass review.
 
-Scan the ENTIRE repository AGAIN. Fixing things reveals new things:
+PREVIOUS FIXES APPLIED:
+${previousFixes.map(f => `  - ${f}`).join('\n')}
+
+TASK: Scan the ENTIRE repository again with fresh eyes. Previous fixes often reveal new issues:
 - Removing dead code exposes unused imports
 - Fixing a type error reveals logic bugs underneath
-- Refactoring may introduce edge cases
+- Refactoring may introduce new edge cases
+- Previously-hidden code paths are now reachable
+${planSection}
+ISSUE CATEGORIES: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
+SEVERITY LEVELS: critical, high, medium, low
 
-Look DEEPER. What did you miss? What did fixes reveal?${planSection}
+RULES:
+- Do NOT re-report issues that were already fixed above.
+- Look for NEW issues, especially ones revealed by the fixes.
+- Check every file. Do not skip any directory.
+- If the codebase is now clean, return {"issues":[]}.
 
-Respond ONLY with valid JSON (no markdown fences):
-{"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path","line":0,"description":"brief description"}]}`;
+Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
+{"issues":[{"type":"category","severity":"level","file":"relative/path","line":42,"description":"what is wrong"}]}`;
 }
 
 function fixPrompt(issue: Issue, testCommand: string): string {
-  return `Fix this SPECIFIC issue and ONLY this issue. MINIMAL change.
+  return `Fix this specific code quality issue. Make the MINIMAL change required.
 
-Issue: ${issue.description}
-File: ${issue.file}${issue.line ? `:${issue.line}` : ''}
-Type: ${issue.type} | Severity: ${issue.severity}
+ISSUE:
+  Type: ${issue.type}
+  Severity: ${issue.severity}
+  File: ${issue.file}${issue.line ? ` (line ${issue.line})` : ''}
+  Problem: ${issue.description}
 
-Rules:
-- Fix ONLY this issue
-- Smallest possible change
-- No added comments
-- No reformatting unchanged code
-${testCommand ? `- Run tests after: ${testCommand}` : '- Verify fix is correct'}
+RULES:
+1. Fix ONLY this specific issue. Do not touch anything else.
+2. Make the smallest possible change.
+3. Do not add comments explaining the fix.
+4. Do not reformat or restyle code you didn't change.
+5. Do not add error handling beyond what's needed for this fix.
+${testCommand ? `6. After fixing, run: ${testCommand}` : '6. Verify your fix compiles/parses correctly.'}
 
-If the issue cannot be safely fixed, respond with "SKIP: reason".`;
+If this issue CANNOT be safely fixed without breaking other code, respond with exactly:
+SKIP: <reason why it cannot be fixed>`;
 }
 
 function parseIssues(output: string): Issue[] {
@@ -157,8 +207,26 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     complete: false,
   };
 
+  const deadline = startTime + config.timeout;
+  const margin = 2 * 60 * 1000; // 2 min safety margin
+
+  // Header
+  core.info('');
+  core.info('='.repeat(50));
+  core.info('SLOPPY FIX MODE');
+  core.info('='.repeat(50));
+  core.info(`Agent:      ${config.agent}`);
+  core.info(`Model:      ${config.model || 'default'}`);
+  core.info(`Timeout:    ${formatDuration(config.timeout)}`);
+  core.info(`Max passes: ${config.maxPasses}`);
+  core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
+  core.info('='.repeat(50));
+  core.info('');
+
   // Install agent
+  core.info(`Installing ${config.agent} CLI...`);
   await installAgent(config.agent);
+  core.info(`${config.agent} CLI installed.`);
 
   // Setup git
   await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
@@ -168,13 +236,19 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
   if (!state.branchName) {
     state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
     await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
+    core.info(`Created branch: ${state.branchName}`);
   } else {
     await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
+    core.info(`Resumed branch: ${state.branchName}`);
   }
 
   // Detect test command
   const testCmd = await detectTestCommand(config);
-  if (testCmd) core.info(`Test command: ${testCmd}`);
+  if (testCmd) {
+    core.info(`Test command: ${testCmd}`);
+  } else {
+    core.info('No test command detected (fixes won\'t be test-verified)');
+  }
 
   // Load PLAN.md if it exists
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
@@ -182,18 +256,19 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
   const planPath = path.join(cwd, 'PLAN.md');
   if (fs.existsSync(planPath)) {
     plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
+    core.info('Loaded PLAN.md for quality context');
   }
 
-  const deadline = startTime + config.timeout;
-  const margin = 2 * 60 * 1000; // 2 min safety margin
+  core.info('');
 
   // --- THE RELENTLESS LOOP ---
   while (Date.now() < deadline - margin && state.pass < config.maxPasses) {
     state.pass++;
     const passStart = Date.now();
 
-    core.info(`\n${'='.repeat(50)}`);
-    core.info(`PASS ${state.pass}`);
+    core.info('');
+    core.info('='.repeat(50));
+    core.info(`PASS ${state.pass}/${config.maxPasses}  |  Time remaining: ${formatTimeRemaining(deadline)}  |  Fixed so far: ${state.totalFixed}`);
     core.info('='.repeat(50));
 
     // Gather previous fixes for context
@@ -203,26 +278,43 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       .map(i => `[${i.type}] ${i.file}: ${i.description}`);
 
     // SCAN
-    core.info('Scanning...');
+    core.info('');
+    core.info(`Scanning repository (${config.agent})...`);
+    const scanStart = Date.now();
     const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan), {
       maxTurns: 30,
       model: config.model || undefined,
       timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
     });
+    const scanDuration = formatDuration(Date.now() - scanStart);
 
     const found = parseIssues(scanResult.output);
-    core.info(`Found ${found.length} issues`);
+    core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+
+    if (found.length > 0) {
+      // Log issue summary
+      const bySev: Record<string, number> = {};
+      for (const issue of found) {
+        bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
+      }
+      const sevSummary = Object.entries(bySev)
+        .sort(([a], [b]) => (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9))
+        .map(([sev, count]) => `${count} ${sev}`)
+        .join(', ');
+      core.info(`Breakdown: ${sevSummary}`);
+    }
 
     // Check if done
     if (found.length === 0 && state.pass >= config.minPasses) {
-      core.info('Repository is clean. Verified across multiple passes.');
+      core.info('');
+      core.info('Repository is CLEAN. Verified across multiple passes.');
       state.complete = true;
       state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
       break;
     }
 
     if (found.length === 0) {
-      core.info(`No issues but min passes (${config.minPasses}) not reached yet.`);
+      core.info(`No issues found, but need ${config.minPasses - state.pass + 1} more clean pass(es) to verify.`);
       state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
       continue;
     }
@@ -232,19 +324,29 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     let passFixed = 0;
     let passSkipped = 0;
 
-    for (const issue of sorted) {
+    core.info('');
+    core.info(`Fixing ${sorted.length} issues (highest severity first)...`);
+    core.info('');
+
+    for (let idx = 0; idx < sorted.length; idx++) {
+      const issue = sorted[idx];
       if (Date.now() >= deadline - margin) {
-        core.info('Approaching timeout, stopping this pass');
+        core.info('');
+        core.warning(`Timeout approaching — stopping after ${idx} of ${sorted.length} issues`);
         break;
       }
 
-      core.info(`  [${issue.severity}] ${issue.type} — ${issue.file}: ${issue.description}`);
+      const timeLeft = formatTimeRemaining(deadline);
+      core.info(`  [${idx + 1}/${sorted.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
+      core.info(`    ${issue.description}`);
 
+      const fixStart = Date.now();
       const result = await runAgent(config.agent, fixPrompt(issue, testCmd), {
         maxTurns: 15,
         model: config.model || undefined,
         timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
       });
+      const fixDuration = formatDuration(Date.now() - fixStart);
 
       if (result.output.includes('SKIP:') || result.exitCode !== 0) {
         issue.status = 'skipped';
@@ -252,21 +354,21 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
         passSkipped++;
         state.totalSkipped++;
         await gitRevert();
-        core.info(`    SKIPPED: ${issue.skipReason}`);
+        core.info(`    -> SKIPPED (${fixDuration}): ${issue.skipReason}`);
       } else if (await runTests(testCmd)) {
         const sha = await gitCommit(issue);
         issue.status = 'fixed';
         issue.commitSha = sha;
         passFixed++;
         state.totalFixed++;
-        core.info(`    FIXED (${sha.slice(0, 7)})`);
+        core.info(`    -> FIXED ${sha.slice(0, 7)} (${fixDuration})`);
       } else {
         issue.status = 'skipped';
         issue.skipReason = 'Tests failed after fix';
         passSkipped++;
         state.totalSkipped++;
         await gitRevert();
-        core.info('    REVERTED: tests failed');
+        core.info(`    -> REVERTED (${fixDuration}): tests failed`);
       }
 
       state.issues.push(issue);
@@ -280,7 +382,12 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
       durationMs: Date.now() - passStart,
     });
 
-    core.info(`Pass ${state.pass}: found=${found.length} fixed=${passFixed} skipped=${passSkipped}`);
+    core.info('');
+    core.info('-'.repeat(50));
+    core.info(`Pass ${state.pass} summary: ${found.length} found, ${passFixed} fixed, ${passSkipped} skipped (${formatDuration(Date.now() - passStart)})`);
+    core.info(`Running totals: ${state.totalFixed} fixed, ${state.totalSkipped} skipped`);
+    core.info('-'.repeat(50));
+
     saveCheckpoint(state);
   }
 
@@ -292,12 +399,27 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
 
   // Push branch
   if (state.totalFixed > 0) {
+    core.info('');
     core.info(`Pushing ${state.totalFixed} fixes on ${state.branchName}...`);
     const token = process.env.GITHUB_TOKEN || '';
     const repo = process.env.GITHUB_REPOSITORY || '';
     const remote = `https://x-access-token:${token}@github.com/${repo}.git`;
     await exec.exec('git', ['push', remote, state.branchName, '--force'], { ignoreReturnCode: true });
+    core.info('Push complete.');
   }
+
+  // Final summary
+  core.info('');
+  core.info('='.repeat(50));
+  core.info('SLOPPY FIX COMPLETE');
+  core.info('='.repeat(50));
+  core.info(`Score:    ${state.scoreBefore} -> ${state.scoreAfter}`);
+  core.info(`Fixed:    ${state.totalFixed}`);
+  core.info(`Skipped:  ${state.totalSkipped}`);
+  core.info(`Passes:   ${state.passes.length}`);
+  core.info(`Duration: ${formatDuration(Date.now() - startTime)}`);
+  core.info(`Complete: ${state.complete ? 'YES' : 'NO (more work may remain)'}`);
+  core.info('='.repeat(50));
 
   saveCheckpoint(state);
   return state;

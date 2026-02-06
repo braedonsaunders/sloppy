@@ -16,7 +16,24 @@ import { HistoryEntry, ScanResult, LoopState } from './types';
 async function run(): Promise<void> {
   try {
     const config = getConfig();
+
+    // Bridge github-token input to GITHUB_TOKEN env var if not already set
+    if (!process.env.GITHUB_TOKEN) {
+      const inputToken = core.getInput('github-token');
+      if (inputToken) {
+        process.env.GITHUB_TOKEN = inputToken;
+        core.setSecret(inputToken);
+      }
+    }
+
+    // Log auth context for debugging
+    const hasGithubToken = !!(process.env.GITHUB_TOKEN || core.getInput('github-token'));
+    const hasAnthropicKey = !!process.env.ANTHROPIC_API_KEY;
+    const hasClaudeOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
+
     core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
+    core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
 
     if (config.mode === 'scan') {
       // ---- FREE TIER: GitHub Models ----

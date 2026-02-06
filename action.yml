@@ -7,6 +7,10 @@ branding:
   color: 'yellow'
 
 inputs:
+  github-token:
+    description: 'GitHub token for API access and GitHub Models'
+    required: false
+    default: ${{ github.token }}
   mode:
     description: 'scan (free, report only) or fix (BYOK, auto-fix + PR)'
     required: false
