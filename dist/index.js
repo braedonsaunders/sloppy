@@ -30451,10 +30451,19 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TokenLimitError = void 0;
 exports.callGitHubModels = callGitHubModels;
 const core = __importStar(__nccwpck_require__(7484));
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
 const MAX_RETRIES = 4;
+/** Thrown when the request body exceeds the model's input token limit (HTTP 413). */
+class TokenLimitError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'TokenLimitError';
+    }
+}
+exports.TokenLimitError = TokenLimitError;
 function getGitHubToken() {
     const token = process.env.GITHUB_TOKEN ||
         process.env.INPUT_GITHUB_TOKEN ||
@@ -30526,6 +30535,10 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options)
         }
         // Handle other errors
         const text = await response.text();
+        if (response.status === 413) {
+            throw new TokenLimitError(`Request body too large for ${model}. The chunk exceeds the model's input token limit. ` +
+                `Response: ${text.slice(0, 200)}`);
+        }
         if (response.status === 401 || response.status === 403) {
             throw new Error(`GitHub Models auth failed (${response.status}). Ensure your workflow has:\n` +
                 '  permissions:\n' +
@@ -31526,6 +31539,7 @@ const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
 const github = __importStar(__nccwpck_require__(3228));
 const github_models_1 = __nccwpck_require__(7287);
+const smart_split_1 = __nccwpck_require__(7487);
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
     '.c', '.cpp', '.h', '.hpp', '.cs', '.php', '.swift', '.kt', '.scala',
@@ -31632,80 +31646,6 @@ async function collectPrFiles(cwd) {
         return null;
     }
 }
-// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
-// Larger chunks = fewer API requests = less likely to hit rate limits.
-function chunkFiles(files, maxChars = 32000) {
-    const chunks = [];
-    let current = [];
-    let size = 0;
-    for (const file of files) {
-        try {
-            const len = fs.statSync(file).size;
-            if (len > maxChars) {
-                chunks.push([file]);
-                continue;
-            }
-            if (size + len > maxChars && current.length > 0) {
-                chunks.push(current);
-                current = [];
-                size = 0;
-            }
-            current.push(file);
-            size += len;
-        }
-        catch {
-            continue;
-        }
-    }
-    if (current.length > 0)
-        chunks.push(current);
-    return chunks;
-}
-function buildPrompt(files, cwd, chunkNum, totalChunks) {
-    const fileList = files.map(f => path.relative(cwd, f));
-    let prompt = `Analyze chunk ${chunkNum}/${totalChunks} for code quality issues.
-
-FILES IN THIS CHUNK:
-${fileList.map(f => `  - ${f}`).join('\n')}
-
-ISSUE CATEGORIES:
-  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal
-  bugs        — null derefs, off-by-one, race conditions, wrong logic, unhandled errors
-  types       — type mismatches, unsafe casts, missing generics, any-typed values
-  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
-  dead-code   — functions/classes/exports never called or imported
-  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
-  duplicates  — copy-pasted logic that should be a shared function
-  coverage    — public functions with zero test coverage, untested error paths
-
-SEVERITY GUIDE:
-  critical — exploitable in production (data loss, auth bypass, RCE)
-  high     — will cause bugs in normal usage
-  medium   — code smell, maintainability risk
-  low      — style nit, minor improvement
-
-RULES:
-- Only report REAL issues. No false positives. No style preferences.
-- Be specific: exact file, exact line number, exact description.
-- If a file looks clean, return an empty issues array.
-
-SOURCE CODE:
-
-`;
-    for (const file of files) {
-        const rel = path.relative(cwd, file);
-        try {
-            let content = fs.readFileSync(file, 'utf-8');
-            if (content.length > 12000)
-                content = content.slice(0, 12000) + '\n...(truncated)';
-            prompt += `--- ${rel} ---\n${content}\n\n`;
-        }
-        catch {
-            continue;
-        }
-    }
-    return prompt;
-}
 function parseIssues(content) {
     try {
         const data = JSON.parse(content);
@@ -31761,6 +31701,61 @@ function formatDuration(ms) {
     const rem = s % 60;
     return rem > 0 ? `${m}m${rem}s` : `${m}m`;
 }
+/**
+ * Scan a single chunk, with automatic retry on 413 (token limit exceeded).
+ *
+ * On 413, the chunk is split in half and each half is retried independently.
+ * Files in the oversized half are further compressed before retrying.
+ * This provides resilience against token estimation inaccuracies.
+ */
+async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0) {
+    const prompt = (0, smart_split_1.buildSmartPrompt)(chunk, chunkNum, totalChunks);
+    try {
+        const { content, tokens } = await (0, github_models_1.callGitHubModels)([
+            { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
+            { role: 'user', content: prompt },
+        ], model, { responseFormat: ISSUES_SCHEMA });
+        return { issues: parseIssues(content), tokens };
+    }
+    catch (e) {
+        if (!(e instanceof github_models_1.TokenLimitError) || depth >= 2)
+            throw e;
+        // 413 recovery: split the chunk and compress files further.
+        core.info(`       Token limit hit — auto-splitting chunk and compressing (depth ${depth + 1})`);
+        const modelLimit = (0, smart_split_1.getModelInputLimit)(model);
+        const halfBudget = Math.floor((0, smart_split_1.calculateCodeBudget)(modelLimit) * 0.45); // 45% each half for safety
+        const mid = Math.ceil(chunk.files.length / 2);
+        const halves = [chunk.files.slice(0, mid), chunk.files.slice(mid)];
+        let allIssues = [];
+        let allTokens = 0;
+        for (const half of halves) {
+            if (half.length === 0)
+                continue;
+            // Compress each file to fit the reduced budget
+            const perFileBudget = Math.floor(halfBudget / half.length);
+            for (const f of half) {
+                if (f.content.length > perFileBudget) {
+                    const ext = path.extname(f.relativePath).toLowerCase();
+                    const result = (0, smart_split_1.compressFile)(f.content, ext, perFileBudget);
+                    f.content = result.content;
+                    f.tokens = (0, smart_split_1.estimateTokens)(f.content);
+                    f.compressed = true;
+                }
+            }
+            const subChunk = {
+                files: half,
+                totalCodeTokens: half.reduce((s, f) => s + f.tokens, 0),
+                manifest: chunk.manifest,
+            };
+            const result = await scanChunk(subChunk, chunkNum, totalChunks, model, depth + 1);
+            allIssues.push(...result.issues);
+            allTokens += result.tokens;
+            if (halves.indexOf(half) === 0)
+                await sleep(4500);
+        }
+        return { issues: allIssues, tokens: allTokens };
+    }
+}
 async function runScan(config) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
@@ -31812,8 +31807,12 @@ async function runScan(config) {
         .map(([ext, count]) => `${ext}(${count})`)
         .join(', ');
     core.info(`File types: ${topExts}`);
-    const chunks = chunkFiles(files);
-    core.info(`Split into ${chunks.length} chunks for analysis`);
+    // Smart chunking: token-aware, dependency-grouped, with compression + manifest
+    const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
+    const codeBudget = (0, smart_split_1.calculateCodeBudget)(modelLimit);
+    const chunks = (0, smart_split_1.prepareChunks)(files, cwd, config.githubModelsModel);
+    const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
+    core.info(`Split into ${chunks.length} chunks (budget: ~${Math.round(codeBudget / 1024)}KB/chunk, ${compressedCount} files compressed)`);
     core.info('');
     const allIssues = [];
     let totalTokens = 0;
@@ -31821,16 +31820,14 @@ async function runScan(config) {
     let failCount = 0;
     for (let i = 0; i < chunks.length; i++) {
         const chunkStart = Date.now();
-        const chunkFileNames = chunks[i].map(f => path.relative(cwd, f));
+        const chunkFileNames = chunks[i].files.map(f => f.relativePath);
         const progress = Math.round(((i + 1) / chunks.length) * 100);
-        core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}`);
+        const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
+        const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+        core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}${compressedLabel}`);
         try {
-            const { content, tokens } = await (0, github_models_1.callGitHubModels)([
-                { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
-                { role: 'user', content: buildPrompt(chunks[i], cwd, i + 1, chunks.length) },
-            ], config.githubModelsModel, { responseFormat: ISSUES_SCHEMA });
+            const { issues: chunkIssues, tokens } = await scanChunk(chunks[i], i + 1, chunks.length, config.githubModelsModel);
             totalTokens += tokens;
-            const chunkIssues = parseIssues(content);
             allIssues.push(...chunkIssues);
             successCount++;
             const elapsed = formatDuration(Date.now() - chunkStart);
@@ -31893,6 +31890,584 @@ async function runScan(config) {
     core.info('='.repeat(50));
     const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
     return { issues: unique, score, summary, tokens: totalTokens };
+}
+
+
+/***/ }),
+
+/***/ 7487:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Smart file splitting for token-constrained models.
+ *
+ * The naive approach (32K chars ≈ 8K tokens) fails because:
+ *  1. Code tokenizes at ~3.2 chars/token, not 4 — so 32K chars is actually ~10K tokens.
+ *  2. Prompt template, system message, and JSON schema eat ~500 tokens of overhead.
+ *  3. Files grouped alphabetically lose cross-file context (imports, shared types).
+ *  4. A single large file can blow the budget with no fallback.
+ *
+ * This module fixes all four problems:
+ *  - Accurate token budgeting with measured overhead.
+ *  - Multi-level file compression (strip comments → signatures → truncate).
+ *  - Import-aware grouping so related files stay in the same chunk.
+ *  - A compact repo manifest injected into each chunk for cross-chunk context.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.estimateTokens = estimateTokens;
+exports.tokensToChars = tokensToChars;
+exports.calculateCodeBudget = calculateCodeBudget;
+exports.getModelInputLimit = getModelInputLimit;
+exports.compressFile = compressFile;
+exports.analyzeFile = analyzeFile;
+exports.buildDependencyGraph = buildDependencyGraph;
+exports.smartGroup = smartGroup;
+exports.buildManifest = buildManifest;
+exports.buildSmartPrompt = buildSmartPrompt;
+exports.prepareChunks = prepareChunks;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+/**
+ * Conservative chars-per-token ratio for code.
+ * o200k_base tokenizer averages 3.0–3.5 for code depending on language.
+ * We use 3.2 as a safe middle ground; overestimating tokens is better than
+ * underestimating (which causes 413s).
+ */
+const CHARS_PER_TOKEN = 3.2;
+/**
+ * Fixed token overhead per request that isn't code:
+ *   ~25  system message
+ *   ~150 response_format JSON schema
+ *   ~200 prompt template (categories, severity guide, rules)
+ *   ~125 safety margin for message framing / off-by-one
+ * = ~500 tokens
+ */
+const OVERHEAD_TOKENS = 500;
+/** Maximum characters for the compact repo manifest. */
+const MAX_MANIFEST_CHARS = 600;
+/** When compressing, keep this many body lines per function/class. */
+const SIGNATURE_BODY_LINES = 3;
+// Known model token limits on GitHub Models free tier.
+const MODEL_INPUT_LIMITS = {
+    'openai/gpt-4o-mini': 8000,
+    'openai/gpt-4o': 8000,
+    'mistral-ai/mistral-small': 8000,
+};
+// ---------------------------------------------------------------------------
+// Token estimation
+// ---------------------------------------------------------------------------
+function estimateTokens(text) {
+    return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+function tokensToChars(tokens) {
+    return Math.floor(tokens * CHARS_PER_TOKEN);
+}
+/**
+ * Calculate the character budget available for actual code in a single chunk.
+ * modelLimit is the total input token cap (e.g. 8000 for gpt-4o-mini).
+ */
+function calculateCodeBudget(modelLimit) {
+    const codeTokens = modelLimit - OVERHEAD_TOKENS;
+    return tokensToChars(Math.max(codeTokens, 1000)); // floor at 1000 tokens
+}
+function getModelInputLimit(model) {
+    return MODEL_INPUT_LIMITS[model] || 8000;
+}
+// ---------------------------------------------------------------------------
+// Import extraction
+// ---------------------------------------------------------------------------
+function extractImports(content, ext) {
+    const raw = [];
+    if (['.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte'].includes(ext)) {
+        for (const m of content.matchAll(/(?:import|export)\s.*?from\s+['"]([^'"]+)['"]/g)) {
+            raw.push(m[1]);
+        }
+        for (const m of content.matchAll(/require\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+            raw.push(m[1]);
+        }
+    }
+    else if (ext === '.py') {
+        for (const m of content.matchAll(/^from\s+([\w.]+)\s+import/gm)) {
+            raw.push(m[1]);
+        }
+        for (const m of content.matchAll(/^import\s+([\w.]+)/gm)) {
+            raw.push(m[1]);
+        }
+    }
+    else if (ext === '.go') {
+        const block = content.match(/import\s*\(([\s\S]*?)\)/);
+        if (block) {
+            for (const m of block[1].matchAll(/"([^"]+)"/g))
+                raw.push(m[1]);
+        }
+        for (const m of content.matchAll(/import\s+"([^"]+)"/g))
+            raw.push(m[1]);
+    }
+    else if (['.java', '.kt', '.scala'].includes(ext)) {
+        for (const m of content.matchAll(/^import\s+([\w.]+)/gm))
+            raw.push(m[1]);
+    }
+    else if (['.rb'].includes(ext)) {
+        for (const m of content.matchAll(/require(?:_relative)?\s+['"]([^'"]+)['"]/g)) {
+            raw.push(m[1]);
+        }
+    }
+    return raw;
+}
+// ---------------------------------------------------------------------------
+// File compression (3 levels)
+// ---------------------------------------------------------------------------
+/** Level 1: strip comments and collapse blank lines. */
+function stripComments(content, ext) {
+    let out = content;
+    if (['.py', '.rb', '.sh', '.yml', '.yaml'].includes(ext)) {
+        // Multi-line strings (Python docstrings)
+        out = out.replace(/"""[\s\S]*?"""/g, '""""""');
+        out = out.replace(/'''[\s\S]*?'''/g, "''''''");
+        // Line comments (preserve shebangs)
+        out = out.replace(/^(\s*)#(?!!)(.*)$/gm, '');
+    }
+    else {
+        // Block comments
+        out = out.replace(/\/\*[\s\S]*?\*\//g, '');
+        // Line comments
+        out = out.replace(/\/\/.*$/gm, '');
+    }
+    // Collapse 3+ blank lines into 1
+    out = out.replace(/\n{3,}/g, '\n\n');
+    return out;
+}
+/**
+ * Level 2: keep function/class signatures + first N body lines,
+ * collapse the rest with a marker.
+ */
+function extractSignatures(content, ext) {
+    const lines = content.split('\n');
+    const result = [];
+    let inBody = false;
+    let bodyBaseIndent = 0;
+    let bodyLineCount = 0;
+    let skippedCount = 0;
+    // Regex for "interesting" declarations that start a body.
+    const sigRe = ext === '.py'
+        ? /^(\s*)(def |class |async def )/
+        : /^(\s*)(function |class |const \w+\s*=\s*(?:async\s*)?\(|export (?:default )?(?:function|class|const|async)|interface |type \w+\s*=)/;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const sigMatch = line.match(sigRe);
+        if (sigMatch && !inBody) {
+            // Flush any skip marker
+            if (skippedCount > 0) {
+                const indent = ' '.repeat(bodyBaseIndent + 2);
+                result.push(`${indent}// ... ${skippedCount} lines collapsed`);
+                skippedCount = 0;
+            }
+            inBody = true;
+            bodyBaseIndent = sigMatch[1].length;
+            bodyLineCount = 0;
+            result.push(line);
+            continue;
+        }
+        if (inBody) {
+            const stripped = line.trimStart();
+            const currentIndent = stripped === '' ? bodyBaseIndent + 1 : line.length - stripped.length;
+            // Back to same or lesser indent = body ended
+            if (stripped !== '' && currentIndent <= bodyBaseIndent) {
+                if (skippedCount > 0) {
+                    const indent = ' '.repeat(bodyBaseIndent + 2);
+                    result.push(`${indent}// ... ${skippedCount} lines collapsed`);
+                    skippedCount = 0;
+                }
+                inBody = false;
+                result.push(line);
+                continue;
+            }
+            bodyLineCount++;
+            if (bodyLineCount <= SIGNATURE_BODY_LINES) {
+                result.push(line);
+            }
+            else {
+                skippedCount++;
+            }
+        }
+        else {
+            result.push(line);
+        }
+    }
+    // Final flush
+    if (skippedCount > 0) {
+        const indent = ' '.repeat(bodyBaseIndent + 2);
+        result.push(`${indent}// ... ${skippedCount} lines collapsed`);
+    }
+    return result.join('\n');
+}
+/**
+ * Progressively compress a file to fit within maxChars.
+ * Returns the (possibly compressed) content and whether compression occurred.
+ */
+function compressFile(content, ext, maxChars) {
+    // Level 0: already fits
+    if (content.length <= maxChars) {
+        return { content, compressed: false };
+    }
+    // Level 1: strip comments + collapse blanks
+    let compressed = stripComments(content, ext);
+    if (compressed.length <= maxChars) {
+        return { content: compressed, compressed: true };
+    }
+    // Level 2: signature extraction
+    compressed = extractSignatures(stripComments(content, ext), ext);
+    if (compressed.length <= maxChars) {
+        return { content: compressed, compressed: true };
+    }
+    // Level 3: hard truncate
+    const marker = `\n\n// ... truncated (${Math.round(content.length / 1024)}KB original, showing first ${Math.round((maxChars * 100) / content.length)}%)\n`;
+    compressed = compressed.slice(0, maxChars - marker.length) + marker;
+    return { content: compressed, compressed: true };
+}
+// ---------------------------------------------------------------------------
+// File analysis
+// ---------------------------------------------------------------------------
+function analyzeFile(fullPath, cwd) {
+    try {
+        const raw = fs.readFileSync(fullPath, 'utf-8');
+        const relativePath = path.relative(cwd, fullPath);
+        const ext = path.extname(fullPath).toLowerCase();
+        return {
+            relativePath,
+            fullPath,
+            content: raw,
+            originalSize: raw.length,
+            tokens: estimateTokens(raw),
+            imports: extractImports(raw, ext),
+            directory: path.dirname(relativePath),
+            compressed: false,
+        };
+    }
+    catch {
+        return null;
+    }
+}
+// ---------------------------------------------------------------------------
+// Import resolution (best-effort, no FS lookups)
+// ---------------------------------------------------------------------------
+function resolveImport(raw, fromFile, fileSet) {
+    // Relative JS/TS imports
+    if (raw.startsWith('.')) {
+        const dir = path.dirname(fromFile.relativePath);
+        const candidates = [
+            raw,
+            raw + '.ts', raw + '.tsx', raw + '.js', raw + '.jsx',
+            raw + '/index.ts', raw + '/index.tsx', raw + '/index.js',
+        ];
+        for (const c of candidates) {
+            const resolved = path.normalize(path.join(dir, c));
+            if (fileSet.has(resolved))
+                return resolved;
+        }
+        return null;
+    }
+    // Python dotted imports → path
+    const pyPath = raw.replace(/\./g, '/');
+    const pyCandidates = [pyPath + '.py', pyPath + '/__init__.py'];
+    for (const c of pyCandidates) {
+        if (fileSet.has(c))
+            return c;
+    }
+    return null;
+}
+// ---------------------------------------------------------------------------
+// Dependency graph
+// ---------------------------------------------------------------------------
+function buildDependencyGraph(files) {
+    const fileSet = new Set(files.map(f => f.relativePath));
+    const graph = new Map();
+    for (const f of files) {
+        graph.set(f.relativePath, new Set());
+    }
+    for (const f of files) {
+        for (const raw of f.imports) {
+            const resolved = resolveImport(raw, f, fileSet);
+            if (resolved && resolved !== f.relativePath) {
+                graph.get(f.relativePath).add(resolved);
+                graph.get(resolved).add(f.relativePath);
+            }
+        }
+    }
+    return graph;
+}
+// ---------------------------------------------------------------------------
+// Smart grouping: dependency-aware bin packing
+// ---------------------------------------------------------------------------
+/**
+ * Groups files into chunks that:
+ *  1. Fit within the token budget (codeBudgetChars).
+ *  2. Keep import-related files together when possible.
+ *  3. Keep directory siblings together as secondary preference.
+ *
+ * Files that individually exceed the budget are compressed to fit.
+ */
+function smartGroup(files, graph, codeBudgetChars) {
+    const ext = (f) => path.extname(f.relativePath).toLowerCase();
+    // Pre-process: compress any file that alone exceeds the budget.
+    for (const f of files) {
+        if (f.content.length > codeBudgetChars) {
+            const { content, compressed } = compressFile(f.content, ext(f), codeBudgetChars - 200);
+            f.content = content;
+            f.tokens = estimateTokens(content);
+            f.compressed = compressed;
+        }
+    }
+    const chunks = [];
+    const assigned = new Set();
+    // Sort: most-connected files first (they anchor groups), then by directory.
+    const sorted = [...files].sort((a, b) => {
+        const ac = graph.get(a.relativePath)?.size || 0;
+        const bc = graph.get(b.relativePath)?.size || 0;
+        if (bc !== ac)
+            return bc - ac;
+        const dirCmp = a.directory.localeCompare(b.directory);
+        if (dirCmp !== 0)
+            return dirCmp;
+        return a.content.length - b.content.length;
+    });
+    for (const file of sorted) {
+        if (assigned.has(file.relativePath))
+            continue;
+        const chunk = [file];
+        // Per-file header: "--- path ---\n" ≈ path.length + 10
+        let chunkChars = file.content.length + file.relativePath.length + 10;
+        assigned.add(file.relativePath);
+        // Phase 1: pull in import-connected files.
+        const neighbors = [...(graph.get(file.relativePath) || [])]
+            .filter(n => !assigned.has(n))
+            .map(n => files.find(f => f.relativePath === n))
+            .filter(Boolean)
+            .sort((a, b) => a.content.length - b.content.length);
+        for (const neighbor of neighbors) {
+            const cost = neighbor.content.length + neighbor.relativePath.length + 10;
+            if (chunkChars + cost <= codeBudgetChars) {
+                chunk.push(neighbor);
+                chunkChars += cost;
+                assigned.add(neighbor.relativePath);
+            }
+        }
+        // Phase 2: fill with directory siblings.
+        const siblings = files
+            .filter(f => !assigned.has(f.relativePath) && f.directory === file.directory)
+            .sort((a, b) => a.content.length - b.content.length);
+        for (const sib of siblings) {
+            const cost = sib.content.length + sib.relativePath.length + 10;
+            if (chunkChars + cost <= codeBudgetChars) {
+                chunk.push(sib);
+                chunkChars += cost;
+                assigned.add(sib.relativePath);
+            }
+        }
+        // Phase 3: fill remaining space with any small unassigned files.
+        const smalls = files
+            .filter(f => !assigned.has(f.relativePath))
+            .sort((a, b) => a.content.length - b.content.length);
+        for (const small of smalls) {
+            const cost = small.content.length + small.relativePath.length + 10;
+            if (chunkChars + cost <= codeBudgetChars) {
+                chunk.push(small);
+                chunkChars += cost;
+                assigned.add(small.relativePath);
+            }
+        }
+        chunks.push(chunk);
+    }
+    return chunks;
+}
+// ---------------------------------------------------------------------------
+// Compact repo manifest
+// ---------------------------------------------------------------------------
+/**
+ * Builds a tiny repo map that fits in every chunk, giving the model
+ * awareness of the full codebase structure and which other chunks
+ * contain related files.
+ */
+function buildManifest(allFiles, chunks, currentChunkIndex) {
+    // Directory tree (compact)
+    const dirs = new Map();
+    for (const f of allFiles) {
+        const dir = f.directory || '.';
+        if (!dirs.has(dir))
+            dirs.set(dir, []);
+        dirs.get(dir).push(path.basename(f.relativePath));
+    }
+    let manifest = `REPO: ${allFiles.length} files, ${chunks.length} chunks. This is chunk ${currentChunkIndex + 1}/${chunks.length}.\n`;
+    manifest += 'Structure:\n';
+    for (const [dir, names] of [...dirs.entries()].sort()) {
+        if (names.length <= 3) {
+            manifest += `  ${dir}/ ${names.join(', ')}\n`;
+        }
+        else {
+            // Group by extension
+            const byExt = new Map();
+            for (const n of names) {
+                const e = path.extname(n) || 'other';
+                byExt.set(e, (byExt.get(e) || 0) + 1);
+            }
+            const summary = [...byExt.entries()]
+                .map(([e, c]) => `${c}${e}`)
+                .join(' ');
+            manifest += `  ${dir}/ ${summary}\n`;
+        }
+    }
+    // Related files in other chunks (files imported by current chunk)
+    const currentPaths = new Set(chunks[currentChunkIndex].map(f => f.relativePath));
+    const currentImportTargets = new Set();
+    for (const f of chunks[currentChunkIndex]) {
+        for (const imp of f.imports)
+            currentImportTargets.add(imp);
+    }
+    const related = [];
+    for (let i = 0; i < chunks.length; i++) {
+        if (i === currentChunkIndex)
+            continue;
+        for (const f of chunks[i]) {
+            // Check if current chunk imports this file (by checking if any import resolves to it)
+            const isImported = currentImportTargets.has(f.relativePath) ||
+                [...currentImportTargets].some(imp => {
+                    // Check common resolutions
+                    return f.relativePath.endsWith(imp + '.ts') ||
+                        f.relativePath.endsWith(imp + '.py') ||
+                        f.relativePath.endsWith(imp.replace(/\./g, '/') + '.py') ||
+                        f.relativePath === imp;
+                });
+            // Or if this file imports something in the current chunk
+            const importsCurrentFile = f.imports.some(imp => [...currentPaths].some(cp => cp.endsWith(imp + '.ts') || cp.endsWith(imp + '.py') || cp === imp));
+            if (isImported || importsCurrentFile) {
+                related.push(`  chunk ${i + 1}: ${f.relativePath}`);
+            }
+        }
+    }
+    if (related.length > 0) {
+        manifest += 'Related files in other chunks:\n';
+        manifest += related.slice(0, 6).join('\n') + '\n';
+        if (related.length > 6) {
+            manifest += `  ... +${related.length - 6} more\n`;
+        }
+    }
+    // Trim to budget
+    if (manifest.length > MAX_MANIFEST_CHARS) {
+        manifest = manifest.slice(0, MAX_MANIFEST_CHARS - 20) + '\n  ... (trimmed)\n';
+    }
+    return manifest;
+}
+// ---------------------------------------------------------------------------
+// Smart prompt builder
+// ---------------------------------------------------------------------------
+function buildSmartPrompt(chunk, chunkNum, totalChunks) {
+    const fileList = chunk.files.map(f => {
+        const suffix = f.compressed ? ' (compressed)' : '';
+        return `  - ${f.relativePath}${suffix}`;
+    });
+    let prompt = `${chunk.manifest}
+Analyze chunk ${chunkNum}/${totalChunks} for code quality issues.
+
+FILES IN THIS CHUNK:
+${fileList.join('\n')}
+
+ISSUE CATEGORIES:
+  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal
+  bugs        — null derefs, off-by-one, race conditions, wrong logic, unhandled errors
+  types       — type mismatches, unsafe casts, missing generics, any-typed values
+  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
+  dead-code   — functions/classes/exports never called or imported
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  duplicates  — copy-pasted logic that should be a shared function
+  coverage    — public functions with zero test coverage, untested error paths
+
+SEVERITY GUIDE:
+  critical — exploitable in production (data loss, auth bypass, RCE)
+  high     — will cause bugs in normal usage
+  medium   — code smell, maintainability risk
+  low      — style nit, minor improvement
+
+RULES:
+- Only report REAL issues. No false positives. No style preferences.
+- Be specific: exact file, exact line number, exact description.
+- If a file looks clean, return an empty issues array.
+
+SOURCE CODE:
+
+`;
+    for (const file of chunk.files) {
+        prompt += `--- ${file.relativePath} ---\n${file.content}\n\n`;
+    }
+    return prompt;
+}
+// ---------------------------------------------------------------------------
+// Public orchestrator: replaces chunkFiles + buildPrompt
+// ---------------------------------------------------------------------------
+/**
+ * The main entry point. Takes raw file paths, returns fully-formed SmartChunks
+ * ready to be sent to the model, each guaranteed to fit within the token budget.
+ */
+function prepareChunks(filePaths, cwd, model) {
+    const modelLimit = getModelInputLimit(model);
+    const codeBudget = calculateCodeBudget(modelLimit);
+    // 1. Analyze all files
+    const files = [];
+    for (const fp of filePaths) {
+        const info = analyzeFile(fp, cwd);
+        if (info)
+            files.push(info);
+    }
+    if (files.length === 0)
+        return [];
+    // 2. Build dependency graph
+    const graph = buildDependencyGraph(files);
+    // 3. Smart-group into chunks
+    const groups = smartGroup(files, graph, codeBudget);
+    // 4. Build manifest + assemble SmartChunks
+    const chunks = groups.map((group, i) => {
+        const manifest = buildManifest(files, groups, i);
+        const totalCodeTokens = group.reduce((sum, f) => sum + f.tokens, 0);
+        return { files: group, totalCodeTokens, manifest };
+    });
+    return chunks;
 }
 
 
