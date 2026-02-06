@@ -36,5 +36,11 @@ export function getConfig(): SloppyConfig {
     githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
     testCommand: core.getInput('test-command') || '',
     failBelow: parseInt(core.getInput('fail-below') || '0'),
+    verbose: core.getInput('verbose') === 'true',
+    maxTurns: {
+      scan: parseInt(core.getInput('max-turns') || '0') || 30,
+      fix: parseInt(core.getInput('max-turns') || '0') || 15,
+    },
+    maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
   };
 }

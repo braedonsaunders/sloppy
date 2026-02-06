@@ -219,6 +219,8 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
   core.info(`Model:      ${config.model || 'default'}`);
   core.info(`Timeout:    ${formatDuration(config.timeout)}`);
   core.info(`Max passes: ${config.maxPasses}`);
+  core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
+  core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
   core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
   core.info('='.repeat(50));
   core.info('');
@@ -226,7 +228,7 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
   // Install agent
   core.info(`Installing ${config.agent} CLI...`);
   await installAgent(config.agent);
-  core.info(`${config.agent} CLI installed.`);
+  core.info(`Done.`);
 
   // Setup git
   await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
@@ -282,9 +284,10 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     core.info(`Scanning repository (${config.agent})...`);
     const scanStart = Date.now();
     const scanResult = await runAgent(config.agent, scanPrompt(state.pass, prevFixes, plan), {
-      maxTurns: 30,
+      maxTurns: config.maxTurns.scan,
       model: config.model || undefined,
       timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
+      verbose: config.verbose,
     });
     const scanDuration = formatDuration(Date.now() - scanStart);
 
@@ -321,30 +324,37 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
 
     // FIX each issue atomically
     const sorted = sortBySeverity(found);
+    const limit = config.maxIssuesPerPass > 0 ? config.maxIssuesPerPass : sorted.length;
+    const toFix = sorted.slice(0, limit);
     let passFixed = 0;
     let passSkipped = 0;
 
     core.info('');
-    core.info(`Fixing ${sorted.length} issues (highest severity first)...`);
+    if (limit < sorted.length) {
+      core.info(`Fixing ${toFix.length} of ${sorted.length} issues (capped by max-issues-per-pass)...`);
+    } else {
+      core.info(`Fixing ${toFix.length} issues (highest severity first)...`);
+    }
     core.info('');
 
-    for (let idx = 0; idx < sorted.length; idx++) {
-      const issue = sorted[idx];
+    for (let idx = 0; idx < toFix.length; idx++) {
+      const issue = toFix[idx];
       if (Date.now() >= deadline - margin) {
         core.info('');
-        core.warning(`Timeout approaching — stopping after ${idx} of ${sorted.length} issues`);
+        core.warning(`Timeout approaching — stopping after ${idx} of ${toFix.length} issues`);
         break;
       }
 
       const timeLeft = formatTimeRemaining(deadline);
-      core.info(`  [${idx + 1}/${sorted.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
+      core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
       core.info(`    ${issue.description}`);
 
       const fixStart = Date.now();
       const result = await runAgent(config.agent, fixPrompt(issue, testCmd), {
-        maxTurns: 15,
+        maxTurns: config.maxTurns.fix,
         model: config.model || undefined,
         timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+        verbose: config.verbose,
       });
       const fixDuration = formatDuration(Date.now() - fixStart);
 

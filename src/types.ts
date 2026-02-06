@@ -25,6 +25,9 @@ export interface SloppyConfig {
   githubModelsModel: string;
   testCommand: string;
   failBelow: number;
+  verbose: boolean;
+  maxTurns: { scan: number; fix: number };
+  maxIssuesPerPass: number;
 }
 
 export interface Issue {

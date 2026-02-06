@@ -71,6 +71,18 @@ inputs:
     description: 'Fail the action if score drops below this'
     required: false
     default: '0'
+  verbose:
+    description: 'Stream agent output to the Actions log in real-time'
+    required: false
+    default: 'false'
+  max-turns:
+    description: 'Max agent turns per invocation (scan: 30, fix: 15)'
+    required: false
+    default: ''
+  max-issues-per-pass:
+    description: 'Max issues to fix per pass (0 = unlimited)'
+    required: false
+    default: '0'
   chain_number:
     description: 'Internal: chain continuation number'
     required: false

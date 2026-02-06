@@ -283,6 +283,9 @@ All inputs are optional. Sloppy works with zero configuration.
 | `gist-id` | *(empty)* | GitHub Gist ID for dynamic badge updates |
 | `gist-token` | *(empty)* | PAT with `gist` scope for writing badge data |
 | `fail-below` | `0` | Fail the GitHub Actions check if the score drops below this threshold |
+| `verbose` | `false` | Stream agent output to the Actions log in real-time. Useful for debugging or watching progress. |
+| `max-turns` | `30`/`15` | Max agent turns per invocation (30 for scan, 15 for fix). Lower = faster + cheaper. |
+| `max-issues-per-pass` | `0` (unlimited) | Cap how many issues to fix per pass. Useful for cost control on large repos. |
 
 ### Outputs
 

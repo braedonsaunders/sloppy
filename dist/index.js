@@ -29966,7 +29966,6 @@ exports.runAgent = runAgent;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 async function installAgent(agent) {
-    core.info(`Installing ${agent} CLI...`);
     if (agent === 'claude') {
         await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
     }
@@ -29977,12 +29976,35 @@ async function installAgent(agent) {
 async function runAgent(agent, prompt, options) {
     let stdout = '';
     let stderr = '';
+    const verbose = options?.verbose ?? false;
     const execOptions = {
         listeners: {
-            stdout: (data) => { stdout += data.toString(); },
-            stderr: (data) => { stderr += data.toString(); },
+            stdout: (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                if (verbose) {
+                    // Stream each line to the Actions log in real-time
+                    for (const line of chunk.split('\n')) {
+                        const trimmed = line.trim();
+                        if (trimmed)
+                            core.info(`  | ${trimmed}`);
+                    }
+                }
+            },
+            stderr: (data) => {
+                const chunk = data.toString();
+                stderr += chunk;
+                if (verbose) {
+                    for (const line of chunk.split('\n')) {
+                        const trimmed = line.trim();
+                        if (trimmed)
+                            core.info(`  |err| ${trimmed}`);
+                    }
+                }
+            },
         },
         ignoreReturnCode: true,
+        silent: true, // suppress @actions/exec default output; we handle it ourselves
         env: { ...process.env },
     };
     let exitCode;
@@ -29992,6 +30014,8 @@ async function runAgent(agent, prompt, options) {
             args.push('--max-turns', String(options.maxTurns));
         if (options?.model)
             args.push('--model', options.model);
+        if (verbose)
+            args.push('--verbose');
         exitCode = await exec.exec('claude', args, execOptions);
     }
     else {
@@ -30236,6 +30260,12 @@ function getConfig() {
         githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
         testCommand: core.getInput('test-command') || '',
         failBelow: parseInt(core.getInput('fail-below') || '0'),
+        verbose: core.getInput('verbose') === 'true',
+        maxTurns: {
+            scan: parseInt(core.getInput('max-turns') || '0') || 30,
+            fix: parseInt(core.getInput('max-turns') || '0') || 15,
+        },
+        maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
     };
 }
 
@@ -30883,13 +30913,15 @@ async function runFixLoop(config) {
     core.info(`Model:      ${config.model || 'default'}`);
     core.info(`Timeout:    ${formatDuration(config.timeout)}`);
     core.info(`Max passes: ${config.maxPasses}`);
+    core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
+    core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
     core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
     core.info('='.repeat(50));
     core.info('');
     // Install agent
     core.info(`Installing ${config.agent} CLI...`);
     await (0, agent_1.installAgent)(config.agent);
-    core.info(`${config.agent} CLI installed.`);
+    core.info(`Done.`);
     // Setup git
     await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
     await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
@@ -30938,9 +30970,10 @@ async function runFixLoop(config) {
         core.info(`Scanning repository (${config.agent})...`);
         const scanStart = Date.now();
         const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan), {
-            maxTurns: 30,
+            maxTurns: config.maxTurns.scan,
             model: config.model || undefined,
             timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
+            verbose: config.verbose,
         });
         const scanDuration = formatDuration(Date.now() - scanStart);
         const found = parseIssues(scanResult.output);
@@ -30972,26 +31005,34 @@ async function runFixLoop(config) {
         }
         // FIX each issue atomically
         const sorted = sortBySeverity(found);
+        const limit = config.maxIssuesPerPass > 0 ? config.maxIssuesPerPass : sorted.length;
+        const toFix = sorted.slice(0, limit);
         let passFixed = 0;
         let passSkipped = 0;
         core.info('');
-        core.info(`Fixing ${sorted.length} issues (highest severity first)...`);
+        if (limit < sorted.length) {
+            core.info(`Fixing ${toFix.length} of ${sorted.length} issues (capped by max-issues-per-pass)...`);
+        }
+        else {
+            core.info(`Fixing ${toFix.length} issues (highest severity first)...`);
+        }
         core.info('');
-        for (let idx = 0; idx < sorted.length; idx++) {
-            const issue = sorted[idx];
+        for (let idx = 0; idx < toFix.length; idx++) {
+            const issue = toFix[idx];
             if (Date.now() >= deadline - margin) {
                 core.info('');
-                core.warning(`Timeout approaching — stopping after ${idx} of ${sorted.length} issues`);
+                core.warning(`Timeout approaching — stopping after ${idx} of ${toFix.length} issues`);
                 break;
             }
             const timeLeft = formatTimeRemaining(deadline);
-            core.info(`  [${idx + 1}/${sorted.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
+            core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
             core.info(`    ${issue.description}`);
             const fixStart = Date.now();
             const result = await (0, agent_1.runAgent)(config.agent, fixPrompt(issue, testCmd), {
-                maxTurns: 15,
+                maxTurns: config.maxTurns.fix,
                 model: config.model || undefined,
                 timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+                verbose: config.verbose,
             });
             const fixDuration = formatDuration(Date.now() - fixStart);
             if (result.output.includes('SKIP:') || result.exitCode !== 0) {
