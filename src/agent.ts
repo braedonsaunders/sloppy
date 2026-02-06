@@ -141,6 +141,7 @@ async function runClaudeSDK(
   options?: { maxTurns?: number; model?: string; timeout?: number; verbose?: boolean; cwd?: string },
 ): Promise<{ output: string; exitCode: number }> {
   const verbose = options?.verbose ?? false;
+  const isOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const execStart = Date.now();
   let agentResult = '';
   let lastResultsText = '';   // Fallback: last assistant text containing structured results JSON
@@ -221,7 +222,7 @@ async function runClaudeSDK(
             ui.agentSystem(sub);
           }
         } else if (event.type === 'result') {
-          ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd);
+          ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd, isOAuth);
         }
       }
     } catch {

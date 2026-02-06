@@ -30088,6 +30088,7 @@ async function runAgent(agent, prompt, options) {
 }
 async function runClaudeSDK(prompt, options) {
     const verbose = options?.verbose ?? false;
+    const isOAuth = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
     const execStart = Date.now();
     let agentResult = '';
     let lastResultsText = ''; // Fallback: last assistant text containing structured results JSON
@@ -30168,7 +30169,7 @@ async function runClaudeSDK(prompt, options) {
                     }
                 }
                 else if (event.type === 'result') {
-                    ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd);
+                    ui.agentResult(event.subtype, event.num_turns, event.total_cost_usd, isOAuth);
                 }
             }
         }
@@ -35998,8 +35999,14 @@ function agentToolSummary(summary) {
 function agentSystem(subtype) {
     core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`[${subtype}]`, S.magenta)}`);
 }
-function agentResult(subtype, turns, cost) {
-    const costStr = cost ? c(` $${cost.toFixed(3)}`, S.gray) : '';
+function agentResult(subtype, turns, cost, isOAuth) {
+    let costStr = '';
+    if (isOAuth) {
+        costStr = c(' included in subscription', S.gray);
+    }
+    else if (cost) {
+        costStr = c(` $${cost.toFixed(2)} USD`, S.gray);
+    }
     core.info(`  ${c(exports.SYM.vline, S.gray)} ${c(`[result: ${subtype}, ${turns} turns${costStr ? ',' : ''}${costStr}]`, S.cyan)}`);
 }
 function agentHeartbeat(elapsed, events) {
