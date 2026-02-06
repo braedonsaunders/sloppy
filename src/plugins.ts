@@ -463,6 +463,7 @@ export function applyFilters(issues: Issue[], filters: PluginFilters): Issue[] {
 /** Simple glob matcher supporting * and **. */
 function matchGlob(filepath: string, pattern: string): boolean {
   const regexStr = pattern
+    .replace(/[+?()[\]{}^$|]/g, '\\$&')
     .replace(/\./g, '\\.')
     .replace(/\*\*/g, '{{DOUBLESTAR}}')
     .replace(/\*/g, '[^/]*')

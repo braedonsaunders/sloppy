@@ -1,19 +1,6 @@
 import * as core from '@actions/core';
 import { SloppyConfig, IssueType, ScanScope, Severity } from './types';
-
-function parseTimeout(input: string): number {
-  const match = input.match(/^(\d+)(s|m|h)?$/);
-  if (!match) return 30 * 60 * 1000;
-  const value = parseInt(match[1]);
-  const unit = match[2] || 'm';
-  switch (unit) {
-    case 's': return value * 1000;
-    case 'h': return value * 60 * 60 * 1000;
-    default:  return value * 60 * 1000;
-  }
-}
-
-const VALID_SEVERITIES = new Set<string>(['critical', 'high', 'medium', 'low']);
+import { parseTimeout, VALID_SEVERITIES } from './utils';
 
 /**
  * Collect raw action input strings so mergeRepoConfig can detect which
@@ -66,9 +53,9 @@ export function getConfig(): SloppyConfig {
     agent: (core.getInput('agent') || 'claude') as 'claude' | 'codex',
     timeout: parseTimeout(core.getInput('timeout') || '30m'),
     maxCost: parseFloat((core.getInput('max-cost') || '$5.00').replace('$', '')) || 5,
-    maxPasses: parseInt(core.getInput('max-passes') || '10'),
-    minPasses: parseInt(core.getInput('min-passes') || '2'),
-    maxChains: parseInt(core.getInput('max-chains') || '3'),
+    maxPasses: parseInt(core.getInput('max-passes') || '10') || 10,
+    minPasses: parseInt(core.getInput('min-passes') || '2') || 2,
+    maxChains: parseInt(core.getInput('max-chains') || '3') || 3,
     fixTypes: (core.getInput('fix-types') || 'security,bugs,types,lint,dead-code,stubs,duplicates,coverage')
       .split(',').map(s => s.trim()) as IssueType[],
     strictness: (core.getInput('strictness') || 'high') as 'low' | 'medium' | 'high',
@@ -76,19 +63,19 @@ export function getConfig(): SloppyConfig {
     model: core.getInput('model') || '',
     githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
     testCommand: core.getInput('test-command') || '',
-    failBelow: parseInt(core.getInput('fail-below') || '0'),
+    failBelow: parseInt(core.getInput('fail-below') || '0') || 0,
     verbose: core.getInput('verbose') === 'true',
     maxTurns: {
       scan: parseInt(core.getInput('max-turns') || '0') || 30,
       fix: parseInt(core.getInput('max-turns') || '0') || 15,
     },
-    maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+    maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0') || 0,
     scanScope: (core.getInput('scan-scope') || 'auto') as ScanScope,
     outputFile: core.getInput('output-file') || '',
     customPrompt: core.getInput('custom-prompt') || '',
     customPromptFile: core.getInput('custom-prompt-file') || '',
     pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
-    parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3'), 1), 8),
+    parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '3') || 3, 1), 8),
     app: {},
     framework: '',
     runtime: '',

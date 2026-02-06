@@ -4,7 +4,7 @@ import * as core from '@actions/core';
 import { HistoryEntry } from './types';
 
 export function generateDashboard(history: HistoryEntry[]): string {
-  const data = JSON.stringify(history);
+  const data = JSON.stringify(history).replace(/</g, '\\u003c');
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
