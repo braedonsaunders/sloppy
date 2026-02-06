@@ -186,7 +186,15 @@ jobs:
 
 ### Tier 3: Claude Max Subscription (OAuth)
 
-If you have a Claude Max subscription, you can use your OAuth token instead of a metered API key. Same capabilities, subscription pricing.
+If you have a Claude Max subscription ($100-200/month), you can use your subscription instead of pay-per-token API billing. Sloppy uses the Claude Code CLI under the hood, and Anthropic officially supports Max subscription OAuth tokens in CI when running through Claude Code.
+
+Generate a token locally:
+
+```bash
+claude setup-token
+```
+
+Store it as a GitHub secret, then:
 
 ```yaml
       - uses: braedonsaunders/sloppy@v1
@@ -196,6 +204,8 @@ If you have a Claude Max subscription, you can use your OAuth token instead of a
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+**Important:** OAuth tokens may expire after ~24 hours. If your scheduled runs fail with auth errors, regenerate the token with `claude setup-token`. Anthropic is working on automatic refresh. Max subscription usage is subject to your plan's rate limits (5-hour rolling window + weekly ceiling). For high-volume or team usage, API keys are more reliable.
 
 ---
 
@@ -356,6 +366,10 @@ Sloppy checkpoints its progress and triggers a new workflow run to continue. Thi
 **Q: How much does fix mode cost?**
 
 It depends on your codebase and the issues found. The `max-cost` input (default: `$5.00`) caps spending per run. A typical medium-sized repo costs $1-3 per fix run. You can also use a Claude Max subscription via OAuth token for flat-rate pricing.
+
+**Q: Is the Claude Max subscription option compliant with Anthropic's terms?**
+
+Yes. Sloppy runs the official Claude Code CLI (`@anthropic-ai/claude-code`) in headless mode, which is the same binary Anthropic distributes and supports. Anthropic explicitly supports Max subscription OAuth tokens in CI via `claude setup-token`. This is not a third-party harness -- it's Claude Code itself. Note that Anthropic does enforce rate limits on subscriptions (5-hour rolling window + weekly ceiling) and OAuth tokens may expire after ~24 hours, requiring regeneration.
 
 **Q: Where is the data stored?**
 
