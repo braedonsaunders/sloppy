@@ -233,13 +233,14 @@ async function runClaudeSDK(
     env: {
       ...process.env,
       NODE_PATH: globalRoot,
-      // Trim API keys — GitHub Actions secrets sometimes include trailing newlines
-      // which cause "invalid header value" errors in the SDK's HTTP client.
+      // Strip all whitespace from auth tokens — GitHub Actions secrets often
+      // include embedded or trailing newlines which cause "Headers.append:
+      // invalid header value" errors when the SDK sets Authorization headers.
       ...(process.env.ANTHROPIC_API_KEY && {
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.trim(),
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
       }),
       ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
-        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.trim(),
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
       }),
     } as Record<string, string>,
   };
@@ -324,7 +325,15 @@ async function runCLI(
     ignoreReturnCode: true,
     silent: true,
     cwd: options?.cwd || undefined,
-    env: { ...process.env } as Record<string, string>,
+    env: {
+      ...process.env,
+      ...(process.env.ANTHROPIC_API_KEY && {
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY.replace(/\s/g, ''),
+      }),
+      ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && {
+        CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN.replace(/\s/g, ''),
+      }),
+    } as Record<string, string>,
   };
 
   let exitCode: number;
