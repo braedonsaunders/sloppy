@@ -37,11 +37,10 @@ async function loadQuery() {
     try {
       const mod = await import(pkg);
       if (mod.query) return mod.query;
-    } catch (e) {
-      process.stderr.write('import(' + pkg + '): ' + (e.code || e.message) + '\\n');
-    }
+    } catch {}
 
     // Try loading from global npm root via file URL
+    // (bare import always fails for globally-installed ESM packages)
     if (globalRoot) {
       try {
         const pkgDir = path.join(globalRoot, pkg);
@@ -51,11 +50,10 @@ async function loadQuery() {
         if (typeof entry === 'object') entry = entry.import || entry.default;
         if (!entry) entry = pkgJson.main || 'index.js';
         const fullPath = path.resolve(pkgDir, entry);
-        process.stderr.write('trying file URL: ' + fullPath + '\\n');
         const mod = await import(pathToFileURL(fullPath).href);
         if (mod.query) return mod.query;
       } catch (e) {
-        process.stderr.write('file import(' + pkg + '): ' + (e.code || e.message) + '\\n');
+        process.stderr.write(pkg + ': ' + (e.code || e.message) + '\\n');
       }
     }
   }
