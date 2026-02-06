@@ -6,6 +6,7 @@
  * reported directly and excluded from AI scanning to save token budget.
  */
 
+import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, IssueType, Severity, PluginPattern } from './types';
@@ -120,11 +121,28 @@ const PATTERNS: Pattern[] = [
   },
 ];
 
+/**
+ * Basic check for common ReDoS patterns (nested quantifiers).
+ * Detects patterns like (a+)+, (a*)+, (a+)*, (a{2,})+ which cause
+ * catastrophic backtracking.
+ */
+function isReDoSRisk(pattern: string): boolean {
+  return /([+*?]|\{\d+,?\d*\})\s*\)\s*([+*?]|\{\d+,?\d*\})/.test(pattern);
+}
+
 /** Convert PluginPattern definitions into runtime Pattern objects. */
 function compilePluginPatterns(pluginPatterns: PluginPattern[]): Pattern[] {
   const compiled: Pattern[] = [];
   for (const pp of pluginPatterns) {
     try {
+      if (isReDoSRisk(pp.regex)) {
+        core.warning(`Plugin pattern rejected (potential ReDoS): ${pp.regex.slice(0, 60)}`);
+        continue;
+      }
+      if (pp.regex.length > 500) {
+        core.warning(`Plugin pattern rejected (too complex, ${pp.regex.length} chars): ${pp.regex.slice(0, 60)}...`);
+        continue;
+      }
       const regex = new RegExp(pp.regex, 'g');
       compiled.push({
         regex,
