@@ -31262,6 +31262,11 @@ async function runFixLoop(config) {
         core.info(`Running totals: ${state.totalFixed} fixed, ${state.totalSkipped} skipped`);
         core.info('-'.repeat(50));
         (0, checkpoint_1.saveCheckpoint)(state);
+        if (config.outputFile) {
+            const remaining = state.issues.filter(i => i.status !== 'fixed');
+            const currentScore = (0, scan_1.calculateScore)(remaining);
+            (0, report_1.writeOutputFile)(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || (0, scan_1.calculateScore)(state.issues));
+        }
     }
     // Calculate scores
     const allFound = state.issues;

@@ -6,7 +6,7 @@ import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity } from 
 import { installAgent, runAgent } from './agent';
 import { calculateScore } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
-import { loadOutputFile } from './report';
+import { loadOutputFile, writeOutputFile } from './report';
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -418,6 +418,12 @@ export async function runFixLoop(config: SloppyConfig): Promise<LoopState> {
     core.info('-'.repeat(50));
 
     saveCheckpoint(state);
+
+    if (config.outputFile) {
+      const remaining = state.issues.filter(i => i.status !== 'fixed');
+      const currentScore = calculateScore(remaining);
+      writeOutputFile(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || calculateScore(state.issues));
+    }
   }
 
   // Calculate scores
