@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import { sleep } from './utils';
 
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
 const MAX_RETRIES = 4;
@@ -48,10 +49,6 @@ function getGitHubToken(): string {
     );
   }
   return token;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export async function callGitHubModels(

@@ -10,6 +10,7 @@ import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
 import { runHook, applyFilters, formatCustomPromptSection, applyAllowRules } from './plugins';
 import * as ui from './ui';
+import { formatDuration, mapRawToIssue } from './utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,16 +22,6 @@ function sortBySeverity(issues: Issue[]): Issue[] {
   return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
 }
 
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  if (m < 60) return rem > 0 ? `${m}m${rem}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  const remM = m % 60;
-  return remM > 0 ? `${h}h${remM}m` : `${h}h`;
-}
 
 function formatTimeRemaining(deadline: number): string {
   return formatDuration(Math.max(0, deadline - Date.now()));
@@ -394,21 +385,19 @@ function parseIssues(output: string): Issue[] {
       const parsed = JSON.parse(text);
       if (parsed.result) text = parsed.result;
       else if (typeof parsed === 'string') text = parsed;
-    } catch {}
+    } catch { /* not JSON-wrapped, use raw text */ }
 
     const match = text.match(/\{[\s\S]*"issues"[\s\S]*\}/);
     if (!match) return [];
 
     const data = JSON.parse(match[0]);
-    return (data.issues || []).map((raw: any, i: number) => ({
-      id: `fix-${Date.now()}-${i}`,
-      type: (raw.type || 'lint') as IssueType,
-      severity: (raw.severity || 'medium') as Severity,
-      file: raw.file || 'unknown',
-      line: raw.line,
-      description: raw.description || '',
-      status: 'found' as const,
-    }));
+    const rawIssues: unknown[] = data.issues || [];
+    const issues: Issue[] = [];
+    for (let i = 0; i < rawIssues.length; i++) {
+      const issue = mapRawToIssue(rawIssues[i], 'fix', i);
+      if (issue) issues.push(issue);
+    }
+    return issues;
   } catch {
     core.warning('Failed to parse agent scan output');
     return [];
@@ -694,8 +683,16 @@ async function dispatchClustersParallel(
           parsed.fixed[i].commitSha = picked[i];
         }
 
-        allFixed.push(...parsed.fixed);
-        allSkipped.push(...parsed.skipped);
+        // Re-mark fixes that weren't actually cherry-picked as skipped
+        const actuallyFixed = parsed.fixed.slice(0, picked.length);
+        const lostFixes = parsed.fixed.slice(picked.length);
+        for (const lost of lostFixes) {
+          lost.status = 'skipped';
+          lost.skipReason = 'Cherry-pick conflict — fix lost';
+        }
+
+        allFixed.push(...actuallyFixed);
+        allSkipped.push(...parsed.skipped, ...lostFixes);
       }
 
       // Cleanup worktree
@@ -932,6 +929,17 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
       for (const issue of skipped) {
         state.totalSkipped++;
         ui.skipped(issue.file, issue.description, issue.skipReason);
+      }
+
+      // Run post-fix hooks (matches sequential path behavior)
+      if (pluginCtx) {
+        for (const issue of [...fixed, ...skipped]) {
+          await runHook(pluginCtx.plugins, 'post-fix', {
+            SLOPPY_ISSUE_FILE: issue.file,
+            SLOPPY_ISSUE_TYPE: issue.type,
+            SLOPPY_ISSUE_STATUS: issue.status,
+          });
+        }
       }
     } else {
       // Sequential cluster-based dispatch

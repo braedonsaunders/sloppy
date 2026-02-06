@@ -18,6 +18,7 @@ import { runHook, applyFilters, applyAllowRules } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
 import * as ui from './ui';
+import { formatDuration, sleep, mapRawToIssue } from './utils';
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -126,29 +127,25 @@ async function collectPrFiles(cwd: string): Promise<string[] | null> {
 function parseIssues(content: string): Issue[] {
   try {
     const data = JSON.parse(content);
-    return (data.issues || []).map((raw: any, i: number) => ({
-      id: `scan-${Date.now()}-${i}`,
-      type: (raw.type || 'lint') as IssueType,
-      severity: (raw.severity || 'medium') as Severity,
-      file: raw.file || 'unknown',
-      line: raw.line || undefined,
-      description: raw.description || 'Unknown issue',
-      status: 'found' as const,
-    }));
+    const rawIssues: unknown[] = data.issues || [];
+    const issues: Issue[] = [];
+    for (let i = 0; i < rawIssues.length; i++) {
+      const issue = mapRawToIssue(rawIssues[i], 'scan', i);
+      if (issue) issues.push(issue);
+    }
+    return issues;
   } catch {
     try {
       const match = content.match(/\{[\s\S]*\}/);
       if (!match) return [];
       const data = JSON.parse(match[0]);
-      return (data.issues || []).map((raw: any, i: number) => ({
-        id: `scan-${Date.now()}-${i}`,
-        type: (raw.type || 'lint') as IssueType,
-        severity: (raw.severity || 'medium') as Severity,
-        file: raw.file || 'unknown',
-        line: raw.line || undefined,
-        description: raw.description || 'Unknown issue',
-        status: 'found' as const,
-      }));
+      const rawIssues: unknown[] = data.issues || [];
+      const issues: Issue[] = [];
+      for (let i = 0; i < rawIssues.length; i++) {
+        const issue = mapRawToIssue(rawIssues[i], 'scan', i);
+        if (issue) issues.push(issue);
+      }
+      return issues;
     } catch {
       core.warning('Failed to parse scan response');
       return [];
@@ -186,18 +183,6 @@ export function calculateScore(issues: Issue[], loc?: number): number {
     totalPenalty = totalPenalty / kloc;
   }
   return Math.max(0, Math.min(100, Math.round(100 - totalPenalty)));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const rem = s % 60;
-  return rem > 0 ? `${m}m${rem}s` : `${m}m`;
 }
 
 // ---------------------------------------------------------------------------
