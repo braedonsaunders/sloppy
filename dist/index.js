@@ -30124,8 +30124,27 @@ async function runClaudeSDK(prompt, options) {
                         }
                     }
                 }
+                else if (event.type === 'tool_progress') {
+                    core.info(`  | [${event.tool_name}: ${event.elapsed_time_seconds}s]`);
+                }
+                else if (event.type === 'tool_use_summary') {
+                    const preview = event.summary.length > 200
+                        ? event.summary.slice(0, 200) + '...'
+                        : event.summary;
+                    core.info(`  | ${preview}`);
+                }
                 else if (event.type === 'system') {
-                    core.info(`  | [system: ${event.subtype || 'init'}]`);
+                    const sub = event.subtype || 'init';
+                    if (sub === 'task_notification') {
+                        core.info(`  | [task ${event.status}: ${event.summary || event.task_id}]`);
+                    }
+                    else {
+                        core.info(`  | [system: ${sub}]`);
+                    }
+                }
+                else if (event.type === 'result') {
+                    const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : '';
+                    core.info(`  | [result: ${event.subtype}, ${event.num_turns} turns${cost}]`);
                 }
             }
         }
@@ -30140,7 +30159,7 @@ async function runClaudeSDK(prompt, options) {
         heartbeat = setInterval(() => {
             const elapsed = Math.round((Date.now() - execStart) / 1000);
             core.info(`  ... agent running (${elapsed}s, ${eventCount} events)`);
-        }, 30_000);
+        }, 15_000);
     }
     const execOptions = {
         listeners: {
