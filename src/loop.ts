@@ -133,6 +133,59 @@ async function gitHasChanges(cwd?: string): Promise<boolean> {
   return stdout.trim().length > 0;
 }
 
+async function gitHead(cwd?: string): Promise<string> {
+  let sha = '';
+  const execOpts: exec.ExecOptions = {
+    ignoreReturnCode: true,
+    listeners: { stdout: (d: Buffer) => { sha += d.toString().trim(); } },
+    silent: true,
+  };
+  if (cwd) execOpts.cwd = cwd;
+  await exec.exec('git', ['rev-parse', 'HEAD'], execOpts);
+  return sha;
+}
+
+// When the agent times out or errors without producing structured JSON output,
+// fall back to checking what files were actually committed. The fix prompt
+// instructs the agent to commit each fix individually, so we can infer which
+// issues were fixed by comparing HEAD before and after the agent run.
+async function inferFixedFromGit(
+  cluster: IssueCluster,
+  headBefore: string,
+  cwd?: string,
+): Promise<{ fixed: Issue[]; skipped: Issue[] } | null> {
+  const headAfter = await gitHead(cwd);
+  if (!headAfter || headAfter === headBefore) return null;
+
+  let filesOutput = '';
+  const execOpts: exec.ExecOptions = {
+    listeners: { stdout: (d: Buffer) => { filesOutput += d.toString(); } },
+    silent: true,
+    ignoreReturnCode: true,
+  };
+  if (cwd) execOpts.cwd = cwd;
+  await exec.exec('git', ['diff', '--name-only', headBefore, headAfter], execOpts);
+
+  const changedFiles = new Set(filesOutput.trim().split('\n').filter(f => f.trim()));
+  if (changedFiles.size === 0) return null;
+
+  const fixed: Issue[] = [];
+  const skipped: Issue[] = [];
+
+  for (const issue of cluster.issues) {
+    if (changedFiles.has(issue.file)) {
+      issue.status = 'fixed';
+      fixed.push(issue);
+    } else {
+      issue.status = 'skipped';
+      issue.skipReason = 'Agent did not modify this file';
+      skipped.push(issue);
+    }
+  }
+
+  return fixed.length > 0 ? { fixed, skipped } : null;
+}
+
 // ---------------------------------------------------------------------------
 // Issue clustering — groups related issues for efficient multi-fix dispatch
 // ---------------------------------------------------------------------------
@@ -444,10 +497,18 @@ async function dispatchClusterSequential(
       verbose: config.verbose,
     });
 
-    if (result.output.includes('SKIP:') || result.exitCode !== 0) {
+    if (result.output.includes('SKIP:')) {
       issue.status = 'skipped';
       issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
       await gitRevert();
+      return { fixed: [], skipped: [issue] };
+    }
+
+    // Agent may have timed out (exitCode !== 0) but still produced a valid fix.
+    // Check for changes before giving up — only skip if nothing was modified.
+    if (result.exitCode !== 0 && !(await gitHasChanges())) {
+      issue.status = 'skipped';
+      issue.skipReason = 'Agent exited with error and made no changes';
       return { fixed: [], skipped: [issue] };
     }
 
@@ -471,6 +532,8 @@ async function dispatchClusterSequential(
     deadline - Date.now() - margin,
   );
 
+  const headBefore = await gitHead();
+
   const result = await runAgent(config.agent, prompt, {
     maxTurns: config.maxTurns.fix * 2,
     model: config.model || undefined,
@@ -478,7 +541,18 @@ async function dispatchClusterSequential(
     verbose: config.verbose,
   });
 
-  const parsed = parseClusterResults(result.output, cluster);
+  let parsed = parseClusterResults(result.output, cluster);
+
+  // If structured output parsing failed, fall back to checking git history.
+  // The agent commits each fix individually, so we can infer which issues
+  // were fixed by checking which files were modified since headBefore.
+  if (parsed.fixed.length === 0 && headBefore) {
+    const gitParsed = await inferFixedFromGit(cluster, headBefore);
+    if (gitParsed && gitParsed.fixed.length > 0) {
+      core.info(`  Inferred ${gitParsed.fixed.length} fixed issue(s) from git history (agent output was not parseable)`);
+      parsed = gitParsed;
+    }
+  }
 
   if (result.exitCode !== 0 && parsed.fixed.length === 0) {
     if (await gitHasChanges()) {
@@ -530,6 +604,8 @@ async function dispatchClustersParallel(
 
       core.info(`    [${worker.branch}] Fixing ${worker.cluster.issues.length} issues in ${worker.cluster.directory}/`);
 
+      const headBefore = await gitHead(worker.worktree);
+
       const result = await runAgent(config.agent, prompt, {
         maxTurns: config.maxTurns.fix * 2,
         model: config.model || undefined,
@@ -538,13 +614,13 @@ async function dispatchClustersParallel(
         cwd: worker.worktree,
       });
 
-      return { worker, result };
+      return { worker, result, headBefore };
     });
 
     const results = await Promise.all(promises);
 
     // Cherry-pick commits from each worker back to main branch
-    for (const { worker, result } of results) {
+    for (const { worker, result, headBefore } of results) {
       const { cluster } = worker;
 
       if (cluster.issues.length === 1) {
@@ -566,7 +642,17 @@ async function dispatchClustersParallel(
           }
         }
       } else {
-        const parsed = parseClusterResults(result.output, cluster);
+        let parsed = parseClusterResults(result.output, cluster);
+
+        // If structured output parsing failed, infer from git history
+        if (parsed.fixed.length === 0 && headBefore) {
+          const gitParsed = await inferFixedFromGit(cluster, headBefore, worker.worktree);
+          if (gitParsed && gitParsed.fixed.length > 0) {
+            core.info(`    [${worker.branch}] Inferred ${gitParsed.fixed.length} fixed issue(s) from git history`);
+            parsed = gitParsed;
+          }
+        }
+
         const picked = await cherryPickCommits(worker.branch);
         core.info(`    [${worker.branch}] Cherry-picked ${picked.length} commits`);
 

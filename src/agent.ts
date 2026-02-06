@@ -128,6 +128,7 @@ async function runClaudeSDK(
   const verbose = options?.verbose ?? false;
   const execStart = Date.now();
   let agentResult = '';
+  let lastResultsText = '';   // Fallback: last assistant text containing structured results JSON
   let lineBuffer = '';
   let eventCount = 0;
   let firstChunk = true;
@@ -164,6 +165,19 @@ async function runClaudeSDK(
 
       if (event.type === 'result') {
         agentResult = event.result || '';
+      }
+
+      // Capture assistant text containing structured results JSON as fallback.
+      // When the agent times out or hits max turns, the SDK emits SDKResultError
+      // which has no `result` field, so agentResult stays empty. But the agent
+      // may have output its final JSON summary in an assistant message before the
+      // error. Capture the last such text so we can use it as fallback.
+      if (event.type === 'assistant' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'text' && block.text && block.text.includes('"results"')) {
+            lastResultsText = block.text;
+          }
+        }
       }
 
       if (verbose) {
@@ -279,7 +293,7 @@ async function runClaudeSDK(
     core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
   }
 
-  return { output: agentResult, exitCode };
+  return { output: agentResult || lastResultsText, exitCode };
 }
 
 // CLI fallback for claude (--output-format json, no streaming)
