@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as github from '@actions/github';
 import { callGitHubModels } from './github-models';
 import { SloppyConfig, Issue, ScanResult, IssueType, Severity } from './types';
 
@@ -68,7 +69,51 @@ function collectFiles(dir: string, files: string[] = []): string[] {
   return files;
 }
 
-function chunkFiles(files: string[], maxChars: number = 24000): string[][] {
+async function collectPrFiles(cwd: string): Promise<string[] | null> {
+  const ctx = github.context;
+  const prNumber = ctx.payload.pull_request?.number;
+  if (!prNumber) return null;
+
+  const token = process.env.GITHUB_TOKEN || core.getInput('github-token');
+  if (!token) return null;
+
+  try {
+    const octokit = github.getOctokit(token);
+    const files: string[] = [];
+    let page = 1;
+
+    // Paginate — PRs can touch hundreds of files
+    while (true) {
+      const { data } = await octokit.rest.pulls.listFiles({
+        ...ctx.repo,
+        pull_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      if (data.length === 0) break;
+
+      for (const file of data) {
+        if (file.status === 'removed') continue;
+        const ext = path.extname(file.filename).toLowerCase();
+        if (!CODE_EXTENSIONS.has(ext)) continue;
+        const full = path.join(cwd, file.filename);
+        if (fs.existsSync(full)) files.push(full);
+      }
+
+      if (data.length < 100) break;
+      page++;
+    }
+
+    return files;
+  } catch (e) {
+    core.warning(`Could not fetch PR files: ${e}. Falling back to full scan.`);
+    return null;
+  }
+}
+
+// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
+// Larger chunks = fewer API requests = less likely to hit rate limits.
+function chunkFiles(files: string[], maxChars: number = 32000): string[][] {
   const chunks: string[][] = [];
   let current: string[] = [];
   let size = 0;
@@ -182,6 +227,10 @@ export function calculateScore(issues: Issue[]): number {
   return Math.max(0, Math.min(100, score));
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -194,16 +243,39 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   const scanStart = Date.now();
 
+  // Determine scan scope early so we can log it
+  const scope = config.scanScope;
+  const isPR = !!github.context.payload.pull_request;
+  const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
+
   core.info('');
   core.info('='.repeat(50));
   core.info('SLOPPY FREE SCAN');
   core.info(`Model: ${config.githubModelsModel}`);
+  core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
   core.info('='.repeat(50));
   core.info('');
+  let files: string[];
+  let scopeLabel: string;
 
-  core.info('Collecting source files...');
-  const files = collectFiles(cwd);
-  core.info(`Found ${files.length} source files`);
+  if (usePrDiff) {
+    core.info('Collecting PR changed files...');
+    const prFiles = await collectPrFiles(cwd);
+    if (prFiles && prFiles.length > 0) {
+      files = prFiles;
+      scopeLabel = `PR #${github.context.payload.pull_request?.number} (${files.length} changed files)`;
+    } else {
+      core.info('No PR files found or not in PR context. Falling back to full repo scan.');
+      files = collectFiles(cwd);
+      scopeLabel = `full repo (${files.length} files)`;
+    }
+  } else {
+    core.info('Collecting all source files...');
+    files = collectFiles(cwd);
+    scopeLabel = `full repo (${files.length} files)`;
+  }
+
+  core.info(`Scope: ${scopeLabel}`);
 
   if (files.length === 0) {
     core.info('No source files found — nothing to scan.');
@@ -261,6 +333,13 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
     } catch (e) {
       failCount++;
       core.warning(`       FAILED: ${e}`);
+    }
+
+    // Space out requests to stay under RPM limits.
+    // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
+    // The retry logic in github-models.ts handles 429s, but spacing prevents them.
+    if (i < chunks.length - 1) {
+      await sleep(4500);
     }
   }
 

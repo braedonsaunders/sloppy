@@ -52,9 +52,9 @@ inputs:
     required: false
     default: ''
   github-models-model:
-    description: 'Model for free scan tier via GitHub Models'
+    description: 'Model for scan via GitHub Models (free: openai/gpt-4o-mini, premium: openai/gpt-4o, openai/o1-mini, etc.)'
     required: false
-    default: 'openai/gpt-4o'
+    default: 'openai/gpt-4o-mini'
   test-command:
     description: 'Custom test command (auto-detected if empty)'
     required: false
@@ -71,6 +71,22 @@ inputs:
     description: 'Fail the action if score drops below this'
     required: false
     default: '0'
+  verbose:
+    description: 'Stream agent output to the Actions log in real-time'
+    required: false
+    default: 'false'
+  max-turns:
+    description: 'Max agent turns per invocation (scan: 30, fix: 15)'
+    required: false
+    default: ''
+  max-issues-per-pass:
+    description: 'Max issues to fix per pass (0 = unlimited)'
+    required: false
+    default: '0'
+  scan-scope:
+    description: 'What to scan: auto (PR files on pull_request, full otherwise), pr (PR files only), full (entire repo)'
+    required: false
+    default: 'auto'
   chain_number:
     description: 'Internal: chain continuation number'
     required: false
@@ -87,6 +103,8 @@ outputs:
     description: 'Total issues fixed'
   pr-url:
     description: 'URL of the created pull request'
+  summary-url:
+    description: 'URL to the Job Summary with full results'
 
 runs:
   using: 'node20'

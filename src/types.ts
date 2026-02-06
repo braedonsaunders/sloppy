@@ -11,6 +11,8 @@ export type IssueType =
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
 export type AgentType = 'claude' | 'codex';
 
+export type ScanScope = 'auto' | 'pr' | 'full';
+
 export interface SloppyConfig {
   mode: 'scan' | 'fix';
   agent: AgentType;
@@ -25,6 +27,10 @@ export interface SloppyConfig {
   githubModelsModel: string;
   testCommand: string;
   failBelow: number;
+  verbose: boolean;
+  maxTurns: { scan: number; fix: number };
+  maxIssuesPerPass: number;
+  scanScope: ScanScope;
 }
 
 export interface Issue {

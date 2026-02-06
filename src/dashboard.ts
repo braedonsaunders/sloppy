@@ -92,5 +92,5 @@ export function deployDashboard(history: HistoryEntry[]): void {
   const dir = path.join(cwd, '.sloppy', 'site');
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'index.html'), generateDashboard(history));
-  core.info('Dashboard generated at .sloppy/site/index.html');
+  core.info('Dashboard written to .sloppy/site/index.html (upload with actions/upload-artifact to download)');
 }

@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { SloppyConfig, IssueType } from './types';
+import { SloppyConfig, IssueType, ScanScope } from './types';
 
 function parseTimeout(input: string): number {
   const match = input.match(/^(\d+)(s|m|h)?$/);
@@ -33,8 +33,15 @@ export function getConfig(): SloppyConfig {
       .split(',').map(s => s.trim()) as IssueType[],
     strictness: (core.getInput('strictness') || 'high') as 'low' | 'medium' | 'high',
     model: core.getInput('model') || '',
-    githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
+    githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
     testCommand: core.getInput('test-command') || '',
     failBelow: parseInt(core.getInput('fail-below') || '0'),
+    verbose: core.getInput('verbose') === 'true',
+    maxTurns: {
+      scan: parseInt(core.getInput('max-turns') || '0') || 30,
+      fix: parseInt(core.getInput('max-turns') || '0') || 15,
+    },
+    maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+    scanScope: (core.getInput('scan-scope') || 'auto') as ScanScope,
   };
 }

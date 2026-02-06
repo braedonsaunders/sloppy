@@ -46,6 +46,11 @@ async function run(): Promise<void> {
       await writeJobSummary(result);
       await updateBadge(result.score);
 
+      // Point users to the Job Summary (native GitHub UI)
+      const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+      core.notice(`Sloppy scan complete — score: ${result.score}/100. View full results in the Job Summary tab.`);
+      core.setOutput('summary-url', runUrl);
+
       const byType: Record<string, number> = {};
       for (const i of result.issues) byType[i.type] = (byType[i.type] || 0) + 1;
 
@@ -94,6 +99,11 @@ async function run(): Promise<void> {
 
       await writeJobSummary(state);
       await updateBadge(state.scoreAfter);
+
+      // Point users to the Job Summary (native GitHub UI)
+      const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+      core.notice(`Sloppy fix complete — score: ${state.scoreBefore} → ${state.scoreAfter}. View full results in the Job Summary tab.`);
+      core.setOutput('summary-url', runUrl);
 
       const byType: Record<string, number> = {};
       for (const i of state.issues.filter(i => i.status === 'fixed')) {

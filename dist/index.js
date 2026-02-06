@@ -29966,7 +29966,6 @@ exports.runAgent = runAgent;
 const core = __importStar(__nccwpck_require__(7484));
 const exec = __importStar(__nccwpck_require__(5236));
 async function installAgent(agent) {
-    core.info(`Installing ${agent} CLI...`);
     if (agent === 'claude') {
         await exec.exec('npm', ['install', '-g', '@anthropic-ai/claude-code']);
     }
@@ -29977,12 +29976,35 @@ async function installAgent(agent) {
 async function runAgent(agent, prompt, options) {
     let stdout = '';
     let stderr = '';
+    const verbose = options?.verbose ?? false;
     const execOptions = {
         listeners: {
-            stdout: (data) => { stdout += data.toString(); },
-            stderr: (data) => { stderr += data.toString(); },
+            stdout: (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                if (verbose) {
+                    // Stream each line to the Actions log in real-time
+                    for (const line of chunk.split('\n')) {
+                        const trimmed = line.trim();
+                        if (trimmed)
+                            core.info(`  | ${trimmed}`);
+                    }
+                }
+            },
+            stderr: (data) => {
+                const chunk = data.toString();
+                stderr += chunk;
+                if (verbose) {
+                    for (const line of chunk.split('\n')) {
+                        const trimmed = line.trim();
+                        if (trimmed)
+                            core.info(`  |err| ${trimmed}`);
+                    }
+                }
+            },
         },
         ignoreReturnCode: true,
+        silent: true, // suppress @actions/exec default output; we handle it ourselves
         env: { ...process.env },
     };
     let exitCode;
@@ -29992,6 +30014,8 @@ async function runAgent(agent, prompt, options) {
             args.push('--max-turns', String(options.maxTurns));
         if (options?.model)
             args.push('--model', options.model);
+        if (verbose)
+            args.push('--verbose');
         exitCode = await exec.exec('claude', args, execOptions);
     }
     else {
@@ -30233,9 +30257,16 @@ function getConfig() {
             .split(',').map(s => s.trim()),
         strictness: (core.getInput('strictness') || 'high'),
         model: core.getInput('model') || '',
-        githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o',
+        githubModelsModel: core.getInput('github-models-model') || 'openai/gpt-4o-mini',
         testCommand: core.getInput('test-command') || '',
         failBelow: parseInt(core.getInput('fail-below') || '0'),
+        verbose: core.getInput('verbose') === 'true',
+        maxTurns: {
+            scan: parseInt(core.getInput('max-turns') || '0') || 30,
+            fix: parseInt(core.getInput('max-turns') || '0') || 15,
+        },
+        maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
+        scanScope: (core.getInput('scan-scope') || 'auto'),
     };
 }
 
@@ -30375,7 +30406,7 @@ function deployDashboard(history) {
     if (!fs.existsSync(dir))
         fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'index.html'), generateDashboard(history));
-    core.info('Dashboard generated at .sloppy/site/index.html');
+    core.info('Dashboard written to .sloppy/site/index.html (upload with actions/upload-artifact to download)');
 }
 
 
@@ -30423,6 +30454,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.callGitHubModels = callGitHubModels;
 const core = __importStar(__nccwpck_require__(7484));
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
+const MAX_RETRIES = 4;
 function getGitHubToken() {
     const token = process.env.GITHUB_TOKEN ||
         process.env.INPUT_GITHUB_TOKEN ||
@@ -30436,7 +30468,10 @@ function getGitHubToken() {
     }
     return token;
 }
-async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options) {
     const token = getGitHubToken();
     const maxTokens = options?.maxTokens ?? 4000;
     const body = {
@@ -30448,15 +30483,48 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
     if (options?.responseFormat) {
         body.response_format = options.responseFormat;
     }
-    const response = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-    });
-    if (!response.ok) {
+    const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+    };
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const response = await fetch(ENDPOINT, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+        });
+        if (response.ok) {
+            const data = (await response.json());
+            if (data.error)
+                throw new Error(`GitHub Models: ${data.error.message}`);
+            return {
+                content: data.choices?.[0]?.message?.content || '',
+                tokens: data.usage?.total_tokens || 0,
+            };
+        }
+        // Handle rate limiting with retry
+        if (response.status === 429) {
+            if (attempt === MAX_RETRIES) {
+                throw new Error(`GitHub Models rate limit exceeded after ${MAX_RETRIES} retries. ` +
+                    'Try using a smaller model (openai/gpt-4o-mini gets 3x the quota of gpt-4o), ' +
+                    'or reduce chunk count by increasing chunk size.');
+            }
+            // Respect Retry-After header if present, otherwise exponential backoff
+            const retryAfter = response.headers.get('retry-after');
+            let waitMs;
+            if (retryAfter) {
+                waitMs = (parseInt(retryAfter) || 10) * 1000;
+            }
+            else {
+                // Exponential backoff: 5s, 15s, 30s, 60s
+                waitMs = Math.min(60000, 5000 * Math.pow(3, attempt));
+            }
+            const waitSec = Math.ceil(waitMs / 1000);
+            core.info(`       Rate limited (429). Waiting ${waitSec}s before retry ${attempt + 1}/${MAX_RETRIES}...`);
+            await sleep(waitMs);
+            continue;
+        }
+        // Handle other errors
         const text = await response.text();
         if (response.status === 401 || response.status === 403) {
             throw new Error(`GitHub Models auth failed (${response.status}). Ensure your workflow has:\n` +
@@ -30467,13 +30535,8 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
         }
         throw new Error(`GitHub Models API error ${response.status}: ${text.slice(0, 300)}`);
     }
-    const data = (await response.json());
-    if (data.error)
-        throw new Error(`GitHub Models: ${data.error.message}`);
-    return {
-        content: data.choices?.[0]?.message?.content || '',
-        tokens: data.usage?.total_tokens || 0,
-    };
+    // Should not reach here, but TypeScript needs it
+    throw new Error('GitHub Models: unexpected retry loop exit');
 }
 
 
@@ -30551,6 +30614,10 @@ async function run() {
             await (0, report_1.postScanComment)(result);
             await (0, report_1.writeJobSummary)(result);
             await (0, report_1.updateBadge)(result.score);
+            // Point users to the Job Summary (native GitHub UI)
+            const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            core.notice(`Sloppy scan complete — score: ${result.score}/100. View full results in the Job Summary tab.`);
+            core.setOutput('summary-url', runUrl);
             const byType = {};
             for (const i of result.issues)
                 byType[i.type] = (byType[i.type] || 0) + 1;
@@ -30593,6 +30660,10 @@ async function run() {
                 core.setOutput('pr-url', prUrl);
             await (0, report_1.writeJobSummary)(state);
             await (0, report_1.updateBadge)(state.scoreAfter);
+            // Point users to the Job Summary (native GitHub UI)
+            const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            core.notice(`Sloppy fix complete — score: ${state.scoreBefore} → ${state.scoreAfter}. View full results in the Job Summary tab.`);
+            core.setOutput('summary-url', runUrl);
             const byType = {};
             for (const i of state.issues.filter(i => i.status === 'fixed')) {
                 byType[i.type] = (byType[i.type] || 0) + 1;
@@ -30883,13 +30954,15 @@ async function runFixLoop(config) {
     core.info(`Model:      ${config.model || 'default'}`);
     core.info(`Timeout:    ${formatDuration(config.timeout)}`);
     core.info(`Max passes: ${config.maxPasses}`);
+    core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
+    core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
     core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
     core.info('='.repeat(50));
     core.info('');
     // Install agent
     core.info(`Installing ${config.agent} CLI...`);
     await (0, agent_1.installAgent)(config.agent);
-    core.info(`${config.agent} CLI installed.`);
+    core.info(`Done.`);
     // Setup git
     await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
     await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
@@ -30938,9 +31011,10 @@ async function runFixLoop(config) {
         core.info(`Scanning repository (${config.agent})...`);
         const scanStart = Date.now();
         const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan), {
-            maxTurns: 30,
+            maxTurns: config.maxTurns.scan,
             model: config.model || undefined,
             timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
+            verbose: config.verbose,
         });
         const scanDuration = formatDuration(Date.now() - scanStart);
         const found = parseIssues(scanResult.output);
@@ -30972,26 +31046,34 @@ async function runFixLoop(config) {
         }
         // FIX each issue atomically
         const sorted = sortBySeverity(found);
+        const limit = config.maxIssuesPerPass > 0 ? config.maxIssuesPerPass : sorted.length;
+        const toFix = sorted.slice(0, limit);
         let passFixed = 0;
         let passSkipped = 0;
         core.info('');
-        core.info(`Fixing ${sorted.length} issues (highest severity first)...`);
+        if (limit < sorted.length) {
+            core.info(`Fixing ${toFix.length} of ${sorted.length} issues (capped by max-issues-per-pass)...`);
+        }
+        else {
+            core.info(`Fixing ${toFix.length} issues (highest severity first)...`);
+        }
         core.info('');
-        for (let idx = 0; idx < sorted.length; idx++) {
-            const issue = sorted[idx];
+        for (let idx = 0; idx < toFix.length; idx++) {
+            const issue = toFix[idx];
             if (Date.now() >= deadline - margin) {
                 core.info('');
-                core.warning(`Timeout approaching — stopping after ${idx} of ${sorted.length} issues`);
+                core.warning(`Timeout approaching — stopping after ${idx} of ${toFix.length} issues`);
                 break;
             }
             const timeLeft = formatTimeRemaining(deadline);
-            core.info(`  [${idx + 1}/${sorted.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
+            core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
             core.info(`    ${issue.description}`);
             const fixStart = Date.now();
             const result = await (0, agent_1.runAgent)(config.agent, fixPrompt(issue, testCmd), {
-                maxTurns: 15,
+                maxTurns: config.maxTurns.fix,
                 model: config.model || undefined,
                 timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+                verbose: config.verbose,
             });
             const fixDuration = formatDuration(Date.now() - fixStart);
             if (result.output.includes('SKIP:') || result.exitCode !== 0) {
@@ -31232,12 +31314,35 @@ async function writeJobSummary(data) {
         md += `${progressBar(r.score)} ${r.score}/100\n\n`;
         md += `${r.summary}\n\n`;
         if (r.issues.length > 0) {
+            // Issue summary table
+            md += `| Type | Count | Worst Severity |\n|------|-------|---------|\n`;
+            for (const [type, issues] of Object.entries(groupBy(r.issues))) {
+                const worst = issues.reduce((w, i) => {
+                    const order = ['critical', 'high', 'medium', 'low'];
+                    return order.indexOf(i.severity) < order.indexOf(w) ? i.severity : w;
+                }, 'low');
+                md += `| ${type} | ${issues.length} | ${worst} |\n`;
+            }
+            md += '\n';
+            // Full issues list (collapsible)
+            md += `<details>\n<summary>All issues (${r.issues.length})</summary>\n\n`;
+            md += `| Severity | Type | File | Line | Description |\n|----------|------|------|------|-------------|\n`;
+            const sorted = [...r.issues].sort((a, b) => {
+                const order = ['critical', 'high', 'medium', 'low'];
+                return order.indexOf(a.severity) - order.indexOf(b.severity);
+            });
+            for (const i of sorted) {
+                md += `| ${i.severity} | ${i.type} | \`${i.file}\` | ${i.line || '-'} | ${i.description} |\n`;
+            }
+            md += `\n</details>\n\n`;
+            // Mermaid pie chart
             md += `\`\`\`mermaid\npie title Issues by Type\n`;
             for (const [type, issues] of Object.entries(groupBy(r.issues))) {
                 md += `    "${type}" : ${issues.length}\n`;
             }
-            md += `\`\`\`\n`;
+            md += `\`\`\`\n\n`;
         }
+        md += `---\n*Add an API key and set \`mode: fix\` to auto-fix these issues. [Learn more](https://github.com/braedonsaunders/sloppy)*\n`;
     }
     else {
         const s = data;
@@ -31245,14 +31350,39 @@ async function writeJobSummary(data) {
         const d = s.scoreAfter - s.scoreBefore;
         md += `### Score: ${s.scoreBefore} → ${s.scoreAfter} (${d >= 0 ? '+' : ''}${d})\n\n`;
         md += `${progressBar(s.scoreAfter)} ${s.scoreAfter}/100\n\n`;
-        md += `**${s.passes.length} passes** | **${s.totalFixed} fixed** | **${s.totalSkipped} skipped** | **${fmtDuration(dur)}**\n\n`;
+        md += `| Metric | Value |\n|--------|-------|\n`;
+        md += `| Passes | ${s.passes.length} |\n`;
+        md += `| Fixed | **${s.totalFixed}** |\n`;
+        md += `| Skipped | ${s.totalSkipped} |\n`;
+        md += `| Duration | ${fmtDuration(dur)} |\n\n`;
         if (s.totalFixed > 0) {
+            const fixed = s.issues.filter(i => i.status === 'fixed');
+            const byType = groupBy(fixed);
+            md += `<details open>\n<summary>Fixed issues (${fixed.length})</summary>\n\n`;
+            for (const [type, issues] of Object.entries(byType)) {
+                md += `**${type}** (${issues.length})\n\n`;
+                md += `| File | Issue | Commit |\n|------|-------|--------|\n`;
+                for (const i of issues) {
+                    const sha = i.commitSha?.slice(0, 7) || '-';
+                    md += `| \`${i.file}:${i.line || '?'}\` | ${i.description} | \`${sha}\` |\n`;
+                }
+                md += '\n';
+            }
+            md += `</details>\n\n`;
             md += `\`\`\`mermaid\npie title Fixed by Type\n`;
-            for (const [type, issues] of Object.entries(groupBy(s.issues.filter(i => i.status === 'fixed')))) {
+            for (const [type, issues] of Object.entries(byType)) {
                 md += `    "${type}" : ${issues.length}\n`;
             }
-            md += `\`\`\`\n`;
+            md += `\`\`\`\n\n`;
         }
+        // Pass breakdown
+        md += `<details>\n<summary>Pass breakdown</summary>\n\n`;
+        md += `| Pass | Found | Fixed | Skipped | Duration |\n|------|-------|-------|---------|----------|\n`;
+        for (const p of s.passes) {
+            md += `| ${p.number} | ${p.found} | ${p.fixed} | ${p.skipped} | ${fmtDuration(p.durationMs)} |\n`;
+        }
+        md += `\n</details>\n\n`;
+        md += `---\n*[Sloppy](https://github.com/braedonsaunders/sloppy) — relentless AI code cleanup*\n`;
     }
     await core.summary.addRaw(md).write();
 }
@@ -31394,6 +31524,7 @@ exports.runScan = runScan;
 const core = __importStar(__nccwpck_require__(7484));
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+const github = __importStar(__nccwpck_require__(3228));
 const github_models_1 = __nccwpck_require__(7287);
 const CODE_EXTENSIONS = new Set([
     '.ts', '.tsx', '.js', '.jsx', '.py', '.rb', '.go', '.rs', '.java',
@@ -31458,7 +31589,52 @@ function collectFiles(dir, files = []) {
     }
     return files;
 }
-function chunkFiles(files, maxChars = 24000) {
+async function collectPrFiles(cwd) {
+    const ctx = github.context;
+    const prNumber = ctx.payload.pull_request?.number;
+    if (!prNumber)
+        return null;
+    const token = process.env.GITHUB_TOKEN || core.getInput('github-token');
+    if (!token)
+        return null;
+    try {
+        const octokit = github.getOctokit(token);
+        const files = [];
+        let page = 1;
+        // Paginate — PRs can touch hundreds of files
+        while (true) {
+            const { data } = await octokit.rest.pulls.listFiles({
+                ...ctx.repo,
+                pull_number: prNumber,
+                per_page: 100,
+                page,
+            });
+            if (data.length === 0)
+                break;
+            for (const file of data) {
+                if (file.status === 'removed')
+                    continue;
+                const ext = path.extname(file.filename).toLowerCase();
+                if (!CODE_EXTENSIONS.has(ext))
+                    continue;
+                const full = path.join(cwd, file.filename);
+                if (fs.existsSync(full))
+                    files.push(full);
+            }
+            if (data.length < 100)
+                break;
+            page++;
+        }
+        return files;
+    }
+    catch (e) {
+        core.warning(`Could not fetch PR files: ${e}. Falling back to full scan.`);
+        return null;
+    }
+}
+// 32K chars ≈ 8K tokens, which is the GitHub Models free tier input limit.
+// Larger chunks = fewer API requests = less likely to hit rate limits.
+function chunkFiles(files, maxChars = 32000) {
     const chunks = [];
     let current = [];
     let size = 0;
@@ -31574,6 +31750,9 @@ function calculateScore(issues) {
     }
     return Math.max(0, Math.min(100, score));
 }
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 function formatDuration(ms) {
     const s = Math.floor(ms / 1000);
     if (s < 60)
@@ -31585,15 +31764,38 @@ function formatDuration(ms) {
 async function runScan(config) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
+    // Determine scan scope early so we can log it
+    const scope = config.scanScope;
+    const isPR = !!github.context.payload.pull_request;
+    const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
     core.info('');
     core.info('='.repeat(50));
     core.info('SLOPPY FREE SCAN');
     core.info(`Model: ${config.githubModelsModel}`);
+    core.info(`Scope: ${scope}${scope === 'auto' ? (isPR ? ' → pr' : ' → full') : ''}`);
     core.info('='.repeat(50));
     core.info('');
-    core.info('Collecting source files...');
-    const files = collectFiles(cwd);
-    core.info(`Found ${files.length} source files`);
+    let files;
+    let scopeLabel;
+    if (usePrDiff) {
+        core.info('Collecting PR changed files...');
+        const prFiles = await collectPrFiles(cwd);
+        if (prFiles && prFiles.length > 0) {
+            files = prFiles;
+            scopeLabel = `PR #${github.context.payload.pull_request?.number} (${files.length} changed files)`;
+        }
+        else {
+            core.info('No PR files found or not in PR context. Falling back to full repo scan.');
+            files = collectFiles(cwd);
+            scopeLabel = `full repo (${files.length} files)`;
+        }
+    }
+    else {
+        core.info('Collecting all source files...');
+        files = collectFiles(cwd);
+        scopeLabel = `full repo (${files.length} files)`;
+    }
+    core.info(`Scope: ${scopeLabel}`);
     if (files.length === 0) {
         core.info('No source files found — nothing to scan.');
         return { issues: [], score: 100, summary: 'No source files found.', tokens: 0 };
@@ -31642,6 +31844,12 @@ async function runScan(config) {
         catch (e) {
             failCount++;
             core.warning(`       FAILED: ${e}`);
+        }
+        // Space out requests to stay under RPM limits.
+        // Low tier (gpt-4o-mini): 15 RPM = 1 req/4s. High tier (gpt-4o): 10 RPM = 1 req/6s.
+        // The retry logic in github-models.ts handles 429s, but spacing prevents them.
+        if (i < chunks.length - 1) {
+            await sleep(4500);
         }
     }
     // Deduplicate

@@ -147,6 +147,38 @@ jobs:
       - uses: braedonsaunders/sloppy@v1
 ```
 
+By default, Sloppy is smart about scope: on `pull_request` events it only scans files changed in the PR (fast, uses fewer API calls). For full repo scans, use `scan-scope: full` or run on a schedule.
+
+**Weekly full scan + per-PR scan:**
+
+```yaml
+name: Sloppy
+on:
+  pull_request:               # PR scan: only changed files
+  schedule:
+    - cron: '0 6 * * 1'      # Weekly Monday: full repo scan
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      models: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          scan-scope: auto    # PR files on pull_request, full repo on schedule
+```
+
+**Premium models via GitHub Models:** If you have a GitHub Copilot subscription or pay for GitHub Models, you can use more powerful models:
+
+```yaml
+      - uses: braedonsaunders/sloppy@v1
+        with:
+          github-models-model: 'openai/gpt-4o'  # or openai/o1-mini, etc.
+```
+
 ### Tier 2: BYOK Fix (API key)
 
 Bring your own Anthropic or OpenAI API key. Sloppy uses **Claude Code CLI** or **OpenAI Codex CLI** to find and fix issues, then opens a PR with atomic commits.
@@ -278,11 +310,15 @@ All inputs are optional. Sloppy works with zero configuration.
 | `strictness` | `high` | Issue detection strictness: `low`, `medium`, `high` |
 | `fix-types` | `security,bugs,types,lint,dead-code,stubs,duplicates,coverage` | Comma-separated list of issue types to scan and fix |
 | `model` | *(auto)* | Override the AI model (e.g. `claude-sonnet-4-5-20250929`) |
-| `github-models-model` | `openai/gpt-4o` | Model to use for free scan tier via GitHub Models |
+| `github-models-model` | `openai/gpt-4o-mini` | Model for scan via GitHub Models. Free: `openai/gpt-4o-mini`. Premium: `openai/gpt-4o`, `openai/o1-mini`, etc. |
+| `scan-scope` | `auto` | What to scan: `auto` (PR files on `pull_request`, full otherwise), `pr` (PR changed files only), `full` (entire repo) |
 | `test-command` | *(auto-detected)* | Custom test command. Sloppy auto-detects `npm test`, `pytest`, etc. |
 | `gist-id` | *(empty)* | GitHub Gist ID for dynamic badge updates |
 | `gist-token` | *(empty)* | PAT with `gist` scope for writing badge data |
 | `fail-below` | `0` | Fail the GitHub Actions check if the score drops below this threshold |
+| `verbose` | `false` | Stream agent output to the Actions log in real-time. Useful for debugging or watching progress. |
+| `max-turns` | `30`/`15` | Max agent turns per invocation (30 for scan, 15 for fix). Lower = faster + cheaper. |
+| `max-issues-per-pass` | `0` (unlimited) | Cap how many issues to fix per pass. Useful for cost control on large repos. |
 
 ### Outputs
 
@@ -293,6 +329,7 @@ All inputs are optional. Sloppy works with zero configuration.
 | `issues-found` | Total number of issues found |
 | `issues-fixed` | Total number of issues fixed |
 | `pr-url` | URL of the created pull request (fix mode only) |
+| `summary-url` | URL to the Job Summary with full results |
 
 ### Strictness Levels
 
@@ -363,15 +400,22 @@ The badge updates automatically on every Sloppy run with the current score and c
 
 ---
 
-## Dashboard
+## Results & Dashboard
 
-Sloppy writes score history to `.sloppy/history.json` in your repo. To get a visual dashboard:
+**Job Summary (zero setup):** Every Sloppy run writes a full results summary to the GitHub Actions Job Summary tab. Click the run → click "Summary" in the left sidebar. Includes issue tables, severity breakdown, and charts. No setup required.
 
-1. Enable GitHub Pages on your repo (Settings > Pages)
-2. Point it at the branch and directory containing `.sloppy/`
-3. Sloppy includes a static `index.html` dashboard that reads `history.json` and renders score trends
+**Score history:** Sloppy tracks scores over time in `.sloppy/history.json` inside your repo. Git is the database.
 
-Zero hosting. Zero config. Just GitHub Pages.
+**HTML dashboard (optional):** Sloppy generates a standalone HTML dashboard at `.sloppy/site/index.html` on each run. To make it accessible, add an upload step after Sloppy:
+
+```yaml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sloppy-dashboard
+          path: .sloppy/site/
+```
+
+Or enable GitHub Pages pointed at `.sloppy/site/` for a permanent URL.
 
 ---
 
