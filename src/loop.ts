@@ -265,6 +265,10 @@ function scanPrompt(pass: number, previousFixes: string[], plan: string, customS
 
 TASK: Scan every file in this repository. Find all code quality issues.
 
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. For example, dispatch one subagent per top-level directory, each
+scanning all files within it. Collect their results and merge into a single output.
+
 ISSUE CATEGORIES (use these exact type values):
   security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
   bugs        — null/undefined derefs, off-by-one, race conditions, wrong logic, unhandled errors
@@ -302,6 +306,9 @@ TASK: Scan the ENTIRE repository again with fresh eyes. Previous fixes often rev
 - Fixing a type error reveals logic bugs underneath
 - Refactoring may introduce new edge cases
 - Previously-hidden code paths are now reachable
+
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. Collect their results and merge into a single output.
 ${planSection}${customSection}
 ISSUE CATEGORIES: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
 SEVERITY LEVELS: critical, high, medium, low
@@ -321,8 +328,22 @@ function clusterFixPrompt(cluster: IssueCluster, testCommand: string, customSect
     `${idx + 1}. [${issue.severity}/${issue.type}] ${issue.file}${issue.line ? `:${issue.line}` : ''} — ${issue.description}`
   ).join('\n');
 
-  return `You are fixing code quality issues in this repository. Fix these issues ONE AT A TIME.
+  // Encourage subagent parallelism when issues span multiple independent files
+  const uniqueFiles = [...new Set(cluster.issues.map(i => i.file))];
+  const parallelSection = uniqueFiles.length > 1
+    ? `
+PARALLELISM — IMPORTANT FOR SPEED:
+These issues span ${uniqueFiles.length} independent files. Use the Task tool to dispatch
+subagents that fix different files simultaneously. Group issues by file and send
+each file's issues to a separate subagent. Each subagent should:
+- Read the file, apply the fix, verify it compiles, then git add && git commit
+- Work independently without coordinating with other subagents
+This dramatically reduces total fix time.
+`
+    : '';
 
+  return `You are fixing code quality issues in this repository. Fix these issues efficiently.
+${parallelSection}
 ISSUES TO FIX (in priority order):
 ${issueList}
 ${customSection}
@@ -723,32 +744,43 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   ui.kv('Verbose', config.verbose ? ui.c('ON', ui.S.green) + ui.c(' (streaming)', ui.S.gray) : 'off');
   ui.kv('Chain', `${state.chainNumber}/${config.maxChains}`);
 
-  // Install agent
+  // Parallelize setup: install agent, git config, test detection, LOC counting
+  // all happen concurrently since they're independent.
   ui.section('SETUP');
-  core.info(`  Installing ${config.agent}...`);
-  await installAgent(config.agent);
-  core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
+  const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
 
-  // Setup git
-  await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
-  await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
+  const [, , testCmd, sourceFiles] = await Promise.all([
+    // 1. Install agent
+    (async () => {
+      core.info(`  Installing ${config.agent}...`);
+      await installAgent(config.agent);
+      core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Agent installed`);
+    })(),
+    // 2. Git config + branch setup
+    (async () => {
+      await exec.exec('git', ['config', 'user.name', 'sloppy[bot]']);
+      await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com']);
+      if (!state.branchName) {
+        state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
+        await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
+        ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
+      } else {
+        await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
+        ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
+      }
+    })(),
+    // 3. Detect test command
+    detectTestCommand(config),
+    // 4. Collect source files (for LOC counting)
+    Promise.resolve(collectFiles(cwd)),
+  ]);
 
-  // Create or checkout branch
-  if (!state.branchName) {
-    state.branchName = `sloppy/fix-${new Date().toISOString().slice(0, 10)}-${state.runId.slice(-6)}`;
-    await exec.exec('git', ['checkout', '-b', state.branchName], { ignoreReturnCode: true });
-    ui.kv('Branch', `${state.branchName} ${ui.c('(new)', ui.S.green)}`);
-  } else {
-    await exec.exec('git', ['checkout', state.branchName], { ignoreReturnCode: true });
-    ui.kv('Branch', `${state.branchName} ${ui.c('(resumed)', ui.S.yellow)}`);
-  }
-
-  // Detect test command
-  const testCmd = await detectTestCommand(config);
   ui.kv('Tests', testCmd ? testCmd : ui.c('none detected', ui.S.yellow));
 
+  const loc = countSourceLOC(sourceFiles);
+  ui.kv('Source LOC', loc.toLocaleString());
+
   // Load PLAN.md if it exists
-  const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   let plan = '';
   const planPath = path.join(cwd, 'PLAN.md');
   if (fs.existsSync(planPath)) {
@@ -757,11 +789,6 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   }
 
   const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
-
-  // Count LOC for normalized scoring
-  const sourceFiles = collectFiles(cwd);
-  const loc = countSourceLOC(sourceFiles);
-  ui.kv('Source LOC', loc.toLocaleString());
 
   // Load preexisting issues from output file
   let seededIssues: Issue[] = [];

@@ -229,41 +229,66 @@ async function runFingerprintScan(
   let totalTokens = 0;
   let apiCalls = 0;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkStart = Date.now();
-    const fileCount = chunks[i].fingerprints.length;
-    const progress = Math.round(((i + 1) / chunks.length) * 100);
-    core.info(ui.progressBar(i + 1, chunks.length, 20, `${fileCount} files (~${chunks[i].totalTokens} tokens)`));
+  const CONCURRENCY = 3; // Fire up to 3 API calls simultaneously
+  const systemMsg = customPrompt
+    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
+    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
 
-    try {
-      const systemMsg = customPrompt
-        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
-      const { content, tokens } = await callGitHubModels(
-        [
-          { role: 'system', content: systemMsg },
-          { role: 'user', content: chunks[i].promptText },
-        ],
-        model,
-        { responseFormat: ISSUES_SCHEMA },
-      );
-      totalTokens += tokens;
-      apiCalls++;
-      const chunkIssues = parseIssues(content);
-      allIssues.push(...chunkIssues);
+  // Process chunks in concurrent batches
+  for (let batchStart = 0; batchStart < chunks.length; batchStart += CONCURRENCY) {
+    const batch = chunks.slice(batchStart, batchStart + CONCURRENCY);
+    const batchStartTime = Date.now();
 
-      const elapsed = formatDuration(Date.now() - chunkStart);
-      if (chunkIssues.length > 0) {
-        core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
-      } else {
-        core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
-      }
-    } catch (e) {
-      core.warning(`    FAILED: ${e}`);
+    // Log what we're dispatching
+    for (let j = 0; j < batch.length; j++) {
+      const idx = batchStart + j;
+      const fileCount = batch[j].fingerprints.length;
+      core.info(ui.progressBar(idx + 1, chunks.length, 20, `${fileCount} files (~${batch[j].totalTokens} tokens)`));
     }
 
-    if (i < chunks.length - 1) {
-      await sleep(4500);
+    // Fire all requests in this batch concurrently
+    const results = await Promise.allSettled(
+      batch.map(async (chunk, j) => {
+        const idx = batchStart + j;
+        // Stagger starts slightly to avoid hitting rate limits simultaneously
+        if (j > 0) await sleep(500 * j);
+        const chunkStart = Date.now();
+        const { content, tokens } = await callGitHubModels(
+          [
+            { role: 'system', content: systemMsg },
+            { role: 'user', content: chunk.promptText },
+          ],
+          model,
+          { responseFormat: ISSUES_SCHEMA },
+        );
+        return { content, tokens, idx, elapsed: Date.now() - chunkStart };
+      }),
+    );
+
+    // Collect results
+    for (let j = 0; j < results.length; j++) {
+      const r = results[j];
+      if (r.status === 'fulfilled') {
+        const { content, tokens, elapsed } = r.value;
+        totalTokens += tokens;
+        apiCalls++;
+        const chunkIssues = parseIssues(content);
+        allIssues.push(...chunkIssues);
+
+        const elapsedStr = formatDuration(elapsed);
+        if (chunkIssues.length > 0) {
+          core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+        } else {
+          core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+        }
+      } else {
+        core.warning(`    FAILED: ${r.reason}`);
+      }
+    }
+
+    // Rate-limit pause between batches (not after last batch)
+    if (batchStart + CONCURRENCY < chunks.length) {
+      await sleep(3000);
     }
   }
 
@@ -465,33 +490,50 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
       );
       core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
 
-      for (let i = 0; i < chunks.length; i++) {
-        const chunkStart = Date.now();
-        const chunkFileNames = chunks[i].files.map(f => f.relativePath);
-        const progress = Math.round(((i + 1) / chunks.length) * 100);
-        const compressedInChunk = chunks[i].files.filter(f => f.compressed).length;
-        const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-        core.info(ui.progressBar(i + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
+      const DEEP_CONCURRENCY = 3;
+      for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
+        const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
 
-        try {
-          const { issues: chunkIssues, tokens } = await scanChunk(
-            chunks[i], i + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined,
-          );
-          totalTokens += tokens;
-          totalApiCalls++;
-          aiIssues.push(...chunkIssues);
-
-          const elapsed = formatDuration(Date.now() - chunkStart);
-          if (chunkIssues.length > 0) {
-            core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
-          } else {
-            core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
-          }
-        } catch (e) {
-          core.warning(`         FAILED: ${e}`);
+        for (let j = 0; j < batch.length; j++) {
+          const idx = batchStart + j;
+          const chunkFileNames = batch[j].files.map(f => f.relativePath);
+          const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
+          const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+          core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
         }
 
-        if (i < chunks.length - 1) await sleep(4500);
+        const results = await Promise.allSettled(
+          batch.map(async (chunk, j) => {
+            const idx = batchStart + j;
+            if (j > 0) await sleep(500 * j);
+            const chunkStart = Date.now();
+            const { issues: chunkIssues, tokens } = await scanChunk(
+              chunk, idx + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined,
+            );
+            return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
+          }),
+        );
+
+        for (const r of results) {
+          if (r.status === 'fulfilled') {
+            const { chunkIssues, tokens, elapsed } = r.value;
+            totalTokens += tokens;
+            totalApiCalls++;
+            aiIssues.push(...chunkIssues);
+            const elapsedStr = formatDuration(elapsed);
+            if (chunkIssues.length > 0) {
+              core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+            } else {
+              core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+            }
+          } else {
+            core.warning(`         FAILED: ${r.reason}`);
+          }
+        }
+
+        if (batchStart + DEEP_CONCURRENCY < chunks.length) {
+          await sleep(3000);
+        }
       }
     } else {
       ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
