@@ -31855,6 +31855,18 @@ async function gitHasChanges(cwd) {
     await exec.exec('git', ['status', '--porcelain'], execOpts);
     return stdout.trim().length > 0;
 }
+async function gitPushBranch(branchName) {
+    const token = process.env.GITHUB_TOKEN || '';
+    const repo = process.env.GITHUB_REPOSITORY || '';
+    if (!token || !repo || !branchName)
+        return false;
+    const remote = `https://x-access-token:${token}@github.com/${repo}.git`;
+    const exitCode = await exec.exec('git', ['push', remote, branchName, '--force'], {
+        ignoreReturnCode: true,
+        silent: true,
+    });
+    return exitCode === 0;
+}
 async function gitHead(cwd) {
     let sha = '';
     const execOpts = {
@@ -32540,6 +32552,18 @@ async function runFixLoop(config, pluginCtx) {
         ui.passSummary(state.pass, passFixed, passSkipped, formatDuration(Date.now() - passStart));
         core.info(`  ${ui.c('Running totals:', ui.S.gray)} ${ui.c(String(state.totalFixed), ui.S.bold, ui.S.green)} fixed, ${ui.c(String(state.totalSkipped), ui.S.yellow)} skipped`);
         (0, checkpoint_1.saveCheckpoint)(state);
+        // Push after each pass so fixes aren't lost if the job is killed.
+        // GH Actions sends SIGTERM → SIGKILL on timeout, so we can't rely
+        // on reaching the final push at the end.
+        if (passFixed > 0 && state.branchName) {
+            core.info(`  Pushing ${ui.c(String(state.totalFixed), ui.S.bold)} fixes to ${ui.c(state.branchName, ui.S.cyan)}...`);
+            if (await gitPushBranch(state.branchName)) {
+                core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} Push OK`);
+            }
+            else {
+                core.warning('Push failed — will retry at end');
+            }
+        }
         if (config.outputFile) {
             const remaining = state.issues.filter(i => i.status !== 'fixed');
             const currentScore = (0, scan_1.calculateScore)(remaining, loc);
@@ -32552,15 +32576,16 @@ async function runFixLoop(config, pluginCtx) {
     state.scoreAfter = (0, scan_1.calculateScore)(remaining, loc);
     if (state.scoreBefore === 0)
         state.scoreBefore = (0, scan_1.calculateScore)(allFound, loc);
-    // Push branch
-    if (state.totalFixed > 0) {
+    // Final push (safety net — each pass already pushes, but do one more in case)
+    if (state.totalFixed > 0 && state.branchName) {
         ui.section('PUSH');
-        core.info(`  Pushing ${ui.c(String(state.totalFixed), ui.S.bold)} fixes on ${ui.c(state.branchName, ui.S.cyan)}...`);
-        const token = process.env.GITHUB_TOKEN || '';
-        const repo = process.env.GITHUB_REPOSITORY || '';
-        const remote = `https://x-access-token:${token}@github.com/${repo}.git`;
-        await exec.exec('git', ['push', remote, state.branchName, '--force'], { ignoreReturnCode: true });
-        core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} Push complete`);
+        core.info(`  Final push of ${ui.c(String(state.totalFixed), ui.S.bold)} fixes on ${ui.c(state.branchName, ui.S.cyan)}...`);
+        if (await gitPushBranch(state.branchName)) {
+            core.info(`  ${ui.c(ui.SYM.check, ui.S.bold, ui.S.green)} Push complete`);
+        }
+        else {
+            core.warning('Final push failed — fixes may have been pushed after an earlier pass');
+        }
     }
     // Final summary
     ui.blank();
