@@ -679,17 +679,39 @@ async function dispatchClustersParallel(
         const picked = await cherryPickCommits(worker.branch);
         core.info(`    [${worker.branch}] Cherry-picked ${picked.length} commits`);
 
-        for (let i = 0; i < Math.min(parsed.fixed.length, picked.length); i++) {
-          parsed.fixed[i].commitSha = picked[i];
+        // Build a map of sha → set of modified files so we can match
+        // fixes by file rather than assuming array position correspondence.
+        // parseClusterResults orders by cluster.issues while cherryPickCommits
+        // orders by git history; with parallel subagents those can diverge.
+        const commitFiles = new Map<string, Set<string>>();
+        for (const sha of picked) {
+          let filesOutput = '';
+          await exec.exec('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
+            listeners: { stdout: (d: Buffer) => { filesOutput += d.toString(); } },
+            ignoreReturnCode: true,
+            silent: true,
+          });
+          commitFiles.set(sha, new Set(filesOutput.trim().split('\n').filter(f => f.length > 0)));
         }
 
-        // Re-mark fixes that weren't actually cherry-picked as skipped
-        const actuallyFixed = parsed.fixed.slice(0, picked.length);
-        const lostFixes = parsed.fixed.slice(picked.length);
-        for (const lost of lostFixes) {
-          lost.status = 'skipped';
-          lost.skipReason = 'Cherry-pick conflict — fix lost';
+        const matchedIssues = new Set<Issue>();
+        for (const issue of parsed.fixed) {
+          for (const sha of picked) {
+            const files = commitFiles.get(sha);
+            if (files?.has(issue.file)) {
+              issue.commitSha = sha;
+              matchedIssues.add(issue);
+              break;
+            }
+          }
+          if (!matchedIssues.has(issue)) {
+            issue.status = 'skipped';
+            issue.skipReason = 'Cherry-pick conflict — fix lost';
+          }
         }
+
+        const actuallyFixed = parsed.fixed.filter(i => matchedIssues.has(i));
+        const lostFixes = parsed.fixed.filter(i => !matchedIssues.has(i));
 
         allFixed.push(...actuallyFixed);
         allSkipped.push(...parsed.skipped, ...lostFixes);
