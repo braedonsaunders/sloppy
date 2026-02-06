@@ -83,6 +83,10 @@ inputs:
     description: 'Max issues to fix per pass (0 = unlimited)'
     required: false
     default: '0'
+  output-file:
+    description: 'Write full issues JSON to this path (e.g. .sloppy/issues.json). Empty to disable.'
+    required: false
+    default: ''
   scan-scope:
     description: 'What to scan: auto (PR files on pull_request, full otherwise), pr (PR files only), full (entire repo)'
     required: false
@@ -105,6 +109,8 @@ outputs:
     description: 'URL of the created pull request'
   summary-url:
     description: 'URL to the Job Summary with full results'
+  output-file:
+    description: 'Path to the issues JSON file (if output-file was configured)'
 
 runs:
   using: 'node20'

@@ -30373,6 +30373,7 @@ function getConfig() {
         },
         maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
         scanScope: (core.getInput('scan-scope') || 'auto'),
+        outputFile: core.getInput('output-file') || '',
     };
 }
 
@@ -30733,6 +30734,10 @@ async function run() {
             await (0, report_1.postScanComment)(result);
             await (0, report_1.writeJobSummary)(result);
             await (0, report_1.updateBadge)(result.score);
+            if (config.outputFile) {
+                const resolved = (0, report_1.writeOutputFile)(config.outputFile, result.issues, 'scan', result.score);
+                core.setOutput('output-file', resolved);
+            }
             // Point users to the Job Summary (native GitHub UI)
             const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             core.notice(`Sloppy scan complete — score: ${result.score}/100. View full results in the Job Summary tab.`);
@@ -30779,6 +30784,10 @@ async function run() {
                 core.setOutput('pr-url', prUrl);
             await (0, report_1.writeJobSummary)(state);
             await (0, report_1.updateBadge)(state.scoreAfter);
+            if (config.outputFile) {
+                const resolved = (0, report_1.writeOutputFile)(config.outputFile, state.issues, 'fix', state.scoreAfter, state.scoreBefore);
+                core.setOutput('output-file', resolved);
+            }
             // Point users to the Job Summary (native GitHub UI)
             const runUrl = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             core.notice(`Sloppy fix complete — score: ${state.scoreBefore} → ${state.scoreAfter}. View full results in the Job Summary tab.`);
@@ -30867,6 +30876,7 @@ const path = __importStar(__nccwpck_require__(6928));
 const agent_1 = __nccwpck_require__(1598);
 const scan_1 = __nccwpck_require__(4798);
 const checkpoint_1 = __nccwpck_require__(4213);
+const report_1 = __nccwpck_require__(665);
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 function sortBySeverity(issues) {
     return [...issues].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
@@ -31111,6 +31121,15 @@ async function runFixLoop(config) {
         plan = fs.readFileSync(planPath, 'utf-8').slice(0, 4000);
         core.info('Loaded PLAN.md for quality context');
     }
+    // Load preexisting issues from output file (if available and no checkpoint)
+    let seededIssues = [];
+    if (!checkpoint && config.outputFile) {
+        const prior = (0, report_1.loadOutputFile)(config.outputFile);
+        seededIssues = prior.filter(i => i.status === 'found');
+        if (seededIssues.length > 0) {
+            core.info(`Loaded ${seededIssues.length} preexisting issues from ${config.outputFile}`);
+        }
+    }
     core.info('');
     // --- THE RELENTLESS LOOP ---
     while (Date.now() < deadline - margin && state.pass < config.maxPasses) {
@@ -31125,19 +31144,28 @@ async function runFixLoop(config) {
             .filter(i => i.status === 'fixed')
             .slice(-20)
             .map(i => `[${i.type}] ${i.file}: ${i.description}`);
-        // SCAN
-        core.info('');
-        core.info(`Scanning repository (${config.agent})...`);
-        const scanStart = Date.now();
-        const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan), {
-            maxTurns: config.maxTurns.scan,
-            model: config.model || undefined,
-            timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
-            verbose: config.verbose,
-        });
-        const scanDuration = formatDuration(Date.now() - scanStart);
-        const found = parseIssues(scanResult.output);
-        core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+        // SCAN (or use seeded issues from a prior scan output file)
+        let found;
+        if (seededIssues.length > 0 && state.pass === 1) {
+            found = seededIssues;
+            seededIssues = []; // consume them so subsequent passes scan fresh
+            core.info('');
+            core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
+        }
+        else {
+            core.info('');
+            core.info(`Scanning repository (${config.agent})...`);
+            const scanStart = Date.now();
+            const scanResult = await (0, agent_1.runAgent)(config.agent, scanPrompt(state.pass, prevFixes, plan), {
+                maxTurns: config.maxTurns.scan,
+                model: config.model || undefined,
+                timeout: Math.min(5 * 60 * 1000, deadline - Date.now() - margin),
+                verbose: config.verbose,
+            });
+            const scanDuration = formatDuration(Date.now() - scanStart);
+            found = parseIssues(scanResult.output);
+            core.info(`Scan complete (${scanDuration}): found ${found.length} issues`);
+        }
         if (found.length > 0) {
             // Log issue summary
             const bySev = {};
@@ -31316,6 +31344,8 @@ exports.createPullRequest = createPullRequest;
 exports.postScanComment = postScanComment;
 exports.updateBadge = updateBadge;
 exports.appendHistory = appendHistory;
+exports.writeOutputFile = writeOutputFile;
+exports.loadOutputFile = loadOutputFile;
 const core = __importStar(__nccwpck_require__(7484));
 const github = __importStar(__nccwpck_require__(3228));
 const fs = __importStar(__nccwpck_require__(9896));
@@ -31594,6 +31624,39 @@ function appendHistory(entry) {
     history.push(entry);
     fs.writeFileSync(file, JSON.stringify(history, null, 2));
     return history;
+}
+function writeOutputFile(filePath, issues, mode, score, scoreBefore) {
+    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    const resolved = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+    const dir = path.dirname(resolved);
+    if (!fs.existsSync(dir))
+        fs.mkdirSync(dir, { recursive: true });
+    const payload = {
+        version: 1,
+        date: new Date().toISOString(),
+        mode,
+        score,
+        ...(scoreBefore !== undefined && { scoreBefore }),
+        issues,
+    };
+    fs.writeFileSync(resolved, JSON.stringify(payload, null, 2));
+    core.info(`Issues written to ${resolved} (${issues.length} issues)`);
+    return resolved;
+}
+function loadOutputFile(filePath) {
+    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    const resolved = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
+    if (!fs.existsSync(resolved))
+        return [];
+    try {
+        const raw = JSON.parse(fs.readFileSync(resolved, 'utf-8'));
+        if (!raw.issues || !Array.isArray(raw.issues))
+            return [];
+        return raw.issues;
+    }
+    catch {
+        return [];
+    }
 }
 
 

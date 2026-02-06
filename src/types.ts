@@ -31,6 +31,7 @@ export interface SloppyConfig {
   maxTurns: { scan: number; fix: number };
   maxIssuesPerPass: number;
   scanScope: ScanScope;
+  outputFile: string;
 }
 
 export interface Issue {
