@@ -31189,6 +31189,7 @@ const chain_1 = __nccwpck_require__(2470);
 const report_1 = __nccwpck_require__(665);
 const dashboard_1 = __nccwpck_require__(4299);
 const plugins_1 = __nccwpck_require__(6067);
+const sloppy_config_1 = __nccwpck_require__(7316);
 async function run() {
     try {
         const config = (0, config_1.getConfig)();
@@ -31207,11 +31208,32 @@ async function run() {
         const hasOpenAIKey = !!process.env.OPENAI_API_KEY;
         core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
         core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
-        // Load custom prompts and plugins
+        // Load custom prompts, plugins, and repo config
         const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
         const customPrompt = (0, plugins_1.resolveCustomPrompt)(config.customPrompt, config.customPromptFile, cwd);
         const plugins = config.pluginsEnabled ? (0, plugins_1.loadPlugins)(cwd) : [];
         const pluginCtx = (0, plugins_1.buildPluginContext)(plugins, customPrompt);
+        // Load .sloppy.yml repo config and merge into runtime
+        const repoConfig = (0, sloppy_config_1.loadRepoConfig)(cwd);
+        if (repoConfig) {
+            (0, sloppy_config_1.mergeRepoConfig)(config, repoConfig);
+            // Merge ignore patterns into plugin filters
+            if (repoConfig.ignore && repoConfig.ignore.length > 0) {
+                const existing = pluginCtx.filters['exclude-paths'] || [];
+                pluginCtx.filters['exclude-paths'] = [...new Set([...existing, ...repoConfig.ignore])];
+            }
+            // Merge rules: 'off' → exclude-types, severity values are noted for future use
+            if (repoConfig.rules) {
+                const excludeTypes = new Set(pluginCtx.filters['exclude-types'] || []);
+                for (const [type, val] of Object.entries(repoConfig.rules)) {
+                    if (val === 'off')
+                        excludeTypes.add(type);
+                }
+                if (excludeTypes.size > 0) {
+                    pluginCtx.filters['exclude-types'] = [...excludeTypes];
+                }
+            }
+        }
         if (customPrompt) {
             core.info(`Custom prompt: ${customPrompt.length} chars loaded`);
         }
@@ -32191,6 +32213,10 @@ async function runFixLoop(config, pluginCtx) {
         core.info('Loaded PLAN.md for quality context');
     }
     const customSection = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx) : '';
+    // Count LOC for normalized scoring
+    const sourceFiles = (0, scan_1.collectFiles)(cwd);
+    const loc = (0, scan_1.countSourceLOC)(sourceFiles);
+    core.info(`Source LOC: ${loc.toLocaleString()}`);
     // Load preexisting issues from output file
     let seededIssues = [];
     if (!checkpoint && config.outputFile) {
@@ -32370,16 +32396,16 @@ async function runFixLoop(config, pluginCtx) {
         (0, checkpoint_1.saveCheckpoint)(state);
         if (config.outputFile) {
             const remaining = state.issues.filter(i => i.status !== 'fixed');
-            const currentScore = (0, scan_1.calculateScore)(remaining);
-            (0, report_1.writeOutputFile)(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || (0, scan_1.calculateScore)(state.issues));
+            const currentScore = (0, scan_1.calculateScore)(remaining, loc);
+            (0, report_1.writeOutputFile)(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || (0, scan_1.calculateScore)(state.issues, loc));
         }
     }
     // Calculate scores
     const allFound = state.issues;
     const remaining = allFound.filter(i => i.status !== 'fixed');
-    state.scoreAfter = (0, scan_1.calculateScore)(remaining);
+    state.scoreAfter = (0, scan_1.calculateScore)(remaining, loc);
     if (state.scoreBefore === 0)
-        state.scoreBefore = (0, scan_1.calculateScore)(allFound);
+        state.scoreBefore = (0, scan_1.calculateScore)(allFound, loc);
     // Push branch
     if (state.totalFixed > 0) {
         core.info('');
@@ -32461,6 +32487,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseSimpleYaml = parseSimpleYaml;
 exports.resolveCustomPrompt = resolveCustomPrompt;
 exports.loadPlugins = loadPlugins;
 exports.buildPluginContext = buildPluginContext;
@@ -33649,6 +33676,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.collectFiles = collectFiles;
+exports.countSourceLOC = countSourceLOC;
 exports.calculateScore = calculateScore;
 exports.runScan = runScan;
 const core = __importStar(__nccwpck_require__(7484));
@@ -33800,13 +33829,36 @@ function parseIssues(content) {
         }
     }
 }
-function calculateScore(issues) {
-    const penalties = { critical: 10, high: 5, medium: 2, low: 1 };
-    let score = 100;
-    for (const issue of issues) {
-        score -= penalties[issue.severity] || 1;
+/**
+ * Count non-blank lines of code across the given files.
+ * Returns at least 1 to avoid division-by-zero.
+ */
+function countSourceLOC(files) {
+    let loc = 0;
+    for (const f of files) {
+        try {
+            const content = fs.readFileSync(f, 'utf-8');
+            loc += content.split('\n').filter(l => l.trim().length > 0).length;
+        }
+        catch { }
     }
-    return Math.max(0, Math.min(100, score));
+    return Math.max(loc, 1);
+}
+/**
+ * Score code quality 0–100. When `loc` is provided the penalty is
+ * normalised per-KLOC so larger repos aren't unfairly punished.
+ */
+function calculateScore(issues, loc) {
+    const penalties = { critical: 10, high: 5, medium: 2, low: 1 };
+    let totalPenalty = 0;
+    for (const issue of issues) {
+        totalPenalty += penalties[issue.severity] || 1;
+    }
+    if (loc && loc > 0) {
+        const kloc = Math.max(1, loc / 1000);
+        totalPenalty = totalPenalty / kloc;
+    }
+    return Math.max(0, Math.min(100, Math.round(100 - totalPenalty)));
 }
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -34105,14 +34157,15 @@ async function runScan(config, pluginCtx) {
         seen.add(key);
         return true;
     });
-    const score = calculateScore(unique);
+    const loc = countSourceLOC(files);
+    const score = calculateScore(unique, loc);
     const totalElapsed = formatDuration(Date.now() - scanStart);
     // Summary
     core.info('');
     core.info('='.repeat(50));
     core.info('SCAN COMPLETE');
     core.info('='.repeat(50));
-    core.info(`Score:      ${score}/100`);
+    core.info(`Score:      ${score}/100 (${loc.toLocaleString()} LOC)`);
     core.info(`Issues:     ${unique.length} found`);
     core.info(`API calls:  ${totalApiCalls} (was ${Math.ceil(files.length / 2.3)} with old chunking)`);
     core.info(`Cache hits: ${cacheHits}/${files.length} files`);
@@ -34138,6 +34191,156 @@ async function runScan(config, pluginCtx) {
     core.info('='.repeat(50));
     const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
     return { issues: unique, score, summary, tokens: totalTokens };
+}
+
+
+/***/ }),
+
+/***/ 7316:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * .sloppy.yml repo config loader.
+ *
+ * Supports:
+ *   ignore:       glob patterns to exclude files/dirs from scanning and fixing
+ *   rules:        per-type overrides (e.g. dead-code: off, lint: low)
+ *   fix-types:    which issue types to auto-fix
+ *   test-command:  override test runner
+ *   strictness:   low | medium | high
+ *   fail-below:   minimum passing score
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.loadRepoConfig = loadRepoConfig;
+exports.mergeRepoConfig = mergeRepoConfig;
+const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const plugins_1 = __nccwpck_require__(6067);
+const VALID_TYPES = new Set([
+    'security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage',
+]);
+const VALID_SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
+function loadRepoConfig(cwd) {
+    const candidates = [
+        path.join(cwd, '.sloppy.yml'),
+        path.join(cwd, '.sloppy.yaml'),
+        path.join(cwd, '.sloppy', 'config.yml'),
+        path.join(cwd, '.sloppy', 'config.yaml'),
+    ];
+    let configPath;
+    for (const p of candidates) {
+        if (fs.existsSync(p)) {
+            configPath = p;
+            break;
+        }
+    }
+    if (!configPath)
+        return null;
+    try {
+        const raw = fs.readFileSync(configPath, 'utf-8');
+        const data = (0, plugins_1.parseSimpleYaml)(raw);
+        const config = {};
+        // ignore: list of glob patterns
+        if (Array.isArray(data.ignore)) {
+            config.ignore = data.ignore.filter(s => typeof s === 'string' && s.trim());
+        }
+        // rules: map of type → 'off' | severity
+        if (data.rules && typeof data.rules === 'object') {
+            const rules = {};
+            for (const [key, val] of Object.entries(data.rules)) {
+                if (!VALID_TYPES.has(key))
+                    continue;
+                const v = String(val).toLowerCase();
+                if (v === 'off' || VALID_SEVERITIES.has(v)) {
+                    rules[key] = v;
+                }
+            }
+            if (Object.keys(rules).length > 0)
+                config.rules = rules;
+        }
+        // fix-types
+        if (Array.isArray(data['fix-types'])) {
+            config.fixTypes = data['fix-types'].filter(s => typeof s === 'string' && VALID_TYPES.has(s.trim()));
+        }
+        // test-command
+        if (typeof data['test-command'] === 'string' && data['test-command']) {
+            config.testCommand = data['test-command'];
+        }
+        // strictness
+        if (typeof data.strictness === 'string') {
+            const s = data.strictness.toLowerCase();
+            if (['low', 'medium', 'high'].includes(s)) {
+                config.strictness = s;
+            }
+        }
+        // fail-below
+        if (data['fail-below'] !== undefined) {
+            const n = parseInt(String(data['fail-below']));
+            if (!isNaN(n) && n >= 0 && n <= 100)
+                config.failBelow = n;
+        }
+        core.info(`Loaded repo config from ${path.relative(cwd, configPath)}`);
+        return config;
+    }
+    catch (e) {
+        core.warning(`Failed to parse ${configPath}: ${e}`);
+        return null;
+    }
+}
+/**
+ * Merge a RepoConfig into the runtime SloppyConfig.
+ * Repo config values override action.yml defaults but NOT explicit user inputs.
+ */
+function mergeRepoConfig(config, repo) {
+    // Only override if the action input was left at default (empty / default value)
+    if (!config.testCommand && repo.testCommand) {
+        config.testCommand = repo.testCommand;
+    }
+    if (config.strictness === 'high' && repo.strictness) {
+        config.strictness = repo.strictness;
+    }
+    if (repo.fixTypes && repo.fixTypes.length > 0) {
+        config.fixTypes = repo.fixTypes;
+    }
+    if (config.failBelow === 0 && repo.failBelow !== undefined) {
+        config.failBelow = repo.failBelow;
+    }
 }
 
 

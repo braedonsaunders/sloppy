@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity, PluginContext } from './types';
 import { installAgent, runAgent } from './agent';
-import { calculateScore } from './scan';
+import { calculateScore, collectFiles, countSourceLOC } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
 import { runHook, applyFilters, formatCustomPromptSection } from './plugins';
@@ -667,6 +667,11 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
   const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
 
+  // Count LOC for normalized scoring
+  const sourceFiles = collectFiles(cwd);
+  const loc = countSourceLOC(sourceFiles);
+  core.info(`Source LOC: ${loc.toLocaleString()}`);
+
   // Load preexisting issues from output file
   let seededIssues: Issue[] = [];
   if (!checkpoint && config.outputFile) {
@@ -875,16 +880,16 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
 
     if (config.outputFile) {
       const remaining = state.issues.filter(i => i.status !== 'fixed');
-      const currentScore = calculateScore(remaining);
-      writeOutputFile(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || calculateScore(state.issues));
+      const currentScore = calculateScore(remaining, loc);
+      writeOutputFile(config.outputFile, state.issues, 'fix', currentScore, state.scoreBefore || calculateScore(state.issues, loc));
     }
   }
 
   // Calculate scores
   const allFound = state.issues;
   const remaining = allFound.filter(i => i.status !== 'fixed');
-  state.scoreAfter = calculateScore(remaining);
-  if (state.scoreBefore === 0) state.scoreBefore = calculateScore(allFound);
+  state.scoreAfter = calculateScore(remaining, loc);
+  if (state.scoreBefore === 0) state.scoreBefore = calculateScore(allFound, loc);
 
   // Push branch
   if (state.totalFixed > 0) {

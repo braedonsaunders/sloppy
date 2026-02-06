@@ -15,6 +15,7 @@ import {
 import { deployDashboard } from './dashboard';
 import { HistoryEntry, ScanResult, LoopState, PluginContext } from './types';
 import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
+import { loadRepoConfig, mergeRepoConfig } from './sloppy-config';
 
 async function run(): Promise<void> {
   try {
@@ -38,11 +39,34 @@ async function run(): Promise<void> {
     core.info(`Sloppy v1 — mode: ${config.mode}, agent: ${config.agent}`);
     core.info(`Auth: GITHUB_TOKEN=${hasGithubToken ? 'yes' : 'NO'}, ANTHROPIC_API_KEY=${hasAnthropicKey ? 'yes' : 'no'}, CLAUDE_OAUTH=${hasClaudeOAuth ? 'yes' : 'no'}, OPENAI_API_KEY=${hasOpenAIKey ? 'yes' : 'no'}`);
 
-    // Load custom prompts and plugins
+    // Load custom prompts, plugins, and repo config
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const customPrompt = resolveCustomPrompt(config.customPrompt, config.customPromptFile, cwd);
     const plugins = config.pluginsEnabled ? loadPlugins(cwd) : [];
     const pluginCtx = buildPluginContext(plugins, customPrompt);
+
+    // Load .sloppy.yml repo config and merge into runtime
+    const repoConfig = loadRepoConfig(cwd);
+    if (repoConfig) {
+      mergeRepoConfig(config, repoConfig);
+
+      // Merge ignore patterns into plugin filters
+      if (repoConfig.ignore && repoConfig.ignore.length > 0) {
+        const existing = pluginCtx.filters['exclude-paths'] || [];
+        pluginCtx.filters['exclude-paths'] = [...new Set([...existing, ...repoConfig.ignore])];
+      }
+
+      // Merge rules: 'off' → exclude-types, severity values are noted for future use
+      if (repoConfig.rules) {
+        const excludeTypes = new Set(pluginCtx.filters['exclude-types'] || []);
+        for (const [type, val] of Object.entries(repoConfig.rules)) {
+          if (val === 'off') excludeTypes.add(type);
+        }
+        if (excludeTypes.size > 0) {
+          pluginCtx.filters['exclude-types'] = [...excludeTypes];
+        }
+      }
+    }
 
     if (customPrompt) {
       core.info(`Custom prompt: ${customPrompt.length} chars loaded`);
