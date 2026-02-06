@@ -29979,53 +29979,79 @@ async function installAgent(agent) {
 // Runner script executed in a separate Node.js process to use the SDK.
 // This gives us real-time streaming events via stdout JSONL, bypassing
 // the CLI's -p mode which buffers all output until completion.
+//
+// IMPORTANT: The SDK packages are ESM-only (sdk.mjs entry point), so this
+// runner must be saved as .mjs and use dynamic import(). Additionally,
+// NODE_PATH only works with require(), not import(), so we manually resolve
+// the package path from the global npm root when bare imports fail.
 const CLAUDE_RUNNER = `
-const fs = require('fs');
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-async function main() {
-  const prompt = fs.readFileSync(process.argv[2], 'utf-8');
-  const opts = JSON.parse(process.argv[3]);
+async function loadQuery() {
+  const globalRoot = process.env.NODE_PATH || '';
+  const packages = ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/claude-code'];
 
-  // Try both package names (package was renamed)
-  let query;
-  try { query = require('@anthropic-ai/claude-code').query; } catch {}
-  if (!query) {
-    try { query = require('@anthropic-ai/claude-agent-sdk').query; } catch {}
-  }
-  if (!query) {
-    process.stderr.write('SDK_NOT_FOUND\\n');
-    process.exit(2);
-  }
+  for (const pkg of packages) {
+    // Try bare specifier (works if in local node_modules)
+    try {
+      const mod = await import(pkg);
+      if (mod.query) return mod.query;
+    } catch {}
 
-  const controller = new AbortController();
-  if (opts.timeout > 0) {
-    setTimeout(() => controller.abort(), opts.timeout);
-  }
-
-  try {
-    for await (const msg of query({
-      prompt,
-      options: {
-        maxTurns: opts.maxTurns || undefined,
-        model: opts.model || undefined,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        abortController: controller,
-      },
-    })) {
-      process.stdout.write(JSON.stringify(msg) + '\\n');
+    // Try loading from global npm root via file URL
+    if (globalRoot) {
+      try {
+        const pkgDir = path.join(globalRoot, pkg);
+        const pkgJsonPath = path.join(pkgDir, 'package.json');
+        const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+        let entry = pkgJson.exports?.['.'];
+        if (typeof entry === 'object') entry = entry.import || entry.default;
+        if (!entry) entry = pkgJson.main || 'index.js';
+        const fullPath = path.resolve(pkgDir, entry);
+        const mod = await import(pathToFileURL(fullPath).href);
+        if (mod.query) return mod.query;
+      } catch {}
     }
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      process.stderr.write('TIMEOUT\\n');
-      process.exit(1);
-    }
-    process.stderr.write((err.message || String(err)) + '\\n');
-    process.exit(1);
   }
+  return null;
 }
 
-main();
+const prompt = fs.readFileSync(process.argv[2], 'utf-8');
+const opts = JSON.parse(process.argv[3]);
+
+const query = await loadQuery();
+if (!query) {
+  process.stderr.write('SDK_NOT_FOUND\\n');
+  process.exit(2);
+}
+
+const controller = new AbortController();
+if (opts.timeout > 0) {
+  setTimeout(() => controller.abort(), opts.timeout);
+}
+
+try {
+  for await (const msg of query({
+    prompt,
+    options: {
+      maxTurns: opts.maxTurns || undefined,
+      model: opts.model || undefined,
+      permissionMode: 'bypassPermissions',
+      abortController: controller,
+    },
+  })) {
+    process.stdout.write(JSON.stringify(msg) + '\\n');
+  }
+} catch (err) {
+  if (err.name === 'AbortError') {
+    process.stderr.write('TIMEOUT\\n');
+    process.exit(1);
+  }
+  process.stderr.write((err.message || String(err)) + '\\n');
+  process.exit(1);
+}
 `;
 async function runAgent(agent, prompt, options) {
     if (agent === 'claude') {
@@ -30051,7 +30077,7 @@ async function runClaudeSDK(prompt, options) {
     // Write runner script and prompt to temp files
     const tmpDir = os.tmpdir();
     const ts = Date.now();
-    const scriptPath = path.join(tmpDir, `sloppy-runner-${ts}.js`);
+    const scriptPath = path.join(tmpDir, `sloppy-runner-${ts}.mjs`);
     const promptPath = path.join(tmpDir, `sloppy-prompt-${ts}.txt`);
     fs.writeFileSync(scriptPath, CLAUDE_RUNNER);
     fs.writeFileSync(promptPath, prompt);
