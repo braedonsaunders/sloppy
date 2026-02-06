@@ -44,5 +44,8 @@ export function getConfig(): SloppyConfig {
     maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0'),
     scanScope: (core.getInput('scan-scope') || 'auto') as ScanScope,
     outputFile: core.getInput('output-file') || '',
+    customPrompt: core.getInput('custom-prompt') || '',
+    customPromptFile: core.getInput('custom-prompt-file') || '',
+    pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
   };
 }
