@@ -13,8 +13,17 @@ interface ChatResponse {
   error?: { message: string };
 }
 
+// JSON Schema type that matches OpenAI's response_format specification
+interface ResponseFormat {
+  type: 'json_schema';
+  json_schema: {
+    name: string;
+    strict: boolean;
+    schema: Record<string, unknown>;
+  };
+}
+
 function getGitHubToken(): string {
-  // Try multiple sources for the token
   const token =
     process.env.GITHUB_TOKEN ||
     process.env.INPUT_GITHUB_TOKEN ||
@@ -35,9 +44,21 @@ function getGitHubToken(): string {
 export async function callGitHubModels(
   messages: ChatMessage[],
   model: string = 'openai/gpt-4o',
-  maxTokens: number = 4000,
+  options?: { maxTokens?: number; responseFormat?: ResponseFormat },
 ): Promise<{ content: string; tokens: number }> {
   const token = getGitHubToken();
+  const maxTokens = options?.maxTokens ?? 4000;
+
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.1,
+  };
+
+  if (options?.responseFormat) {
+    body.response_format = options.responseFormat;
+  }
 
   const response = await fetch(ENDPOINT, {
     method: 'POST',
@@ -45,7 +66,7 @@ export async function callGitHubModels(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.1 }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {

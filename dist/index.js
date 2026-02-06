@@ -30424,7 +30424,6 @@ exports.callGitHubModels = callGitHubModels;
 const core = __importStar(__nccwpck_require__(7484));
 const ENDPOINT = 'https://models.github.ai/inference/chat/completions';
 function getGitHubToken() {
-    // Try multiple sources for the token
     const token = process.env.GITHUB_TOKEN ||
         process.env.INPUT_GITHUB_TOKEN ||
         core.getInput('github-token');
@@ -30437,15 +30436,25 @@ function getGitHubToken() {
     }
     return token;
 }
-async function callGitHubModels(messages, model = 'openai/gpt-4o', maxTokens = 4000) {
+async function callGitHubModels(messages, model = 'openai/gpt-4o', options) {
     const token = getGitHubToken();
+    const maxTokens = options?.maxTokens ?? 4000;
+    const body = {
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature: 0.1,
+    };
+    if (options?.responseFormat) {
+        body.response_format = options.responseFormat;
+    }
     const response = await fetch(ENDPOINT, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature: 0.1 }),
+        body: JSON.stringify(body),
     });
     if (!response.ok) {
         const text = await response.text();
@@ -31396,6 +31405,43 @@ const IGNORE_DIRS = new Set([
     'node_modules', '.git', 'dist', 'build', 'out', '.next', 'vendor',
     '__pycache__', '.venv', 'venv', 'target', 'coverage', '.sloppy',
 ]);
+// Structured output schema — the model MUST conform to this exact shape.
+// No more "please respond with valid JSON" in the prompt.
+const ISSUES_SCHEMA = {
+    type: 'json_schema',
+    json_schema: {
+        name: 'scan_results',
+        strict: true,
+        schema: {
+            type: 'object',
+            properties: {
+                issues: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            type: {
+                                type: 'string',
+                                enum: ['security', 'bugs', 'types', 'lint', 'dead-code', 'stubs', 'duplicates', 'coverage'],
+                            },
+                            severity: {
+                                type: 'string',
+                                enum: ['critical', 'high', 'medium', 'low'],
+                            },
+                            file: { type: 'string' },
+                            line: { type: 'number' },
+                            description: { type: 'string' },
+                        },
+                        required: ['type', 'severity', 'file', 'line', 'description'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['issues'],
+            additionalProperties: false,
+        },
+    },
+};
 function collectFiles(dir, files = []) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.name.startsWith('.') && entry.name !== '.github')
@@ -31441,7 +31487,7 @@ function chunkFiles(files, maxChars = 24000) {
 }
 function buildPrompt(files, cwd, chunkNum, totalChunks) {
     const fileList = files.map(f => path.relative(cwd, f));
-    let prompt = `You are a senior code quality auditor. Analyze chunk ${chunkNum}/${totalChunks}.
+    let prompt = `Analyze chunk ${chunkNum}/${totalChunks} for code quality issues.
 
 FILES IN THIS CHUNK:
 ${fileList.map(f => `  - ${f}`).join('\n')}
@@ -31465,10 +31511,7 @@ SEVERITY GUIDE:
 RULES:
 - Only report REAL issues. No false positives. No style preferences.
 - Be specific: exact file, exact line number, exact description.
-- If a file looks clean, don't invent issues.
-
-Respond with ONLY valid JSON. No markdown. No explanation. No code fences.
-{"issues":[{"type":"category","severity":"level","file":"relative/path","line":123,"description":"what is wrong and why"}]}
+- If a file looks clean, return an empty issues array.
 
 SOURCE CODE:
 
@@ -31489,10 +31532,7 @@ SOURCE CODE:
 }
 function parseIssues(content) {
     try {
-        const match = content.match(/\{[\s\S]*\}/);
-        if (!match)
-            return [];
-        const data = JSON.parse(match[0]);
+        const data = JSON.parse(content);
         return (data.issues || []).map((raw, i) => ({
             id: `scan-${Date.now()}-${i}`,
             type: (raw.type || 'lint'),
@@ -31504,8 +31544,26 @@ function parseIssues(content) {
         }));
     }
     catch {
-        core.warning('Failed to parse scan response');
-        return [];
+        // Fallback: try to extract JSON from mixed content (shouldn't happen with structured outputs)
+        try {
+            const match = content.match(/\{[\s\S]*\}/);
+            if (!match)
+                return [];
+            const data = JSON.parse(match[0]);
+            return (data.issues || []).map((raw, i) => ({
+                id: `scan-${Date.now()}-${i}`,
+                type: (raw.type || 'lint'),
+                severity: (raw.severity || 'medium'),
+                file: raw.file || 'unknown',
+                line: raw.line || undefined,
+                description: raw.description || 'Unknown issue',
+                status: 'found',
+            }));
+        }
+        catch {
+            core.warning('Failed to parse scan response');
+            return [];
+        }
     }
 }
 function calculateScore(issues) {
@@ -31561,14 +31619,14 @@ async function runScan(config) {
     let failCount = 0;
     for (let i = 0; i < chunks.length; i++) {
         const chunkStart = Date.now();
-        const chunkFiles = chunks[i].map(f => path.relative(cwd, f));
+        const chunkFileNames = chunks[i].map(f => path.relative(cwd, f));
         const progress = Math.round(((i + 1) / chunks.length) * 100);
-        core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFiles.slice(0, 3).join(', ')}${chunkFiles.length > 3 ? ` +${chunkFiles.length - 3} more` : ''}`);
+        core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3} more` : ''}`);
         try {
             const { content, tokens } = await (0, github_models_1.callGitHubModels)([
-                { role: 'system', content: 'You are a code quality analyzer. Respond ONLY with valid JSON. No markdown fences.' },
+                { role: 'system', content: 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.' },
                 { role: 'user', content: buildPrompt(chunks[i], cwd, i + 1, chunks.length) },
-            ], config.githubModelsModel);
+            ], config.githubModelsModel, { responseFormat: ISSUES_SCHEMA });
             totalTokens += tokens;
             const chunkIssues = parseIssues(content);
             allIssues.push(...chunkIssues);
