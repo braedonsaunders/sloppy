@@ -103,6 +103,10 @@ inputs:
     description: 'Enable/disable the plugin system (loads from .sloppy/plugins/)'
     required: false
     default: 'true'
+  parallel-agents:
+    description: 'Number of parallel agents to dispatch for fixing (1-8). Uses git worktrees for true parallelism.'
+    required: false
+    default: '1'
   chain_number:
     description: 'Internal: chain continuation number'
     required: false

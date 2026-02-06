@@ -47,5 +47,6 @@ export function getConfig(): SloppyConfig {
     customPrompt: core.getInput('custom-prompt') || '',
     customPromptFile: core.getInput('custom-prompt-file') || '',
     pluginsEnabled: (core.getInput('plugins') || 'true') !== 'false',
+    parallelAgents: Math.min(Math.max(parseInt(core.getInput('parallel-agents') || '1'), 1), 8),
   };
 }

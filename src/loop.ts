@@ -2,12 +2,17 @@ import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { SloppyConfig, Issue, PassResult, LoopState, IssueType, Severity, PluginContext } from './types';
 import { installAgent, runAgent } from './agent';
 import { calculateScore } from './scan';
 import { saveCheckpoint, loadCheckpoint } from './checkpoint';
 import { loadOutputFile, writeOutputFile } from './report';
 import { runHook, applyFilters, formatCustomPromptSection } from './plugins';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -30,10 +35,15 @@ function formatTimeRemaining(deadline: number): string {
   return formatDuration(Math.max(0, deadline - Date.now()));
 }
 
+// ---------------------------------------------------------------------------
+// Test detection — covers major ecosystems
+// ---------------------------------------------------------------------------
+
 async function detectTestCommand(config: SloppyConfig): Promise<string> {
   if (config.testCommand) return config.testCommand;
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
 
+  // Node.js
   if (fs.existsSync(path.join(cwd, 'package.json'))) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf-8'));
@@ -42,23 +52,47 @@ async function detectTestCommand(config: SloppyConfig): Promise<string> {
       }
     } catch {}
   }
+  // Rust
   if (fs.existsSync(path.join(cwd, 'Cargo.toml'))) return 'cargo test';
+  // Go
   if (fs.existsSync(path.join(cwd, 'go.mod'))) return 'go test ./...';
+  // Python
   if (fs.existsSync(path.join(cwd, 'pytest.ini')) || fs.existsSync(path.join(cwd, 'pyproject.toml'))) return 'python -m pytest';
+  // Java / Kotlin (Gradle)
+  if (fs.existsSync(path.join(cwd, 'build.gradle')) || fs.existsSync(path.join(cwd, 'build.gradle.kts'))) return './gradlew test';
+  // Java (Maven)
+  if (fs.existsSync(path.join(cwd, 'pom.xml'))) return 'mvn test';
+  // Ruby
+  if (fs.existsSync(path.join(cwd, 'Gemfile'))) {
+    if (fs.existsSync(path.join(cwd, 'spec'))) return 'bundle exec rspec';
+    if (fs.existsSync(path.join(cwd, 'test'))) return 'bundle exec rake test';
+  }
+  // PHP
+  if (fs.existsSync(path.join(cwd, 'phpunit.xml')) || fs.existsSync(path.join(cwd, 'phpunit.xml.dist'))) return 'vendor/bin/phpunit';
+  // Elixir
+  if (fs.existsSync(path.join(cwd, 'mix.exs'))) return 'mix test';
+  // Makefile fallback
   if (fs.existsSync(path.join(cwd, 'Makefile'))) return 'make test';
+
   return '';
 }
 
-async function runTests(cmd: string): Promise<boolean> {
+async function runTests(cmd: string, cwd?: string): Promise<boolean> {
   if (!cmd) return true;
   try {
-    return (await exec.exec('sh', ['-c', cmd], { ignoreReturnCode: true, silent: true })) === 0;
+    const opts: exec.ExecOptions = { ignoreReturnCode: true, silent: true };
+    if (cwd) opts.cwd = cwd;
+    return (await exec.exec('sh', ['-c', cmd], opts)) === 0;
   } catch {
     return false;
   }
 }
 
-async function gitCommit(issue: Issue): Promise<string> {
+// ---------------------------------------------------------------------------
+// Git operations
+// ---------------------------------------------------------------------------
+
+async function gitCommit(issue: Issue, cwd?: string): Promise<string> {
   const prefixes: Record<string, string> = {
     security: 'fix', bugs: 'fix', types: 'fix', lint: 'style',
     'dead-code': 'chore', stubs: 'fix', duplicates: 'refactor', coverage: 'test',
@@ -66,20 +100,96 @@ async function gitCommit(issue: Issue): Promise<string> {
   const prefix = prefixes[issue.type] || 'fix';
   const desc = issue.description.length > 60 ? issue.description.slice(0, 57) + '...' : issue.description;
 
-  await exec.exec('git', ['add', '-A']);
-  await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}`], { ignoreReturnCode: true });
+  const execOpts: exec.ExecOptions = { ignoreReturnCode: true };
+  if (cwd) execOpts.cwd = cwd;
+
+  await exec.exec('git', ['add', '-A'], execOpts);
+  await exec.exec('git', ['commit', '-m', `${prefix}: ${desc}`], execOpts);
 
   let sha = '';
   await exec.exec('git', ['rev-parse', 'HEAD'], {
+    ...execOpts,
     listeners: { stdout: (d: Buffer) => { sha += d.toString().trim(); } },
   });
   return sha;
 }
 
-async function gitRevert(): Promise<void> {
-  await exec.exec('git', ['checkout', '.'], { ignoreReturnCode: true });
-  await exec.exec('git', ['clean', '-fd'], { ignoreReturnCode: true });
+async function gitRevert(cwd?: string): Promise<void> {
+  const execOpts: exec.ExecOptions = { ignoreReturnCode: true };
+  if (cwd) execOpts.cwd = cwd;
+  await exec.exec('git', ['checkout', '.'], execOpts);
+  await exec.exec('git', ['clean', '-fd'], execOpts);
 }
+
+async function gitHasChanges(cwd?: string): Promise<boolean> {
+  let stdout = '';
+  const execOpts: exec.ExecOptions = {
+    ignoreReturnCode: true,
+    listeners: { stdout: (d: Buffer) => { stdout += d.toString(); } },
+    silent: true,
+  };
+  if (cwd) execOpts.cwd = cwd;
+  await exec.exec('git', ['status', '--porcelain'], execOpts);
+  return stdout.trim().length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Issue clustering — groups related issues for efficient multi-fix dispatch
+// ---------------------------------------------------------------------------
+
+interface IssueCluster {
+  id: string;
+  directory: string;
+  issues: Issue[];
+  files: string[];
+}
+
+/**
+ * Cluster issues by directory proximity. Issues in the same directory
+ * or sharing a common parent are grouped together. This produces one
+ * agent call per cluster instead of one per issue.
+ */
+function clusterIssues(issues: Issue[], maxPerCluster: number = 10): IssueCluster[] {
+  // Group by top-level directory (first path segment)
+  const byDir = new Map<string, Issue[]>();
+  for (const issue of issues) {
+    const parts = issue.file.split('/');
+    const dir = parts.length > 1 ? parts[0] : '.';
+    if (!byDir.has(dir)) byDir.set(dir, []);
+    byDir.get(dir)!.push(issue);
+  }
+
+  const clusters: IssueCluster[] = [];
+  let id = 0;
+
+  for (const [dir, dirIssues] of byDir) {
+    // If too many issues in one dir, split into sub-clusters
+    const sorted = sortBySeverity(dirIssues);
+    for (let i = 0; i < sorted.length; i += maxPerCluster) {
+      const batch = sorted.slice(i, i + maxPerCluster);
+      const files = [...new Set(batch.map(iss => iss.file))];
+      clusters.push({
+        id: `cluster-${id++}`,
+        directory: dir,
+        issues: batch,
+        files,
+      });
+    }
+  }
+
+  // Sort clusters: most critical issues first
+  clusters.sort((a, b) => {
+    const aSev = Math.min(...a.issues.map(i => SEVERITY_ORDER[i.severity] ?? 9));
+    const bSev = Math.min(...b.issues.map(i => SEVERITY_ORDER[i.severity] ?? 9));
+    return aSev - bSev;
+  });
+
+  return clusters;
+}
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
 
 function scanPrompt(pass: number, previousFixes: string[], plan: string, customSection: string): string {
   const planSection = plan ? `\nQUALITY PLAN (from PLAN.md):\n${plan}\n` : '';
@@ -95,7 +205,7 @@ ISSUE CATEGORIES (use these exact type values):
   types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
   lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
   dead-code   — functions/classes/exports never called or imported anywhere
-  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks, mock data
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
   duplicates  — copy-pasted logic that should be extracted to a shared function
   coverage    — public functions with zero test coverage, untested error paths, missing edge cases
 
@@ -140,7 +250,31 @@ Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 {"issues":[{"type":"category","severity":"level","file":"relative/path","line":42,"description":"what is wrong"}]}`;
 }
 
-function fixPrompt(issue: Issue, testCommand: string, customSection: string): string {
+function clusterFixPrompt(cluster: IssueCluster, testCommand: string, customSection: string): string {
+  const issueList = cluster.issues.map((issue, idx) =>
+    `${idx + 1}. [${issue.severity}/${issue.type}] ${issue.file}${issue.line ? `:${issue.line}` : ''} — ${issue.description}`
+  ).join('\n');
+
+  return `You are fixing code quality issues in this repository. Fix these issues ONE AT A TIME.
+
+ISSUES TO FIX (in priority order):
+${issueList}
+${customSection}
+FOR EACH ISSUE:
+1. Read the file and understand the context
+2. Make the MINIMAL change needed to fix the issue
+3. Do not add comments explaining the fix
+4. Do not reformat or restyle code you didn't change
+${testCommand ? `5. Run tests after EACH fix: ${testCommand}` : '5. Verify your fix compiles/parses correctly'}
+6. If tests pass: git add -A && git commit -m "fix(${cluster.issues[0]?.type || 'code'}): <short description>"
+7. If tests fail: git checkout . && git clean -fd (revert and move on)
+8. If an issue CANNOT be safely fixed: skip it and move to the next
+
+After completing ALL issues, output ONLY this JSON:
+{"results":[{"file":"path","line":42,"status":"fixed|skipped","reason":"only if skipped"}]}`;
+}
+
+function singleFixPrompt(issue: Issue, testCommand: string, customSection: string): string {
   return `Fix this specific code quality issue. Make the MINIMAL change required.
 
 ISSUE:
@@ -160,6 +294,10 @@ ${testCommand ? `6. After fixing, run: ${testCommand}` : '6. Verify your fix com
 If this issue CANNOT be safely fixed without breaking other code, respond with exactly:
 SKIP: <reason why it cannot be fixed>`;
 }
+
+// ---------------------------------------------------------------------------
+// Output parsing
+// ---------------------------------------------------------------------------
 
 function parseIssues(output: string): Issue[] {
   try {
@@ -190,6 +328,268 @@ function parseIssues(output: string): Issue[] {
   }
 }
 
+function parseClusterResults(
+  output: string,
+  cluster: IssueCluster,
+): { fixed: Issue[]; skipped: Issue[] } {
+  const fixed: Issue[] = [];
+  const skipped: Issue[] = [];
+
+  try {
+    let text = output;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed.result) text = parsed.result;
+      else if (typeof parsed === 'string') text = parsed;
+    } catch {}
+
+    const match = text.match(/\{[\s\S]*"results"[\s\S]*\}/);
+    if (match) {
+      const data = JSON.parse(match[0]);
+      const results = data.results || [];
+
+      for (const issue of cluster.issues) {
+        const result = results.find((r: any) =>
+          r.file === issue.file && (r.line === issue.line || !r.line)
+        );
+        if (result?.status === 'fixed') {
+          issue.status = 'fixed';
+          fixed.push(issue);
+        } else if (result?.status === 'skipped') {
+          issue.status = 'skipped';
+          issue.skipReason = result.reason || 'Agent could not fix';
+          skipped.push(issue);
+        } else {
+          issue.status = 'skipped';
+          issue.skipReason = 'No result reported by agent';
+          skipped.push(issue);
+        }
+      }
+      return { fixed, skipped };
+    }
+  } catch {}
+
+  // Fallback: if parsing failed, mark all as skipped
+  for (const issue of cluster.issues) {
+    issue.status = 'skipped';
+    issue.skipReason = 'Could not parse agent output';
+    skipped.push(issue);
+  }
+  return { fixed, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// Worktree management for parallel dispatch
+// ---------------------------------------------------------------------------
+
+async function createWorktree(baseBranch: string, workerName: string): Promise<string> {
+  const tmpDir = path.join(os.tmpdir(), `sloppy-${workerName}-${Date.now()}`);
+  await exec.exec('git', ['worktree', 'add', tmpDir, '-b', workerName, baseBranch], {
+    ignoreReturnCode: true,
+  });
+  await exec.exec('git', ['config', 'user.name', 'sloppy[bot]'], { cwd: tmpDir, ignoreReturnCode: true });
+  await exec.exec('git', ['config', 'user.email', 'sloppy[bot]@users.noreply.github.com'], { cwd: tmpDir, ignoreReturnCode: true });
+  return tmpDir;
+}
+
+async function removeWorktree(worktreePath: string, branchName: string): Promise<void> {
+  await exec.exec('git', ['worktree', 'remove', worktreePath, '--force'], { ignoreReturnCode: true });
+  await exec.exec('git', ['branch', '-D', branchName], { ignoreReturnCode: true });
+}
+
+async function cherryPickCommits(fromBranch: string): Promise<string[]> {
+  let logOutput = '';
+  await exec.exec('git', ['log', `HEAD..${fromBranch}`, '--format=%H', '--reverse'], {
+    listeners: { stdout: (d: Buffer) => { logOutput += d.toString(); } },
+    ignoreReturnCode: true,
+    silent: true,
+  });
+
+  const shas = logOutput.trim().split('\n').filter(s => s.length > 0);
+  const picked: string[] = [];
+
+  for (const sha of shas) {
+    const exitCode = await exec.exec('git', ['cherry-pick', sha], { ignoreReturnCode: true });
+    if (exitCode === 0) {
+      picked.push(sha);
+    } else {
+      await exec.exec('git', ['cherry-pick', '--abort'], { ignoreReturnCode: true });
+      core.warning(`Cherry-pick conflict on ${sha.slice(0, 7)} — skipping remaining commits from this worker`);
+      break;
+    }
+  }
+
+  return picked;
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch strategies
+// ---------------------------------------------------------------------------
+
+async function dispatchClusterSequential(
+  cluster: IssueCluster,
+  config: SloppyConfig,
+  testCmd: string,
+  customSection: string,
+  deadline: number,
+  margin: number,
+): Promise<{ fixed: Issue[]; skipped: Issue[] }> {
+  // For a single-issue cluster, use the focused single-issue prompt
+  if (cluster.issues.length === 1) {
+    const issue = cluster.issues[0];
+    const result = await runAgent(config.agent, singleFixPrompt(issue, testCmd, customSection), {
+      maxTurns: config.maxTurns.fix,
+      model: config.model || undefined,
+      timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
+      verbose: config.verbose,
+    });
+
+    if (result.output.includes('SKIP:') || result.exitCode !== 0) {
+      issue.status = 'skipped';
+      issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
+      await gitRevert();
+      return { fixed: [], skipped: [issue] };
+    }
+
+    if (await runTests(testCmd)) {
+      const sha = await gitCommit(issue);
+      issue.status = 'fixed';
+      issue.commitSha = sha;
+      return { fixed: [issue], skipped: [] };
+    }
+
+    issue.status = 'skipped';
+    issue.skipReason = 'Tests failed after fix';
+    await gitRevert();
+    return { fixed: [], skipped: [issue] };
+  }
+
+  // Multi-issue cluster: give agent all issues at once with full autonomy
+  const prompt = clusterFixPrompt(cluster, testCmd, customSection);
+  const timeoutMs = Math.min(
+    5 * 60 * 1000 * Math.ceil(cluster.issues.length / 3),
+    deadline - Date.now() - margin,
+  );
+
+  const result = await runAgent(config.agent, prompt, {
+    maxTurns: config.maxTurns.fix * 2,
+    model: config.model || undefined,
+    timeout: timeoutMs,
+    verbose: config.verbose,
+  });
+
+  const parsed = parseClusterResults(result.output, cluster);
+
+  if (result.exitCode !== 0 && parsed.fixed.length === 0) {
+    if (await gitHasChanges()) {
+      await gitRevert();
+    }
+  }
+
+  return parsed;
+}
+
+async function dispatchClustersParallel(
+  clusters: IssueCluster[],
+  config: SloppyConfig,
+  testCmd: string,
+  customSection: string,
+  deadline: number,
+  margin: number,
+  baseBranch: string,
+): Promise<{ fixed: Issue[]; skipped: Issue[] }> {
+  const parallelism = Math.min(config.parallelAgents, clusters.length);
+  const allFixed: Issue[] = [];
+  const allSkipped: Issue[] = [];
+
+  // Process in batches of `parallelism`
+  for (let batchStart = 0; batchStart < clusters.length; batchStart += parallelism) {
+    if (Date.now() >= deadline - margin) break;
+
+    const batch = clusters.slice(batchStart, batchStart + parallelism);
+    core.info(`  Dispatching batch of ${batch.length} parallel agents...`);
+
+    // Create worktrees
+    const workers: { cluster: IssueCluster; worktree: string; branch: string }[] = [];
+    for (let i = 0; i < batch.length; i++) {
+      const branchName = `sloppy-worker-${batchStart + i}-${Date.now()}`;
+      const worktree = await createWorktree(baseBranch, branchName);
+      workers.push({ cluster: batch[i], worktree, branch: branchName });
+    }
+
+    // Dispatch agents in parallel via Promise.all
+    const promises = workers.map(async (worker) => {
+      const timeoutMs = Math.min(
+        5 * 60 * 1000 * Math.ceil(worker.cluster.issues.length / 3),
+        deadline - Date.now() - margin,
+      );
+
+      const prompt = worker.cluster.issues.length === 1
+        ? singleFixPrompt(worker.cluster.issues[0], testCmd, customSection)
+        : clusterFixPrompt(worker.cluster, testCmd, customSection);
+
+      core.info(`    [${worker.branch}] Fixing ${worker.cluster.issues.length} issues in ${worker.cluster.directory}/`);
+
+      const result = await runAgent(config.agent, prompt, {
+        maxTurns: config.maxTurns.fix * 2,
+        model: config.model || undefined,
+        timeout: timeoutMs,
+        verbose: config.verbose,
+        cwd: worker.worktree,
+      });
+
+      return { worker, result };
+    });
+
+    const results = await Promise.all(promises);
+
+    // Cherry-pick commits from each worker back to main branch
+    for (const { worker, result } of results) {
+      const { cluster } = worker;
+
+      if (cluster.issues.length === 1) {
+        const issue = cluster.issues[0];
+        if (result.output.includes('SKIP:') || result.exitCode !== 0) {
+          issue.status = 'skipped';
+          issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
+          allSkipped.push(issue);
+        } else {
+          const picked = await cherryPickCommits(worker.branch);
+          if (picked.length > 0) {
+            issue.status = 'fixed';
+            issue.commitSha = picked[0];
+            allFixed.push(issue);
+          } else {
+            issue.status = 'skipped';
+            issue.skipReason = 'No commits produced';
+            allSkipped.push(issue);
+          }
+        }
+      } else {
+        const parsed = parseClusterResults(result.output, cluster);
+        const picked = await cherryPickCommits(worker.branch);
+        core.info(`    [${worker.branch}] Cherry-picked ${picked.length} commits`);
+
+        for (let i = 0; i < Math.min(parsed.fixed.length, picked.length); i++) {
+          parsed.fixed[i].commitSha = picked[i];
+        }
+
+        allFixed.push(...parsed.fixed);
+        allSkipped.push(...parsed.skipped);
+      }
+
+      // Cleanup worktree
+      await removeWorktree(worker.worktree, worker.branch);
+    }
+  }
+
+  return { fixed: allFixed, skipped: allSkipped };
+}
+
+// ---------------------------------------------------------------------------
+// The main fix loop
+// ---------------------------------------------------------------------------
+
 export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext): Promise<LoopState> {
   const startTime = Date.now();
   const checkpoint = loadCheckpoint();
@@ -210,7 +610,8 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   };
 
   const deadline = startTime + config.timeout;
-  const margin = 2 * 60 * 1000; // 2 min safety margin
+  const margin = 2 * 60 * 1000;
+  const useParallel = config.parallelAgents > 1;
 
   // Header
   core.info('');
@@ -222,6 +623,7 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
   core.info(`Timeout:    ${formatDuration(config.timeout)}`);
   core.info(`Max passes: ${config.maxPasses}`);
   core.info(`Max issues: ${config.maxIssuesPerPass || 'unlimited'}/pass`);
+  core.info(`Parallel:   ${config.parallelAgents} agent${config.parallelAgents > 1 ? 's' : ''}${useParallel ? ' (worktree mode)' : ''}`);
   core.info(`Verbose:    ${config.verbose ? 'ON (streaming agent output)' : 'off'}`);
   core.info(`Chain:      ${state.chainNumber}/${config.maxChains}`);
   core.info('='.repeat(50));
@@ -263,10 +665,9 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     core.info('Loaded PLAN.md for quality context');
   }
 
-  // Build custom prompt section from plugins + custom-prompt config
   const customSection = pluginCtx ? formatCustomPromptSection(pluginCtx) : '';
 
-  // Load preexisting issues from output file (if available and no checkpoint)
+  // Load preexisting issues from output file
   let seededIssues: Issue[] = [];
   if (!checkpoint && config.outputFile) {
     const prior = loadOutputFile(config.outputFile);
@@ -288,22 +689,20 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     core.info(`PASS ${state.pass}/${config.maxPasses}  |  Time remaining: ${formatTimeRemaining(deadline)}  |  Fixed so far: ${state.totalFixed}`);
     core.info('='.repeat(50));
 
-    // Gather previous fixes for context
     const prevFixes = state.issues
       .filter(i => i.status === 'fixed')
       .slice(-20)
       .map(i => `[${i.type}] ${i.file}: ${i.description}`);
 
-    // SCAN (or use seeded issues from a prior scan output file)
+    // PHASE 1: SCAN
     let found: Issue[];
     if (seededIssues.length > 0 && state.pass === 1) {
       found = seededIssues;
-      seededIssues = []; // consume them so subsequent passes scan fresh
+      seededIssues = [];
       core.info('');
       core.info(`Using ${found.length} preexisting issues from output file (skipping rescan)`);
     } else {
       core.info('');
-      // Run pre-scan hooks
       if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
 
       core.info(`Scanning repository (${config.agent})...`);
@@ -316,12 +715,17 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
       });
       const scanDuration = formatDuration(Date.now() - scanStart);
 
+      // Detect scan failure — don't treat empty output + error exit as "clean"
+      if (scanResult.exitCode !== 0 && !scanResult.output.trim()) {
+        core.warning(`Scan agent failed (exit ${scanResult.exitCode}, no output) — will retry next pass`);
+        state.passes.push({ number: state.pass, found: 0, fixed: 0, skipped: 0, durationMs: Date.now() - passStart });
+        continue;
+      }
+
       found = parseIssues(scanResult.output);
 
-      // Run post-scan hooks
       if (pluginCtx) await runHook(pluginCtx.plugins, 'post-scan');
 
-      // Apply plugin filters
       if (pluginCtx) {
         const before = found.length;
         found = applyFilters(found, pluginCtx.filters);
@@ -334,11 +738,8 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
     }
 
     if (found.length > 0) {
-      // Log issue summary
       const bySev: Record<string, number> = {};
-      for (const issue of found) {
-        bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
-      }
+      for (const issue of found) bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
       const sevSummary = Object.entries(bySev)
         .sort(([a], [b]) => (SEVERITY_ORDER[a] ?? 9) - (SEVERITY_ORDER[b] ?? 9))
         .map(([sev, count]) => `${count} ${sev}`)
@@ -361,72 +762,99 @@ export async function runFixLoop(config: SloppyConfig, pluginCtx?: PluginContext
       continue;
     }
 
-    // FIX each issue atomically
+    // PHASE 2: CLUSTER issues by directory
     const sorted = sortBySeverity(found);
     const limit = config.maxIssuesPerPass > 0 ? config.maxIssuesPerPass : sorted.length;
     const toFix = sorted.slice(0, limit);
-    let passFixed = 0;
-    let passSkipped = 0;
 
+    const clusters = clusterIssues(toFix);
     core.info('');
-    if (limit < sorted.length) {
-      core.info(`Fixing ${toFix.length} of ${sorted.length} issues (capped by max-issues-per-pass)...`);
-    } else {
-      core.info(`Fixing ${toFix.length} issues (highest severity first)...`);
+    core.info(`Clustered ${toFix.length} issues into ${clusters.length} groups:`);
+    for (const c of clusters) {
+      core.info(`  ${c.directory}/ — ${c.issues.length} issues across ${c.files.length} files`);
     }
     core.info('');
 
-    for (let idx = 0; idx < toFix.length; idx++) {
-      const issue = toFix[idx];
-      if (Date.now() >= deadline - margin) {
-        core.info('');
-        core.warning(`Timeout approaching — stopping after ${idx} of ${toFix.length} issues`);
-        break;
-      }
+    // PHASE 3: DISPATCH — parallel or sequential
+    let passFixed = 0;
+    let passSkipped = 0;
 
-      const timeLeft = formatTimeRemaining(deadline);
-      core.info(`  [${idx + 1}/${toFix.length}] (${timeLeft} left) ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'}`);
-      core.info(`    ${issue.description}`);
+    if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-fix', {});
 
-      // Run pre-fix hooks
-      if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_TYPE: issue.type });
+    if (useParallel && clusters.length > 1) {
+      core.info(`Dispatching ${clusters.length} clusters across ${config.parallelAgents} parallel agents (worktree mode)...`);
+      const { fixed, skipped } = await dispatchClustersParallel(
+        clusters, config, testCmd, customSection, deadline, margin, state.branchName,
+      );
 
-      const fixStart = Date.now();
-      const result = await runAgent(config.agent, fixPrompt(issue, testCmd, customSection), {
-        maxTurns: config.maxTurns.fix,
-        model: config.model || undefined,
-        timeout: Math.min(3 * 60 * 1000, deadline - Date.now() - margin),
-        verbose: config.verbose,
-      });
-      const fixDuration = formatDuration(Date.now() - fixStart);
+      passFixed = fixed.length;
+      passSkipped = skipped.length;
+      state.issues.push(...fixed, ...skipped);
 
-      if (result.output.includes('SKIP:') || result.exitCode !== 0) {
-        issue.status = 'skipped';
-        issue.skipReason = result.output.match(/SKIP:\s*(.*)/)?.[1] || 'Agent could not fix';
-        passSkipped++;
-        state.totalSkipped++;
-        await gitRevert();
-        core.info(`    -> SKIPPED (${fixDuration}): ${issue.skipReason}`);
-      } else if (await runTests(testCmd)) {
-        const sha = await gitCommit(issue);
-        issue.status = 'fixed';
-        issue.commitSha = sha;
-        passFixed++;
+      for (const issue of fixed) {
         state.totalFixed++;
-        core.info(`    -> FIXED ${sha.slice(0, 7)} (${fixDuration})`);
-      } else {
-        issue.status = 'skipped';
-        issue.skipReason = 'Tests failed after fix';
-        passSkipped++;
-        state.totalSkipped++;
-        await gitRevert();
-        core.info(`    -> REVERTED (${fixDuration}): tests failed`);
+        core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}`);
       }
+      for (const issue of skipped) {
+        state.totalSkipped++;
+        core.info(`    -> SKIPPED ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}: ${issue.skipReason || ''}`);
+      }
+    } else {
+      // Sequential cluster-based dispatch
+      for (let ci = 0; ci < clusters.length; ci++) {
+        const cluster = clusters[ci];
+        if (Date.now() >= deadline - margin) {
+          core.warning('Timeout approaching — stopping');
+          break;
+        }
 
-      // Run post-fix hooks
-      if (pluginCtx) await runHook(pluginCtx.plugins, 'post-fix', { SLOPPY_ISSUE_FILE: issue.file, SLOPPY_ISSUE_STATUS: issue.status });
+        const timeLeft = formatTimeRemaining(deadline);
+        core.info(`  [cluster ${ci + 1}/${clusters.length}] (${timeLeft} left) ${cluster.directory}/ — ${cluster.issues.length} issues`);
+        for (const issue of cluster.issues) {
+          core.info(`    ${issue.severity.toUpperCase()} ${issue.type} — ${issue.file}:${issue.line || '?'} — ${issue.description}`);
+        }
 
-      state.issues.push(issue);
+        const clusterStart = Date.now();
+        const { fixed, skipped } = await dispatchClusterSequential(
+          cluster, config, testCmd, customSection, deadline, margin,
+        );
+        const clusterDur = formatDuration(Date.now() - clusterStart);
+
+        passFixed += fixed.length;
+        passSkipped += skipped.length;
+
+        for (const issue of fixed) {
+          state.totalFixed++;
+          core.info(`    -> FIXED ${(issue.commitSha || '').slice(0, 7)} (${clusterDur})`);
+        }
+        for (const issue of skipped) {
+          state.totalSkipped++;
+          core.info(`    -> SKIPPED (${clusterDur}): ${issue.skipReason || ''}`);
+        }
+
+        if (pluginCtx) {
+          for (const issue of [...fixed, ...skipped]) {
+            await runHook(pluginCtx.plugins, 'post-fix', {
+              SLOPPY_ISSUE_FILE: issue.file,
+              SLOPPY_ISSUE_TYPE: issue.type,
+              SLOPPY_ISSUE_STATUS: issue.status,
+            });
+          }
+        }
+
+        state.issues.push(...fixed, ...skipped);
+      }
+    }
+
+    // PHASE 4: VERIFY — full test suite after all clusters in this pass
+    if (testCmd && passFixed > 0) {
+      core.info('');
+      core.info('Running full test suite to verify all fixes...');
+      if (await runTests(testCmd)) {
+        core.info('All tests pass.');
+      } else {
+        core.warning('Full test suite failed after fixes — some commits may conflict.');
+      }
     }
 
     state.passes.push({
