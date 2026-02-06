@@ -57,16 +57,38 @@ function chunkFiles(files: string[], maxChars: number = 24000): string[][] {
   return chunks;
 }
 
-function buildPrompt(files: string[], cwd: string): string {
-  let prompt = `Analyze these source files for code quality issues. Be thorough and precise.
+function buildPrompt(files: string[], cwd: string, chunkNum: number, totalChunks: number): string {
+  const fileList = files.map(f => path.relative(cwd, f));
+  let prompt = `You are a senior code quality auditor. Analyze chunk ${chunkNum}/${totalChunks}.
 
-Categories: security, bugs, types, lint, dead-code, stubs, duplicates, coverage
-Severities: critical, high, medium, low
+FILES IN THIS CHUNK:
+${fileList.map(f => `  - ${f}`).join('\n')}
 
-Respond ONLY with valid JSON (no markdown, no code fences, no explanation):
-{"issues":[{"type":"...","severity":"...","file":"relative/path","line":0,"description":"..."}]}
+ISSUE CATEGORIES:
+  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal
+  bugs        — null derefs, off-by-one, race conditions, wrong logic, unhandled errors
+  types       — type mismatches, unsafe casts, missing generics, any-typed values
+  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
+  dead-code   — functions/classes/exports never called or imported
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  duplicates  — copy-pasted logic that should be a shared function
+  coverage    — public functions with zero test coverage, untested error paths
 
-Files:
+SEVERITY GUIDE:
+  critical — exploitable in production (data loss, auth bypass, RCE)
+  high     — will cause bugs in normal usage
+  medium   — code smell, maintainability risk
+  low      — style nit, minor improvement
+
+RULES:
+- Only report REAL issues. No false positives. No style preferences.
+- Be specific: exact file, exact line number, exact description.
+- If a file looks clean, don't invent issues.
+
+Respond with ONLY valid JSON. No markdown. No explanation. No code fences.
+{"issues":[{"type":"category","severity":"level","file":"relative/path","line":123,"description":"what is wrong and why"}]}
+
+SOURCE CODE:
 
 `;
   for (const file of files) {
@@ -111,36 +133,84 @@ export function calculateScore(issues: Issue[]): number {
   return Math.max(0, Math.min(100, score));
 }
 
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `${m}m${rem}s` : `${m}m`;
+}
+
 export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+  const scanStart = Date.now();
+
+  core.info('');
+  core.info('='.repeat(50));
+  core.info('SLOPPY FREE SCAN');
+  core.info(`Model: ${config.githubModelsModel}`);
+  core.info('='.repeat(50));
+  core.info('');
+
   core.info('Collecting source files...');
   const files = collectFiles(cwd);
   core.info(`Found ${files.length} source files`);
 
   if (files.length === 0) {
+    core.info('No source files found — nothing to scan.');
     return { issues: [], score: 100, summary: 'No source files found.', tokens: 0 };
   }
 
+  // Log file type breakdown
+  const extCounts: Record<string, number> = {};
+  for (const f of files) {
+    const ext = path.extname(f).toLowerCase();
+    extCounts[ext] = (extCounts[ext] || 0) + 1;
+  }
+  const topExts = Object.entries(extCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([ext, count]) => `${ext}(${count})`)
+    .join(', ');
+  core.info(`File types: ${topExts}`);
+
   const chunks = chunkFiles(files);
-  core.info(`Analyzing in ${chunks.length} chunk(s)...`);
+  core.info(`Split into ${chunks.length} chunks for analysis`);
+  core.info('');
 
   const allIssues: Issue[] = [];
   let totalTokens = 0;
+  let successCount = 0;
+  let failCount = 0;
 
   for (let i = 0; i < chunks.length; i++) {
-    core.info(`  Chunk ${i + 1}/${chunks.length}...`);
+    const chunkStart = Date.now();
+    const chunkFiles = chunks[i].map(f => path.relative(cwd, f));
+    const progress = Math.round(((i + 1) / chunks.length) * 100);
+    core.info(`[${i + 1}/${chunks.length}] (${progress}%) Scanning: ${chunkFiles.slice(0, 3).join(', ')}${chunkFiles.length > 3 ? ` +${chunkFiles.length - 3} more` : ''}`);
+
     try {
       const { content, tokens } = await callGitHubModels(
         [
-          { role: 'system', content: 'You are a code quality analyzer. Respond ONLY with valid JSON.' },
-          { role: 'user', content: buildPrompt(chunks[i], cwd) },
+          { role: 'system', content: 'You are a code quality analyzer. Respond ONLY with valid JSON. No markdown fences.' },
+          { role: 'user', content: buildPrompt(chunks[i], cwd, i + 1, chunks.length) },
         ],
         config.githubModelsModel,
       );
       totalTokens += tokens;
-      allIssues.push(...parseIssues(content));
+      const chunkIssues = parseIssues(content);
+      allIssues.push(...chunkIssues);
+      successCount++;
+
+      const elapsed = formatDuration(Date.now() - chunkStart);
+      if (chunkIssues.length > 0) {
+        core.info(`       Found ${chunkIssues.length} issues (${tokens} tokens, ${elapsed})`);
+      } else {
+        core.info(`       Clean (${tokens} tokens, ${elapsed})`);
+      }
     } catch (e) {
-      core.warning(`Chunk ${i + 1} failed: ${e}`);
+      failCount++;
+      core.warning(`       FAILED: ${e}`);
     }
   }
 
@@ -154,8 +224,38 @@ export async function runScan(config: SloppyConfig): Promise<ScanResult> {
   });
 
   const score = calculateScore(unique);
-  const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
-  core.info(summary);
+  const totalElapsed = formatDuration(Date.now() - scanStart);
 
+  // Summary
+  core.info('');
+  core.info('='.repeat(50));
+  core.info('SCAN COMPLETE');
+  core.info('='.repeat(50));
+  core.info(`Score:    ${score}/100`);
+  core.info(`Issues:   ${unique.length} found`);
+  core.info(`Chunks:   ${successCount} ok, ${failCount} failed`);
+  core.info(`Tokens:   ${totalTokens.toLocaleString()}`);
+  core.info(`Duration: ${totalElapsed}`);
+
+  if (unique.length > 0) {
+    core.info('');
+    core.info('Issue breakdown:');
+    const byType: Record<string, number> = {};
+    const bySev: Record<string, number> = {};
+    for (const issue of unique) {
+      byType[issue.type] = (byType[issue.type] || 0) + 1;
+      bySev[issue.severity] = (bySev[issue.severity] || 0) + 1;
+    }
+    for (const [sev, count] of Object.entries(bySev).sort()) {
+      core.info(`  ${sev}: ${count}`);
+    }
+    core.info('');
+    for (const [type, count] of Object.entries(byType).sort()) {
+      core.info(`  ${type}: ${count}`);
+    }
+  }
+  core.info('='.repeat(50));
+
+  const summary = `Found ${unique.length} issues across ${files.length} files. Score: ${score}/100.`;
   return { issues: unique, score, summary, tokens: totalTokens };
 }

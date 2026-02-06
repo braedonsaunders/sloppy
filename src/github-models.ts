@@ -13,13 +13,31 @@ interface ChatResponse {
   error?: { message: string };
 }
 
+function getGitHubToken(): string {
+  // Try multiple sources for the token
+  const token =
+    process.env.GITHUB_TOKEN ||
+    process.env.INPUT_GITHUB_TOKEN ||
+    core.getInput('github-token');
+
+  if (!token) {
+    throw new Error(
+      'GITHUB_TOKEN is required for GitHub Models free scan.\n' +
+      'Add this to your workflow:\n' +
+      '  env:\n' +
+      '    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n' +
+      'Or ensure permissions include: models: read',
+    );
+  }
+  return token;
+}
+
 export async function callGitHubModels(
   messages: ChatMessage[],
   model: string = 'openai/gpt-4o',
   maxTokens: number = 4000,
 ): Promise<{ content: string; tokens: number }> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error('GITHUB_TOKEN is required for GitHub Models');
+  const token = getGitHubToken();
 
   const response = await fetch(ENDPOINT, {
     method: 'POST',
@@ -32,6 +50,15 @@ export async function callGitHubModels(
 
   if (!response.ok) {
     const text = await response.text();
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(
+        `GitHub Models auth failed (${response.status}). Ensure your workflow has:\n` +
+        '  permissions:\n' +
+        '    models: read\n' +
+        '  env:\n' +
+        '    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
+      );
+    }
     throw new Error(`GitHub Models API error ${response.status}: ${text.slice(0, 300)}`);
   }
 
