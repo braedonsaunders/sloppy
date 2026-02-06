@@ -29979,12 +29979,16 @@ async function runAgent(agent, prompt, options) {
     let agentResult = '';
     let lineBuffer = '';
     const verbose = options?.verbose ?? false;
+    const execStart = Date.now();
+    let firstStdoutChunk = true;
+    let eventCount = 0;
     const processStreamLine = (line) => {
         const trimmed = line.trim();
         if (!trimmed)
             return;
         try {
             const event = JSON.parse(trimmed);
+            eventCount++;
             if (event.type === 'result') {
                 agentResult = event.result || '';
             }
@@ -30005,21 +30009,42 @@ async function runAgent(agent, prompt, options) {
                         }
                     }
                 }
+                else if (event.type === 'tool_use') {
+                    const name = event.tool?.name || event.name || 'unknown';
+                    core.info(`  | [tool: ${name}]`);
+                }
                 else if (event.type === 'tool_result') {
-                    // Show a brief indicator that a tool completed
+                    // tool completed, no extra logging needed
+                }
+                else if (event.type === 'system') {
+                    core.info(`  | [system: ${event.subtype || 'init'}]`);
                 }
             }
         }
         catch {
+            // Not valid JSON — log raw line in verbose mode
             if (verbose)
-                core.info(`  | ${trimmed}`);
+                core.info(`  | ${trimmed.slice(0, 300)}`);
         }
     };
+    // Heartbeat: log every 30s while agent is running so the user knows it's alive
+    let heartbeat;
+    if (verbose) {
+        heartbeat = setInterval(() => {
+            const elapsed = Math.round((Date.now() - execStart) / 1000);
+            core.info(`  ... agent running (${elapsed}s, ${eventCount} events, stdout: ${stdout.length} bytes)`);
+        }, 30_000);
+    }
     const execOptions = {
         listeners: {
             stdout: (data) => {
                 const chunk = data.toString();
                 stdout += chunk;
+                if (firstStdoutChunk && verbose) {
+                    firstStdoutChunk = false;
+                    const elapsed = Math.round((Date.now() - execStart) / 1000);
+                    core.info(`  [stream] First output received after ${elapsed}s (${chunk.length} bytes)`);
+                }
                 if (agent === 'claude') {
                     lineBuffer += chunk;
                     const lines = lineBuffer.split('\n');
@@ -30053,24 +30078,34 @@ async function runAgent(agent, prompt, options) {
         env: { ...process.env },
     };
     let exitCode;
-    if (agent === 'claude') {
-        const args = ['-p', prompt, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
-        if (options?.maxTurns)
-            args.push('--max-turns', String(options.maxTurns));
-        if (options?.model)
-            args.push('--model', options.model);
-        if (verbose)
-            args.push('--verbose');
-        exitCode = await execWithTimeout('claude', args, execOptions, options?.timeout);
-        // Process any remaining buffered data
-        if (lineBuffer.trim())
-            processStreamLine(lineBuffer);
+    try {
+        if (agent === 'claude') {
+            const args = ['-p', prompt, '--output-format', 'stream-json', '--dangerously-skip-permissions'];
+            if (options?.maxTurns)
+                args.push('--max-turns', String(options.maxTurns));
+            if (options?.model)
+                args.push('--model', options.model);
+            if (verbose)
+                args.push('--verbose');
+            exitCode = await execWithTimeout('claude', args, execOptions, options?.timeout);
+            // Process any remaining buffered data
+            if (lineBuffer.trim())
+                processStreamLine(lineBuffer);
+        }
+        else {
+            const args = ['exec', '--full-auto', '--quiet', prompt];
+            if (options?.model)
+                args.push('--model', options.model);
+            exitCode = await execWithTimeout('codex', args, execOptions, options?.timeout);
+        }
     }
-    else {
-        const args = ['exec', '--full-auto', '--quiet', prompt];
-        if (options?.model)
-            args.push('--model', options.model);
-        exitCode = await execWithTimeout('codex', args, execOptions, options?.timeout);
+    finally {
+        if (heartbeat)
+            clearInterval(heartbeat);
+    }
+    if (verbose) {
+        const elapsed = Math.round((Date.now() - execStart) / 1000);
+        core.info(`  [stream] Agent finished in ${elapsed}s (${eventCount} events, stdout: ${stdout.length} bytes, stderr: ${stderr.length} bytes)`);
     }
     if (stderr && exitCode !== 0) {
         core.warning(`Agent stderr: ${stderr.slice(0, 500)}`);
