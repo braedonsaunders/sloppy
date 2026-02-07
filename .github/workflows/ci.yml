@@ -14,6 +14,7 @@ jobs:
   typecheck:
     name: Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,6 +27,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,6 +40,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,16 +65,16 @@ jobs:
     steps:
       - name: Check results
         run: |
-          if [[ "${{ needs.typecheck.result }}" == "failure" ]]; then
-            echo "Type check failed"
+          if [[ "${{ needs.typecheck.result }}" != "success" ]]; then
+            echo "Type check did not succeed (result: ${{ needs.typecheck.result }})"
             exit 1
           fi
-          if [[ "${{ needs.test.result }}" == "failure" ]]; then
-            echo "Tests failed"
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "Tests did not succeed (result: ${{ needs.test.result }})"
             exit 1
           fi
-          if [[ "${{ needs.build.result }}" == "failure" ]]; then
-            echo "Build failed"
+          if [[ "${{ needs.build.result }}" != "success" ]]; then
+            echo "Build did not succeed (result: ${{ needs.build.result }})"
             exit 1
           fi
           echo "CI passed"
