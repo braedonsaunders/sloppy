@@ -20,8 +20,6 @@
   <a href="#5-second-setup">Setup</a> &middot;
   <a href="#how-it-works">How It Works</a> &middot;
   <a href="#what-sloppy-catches">Categories</a> &middot;
-  <a href="#all-inputs">All Inputs</a> &middot;
-  <a href="#all-outputs">All Outputs</a> &middot;
   <a href="#scoring">Scoring</a> &middot;
   <a href="#repo-config">Repo Config</a> &middot;
   <a href="#plugins">Plugins</a> &middot;
@@ -216,64 +214,7 @@ Disable any category: `fix-types: 'security,bugs,types'`
 
 ---
 
-## All Inputs
-
-Every input is optional. Sloppy works with zero configuration. **All inputs can also be set in `.sloppy.yml`** (see [Repo Config](#repo-config)) so you don't need to modify your workflow file.
-
-| Input | Default | Description |
-|---|---|---|
-| `github-token` | `${{ github.token }}` | GitHub token for API access and GitHub Models |
-| `mode` | *(auto)* | `scan` (report only) or `fix` (auto-fix + PR). Auto-selects `fix` if an API key env var is set, otherwise `scan`. |
-| `agent` | `claude` | AI agent: `claude` or `codex` |
-| `timeout` | `30m` | Max run time. Supports `30m`, `2h`, `5h50m`, `90s`. |
-| `max-cost` | `$5.00` | Max API spend per run |
-| `max-passes` | `10` | Max scan/fix passes before stopping |
-| `min-passes` | `2` | Minimum consecutive clean passes to confirm the repo is truly clean |
-| `max-chains` | `3` | Max self-continuations for long runs (each chain gets up to 6h) |
-| `strictness` | `high` | Issue detection: `low`, `medium`, `high` |
-| `min-severity` | `low` | Minimum severity to report/fix: `critical`, `high`, `medium`, `low`. Issues below this are ignored. |
-| `fix-types` | `security,bugs,types,lint,dead-code,stubs,duplicates,coverage` | Comma-separated issue types to scan/fix |
-| `model` | *(auto)* | Override AI model for fix mode (e.g. `claude-sonnet-4-5-20250929`) |
-| `github-models-model` | `openai/gpt-4o-mini` | Model for scan via GitHub Models. Free: `openai/gpt-4o-mini`. Premium: `openai/gpt-4o`, `openai/o1-mini` |
-| `scan-scope` | `auto` | `auto` (PR files on `pull_request`, full otherwise), `pr` (PR changed files only), `full` (entire repo) |
-| `test-command` | *(auto-detected)* | Custom test command. Auto-detects from your project (see below). |
-| `gist-id` | *(empty)* | GitHub Gist ID for dynamic badge updates |
-| `gist-token` | *(empty)* | PAT with `gist` scope for writing badge data |
-| `fail-below` | `0` | Fail the action if score drops below this threshold |
-| `verbose` | `false` | Stream agent output to Actions log in real-time |
-| `max-turns` | *(auto)* | Max agent turns per invocation. Default: 30 for scan, 15 for fix. |
-| `max-issues-per-pass` | `0` | Cap issues to fix per pass. 0 = unlimited. |
-| `output-file` | *(empty)* | Write full issues JSON to this path (e.g. `.sloppy/issues.json`) |
-| `custom-prompt` | *(empty)* | Custom instructions injected into every scan/fix prompt (inline text) |
-| `custom-prompt-file` | *(empty)* | Path to a file containing custom prompt instructions (relative to repo root) |
-| `plugins` | `true` | Enable/disable the plugin system (loads from `.sloppy/plugins/`) |
-| `parallel-agents` | `1` | Number of parallel agents for fixing (1-8). Uses git worktrees. |
-| `profile` | *(empty)* | Load a config profile from `.sloppy/profiles/<name>.yml`. Profile values override `.sloppy.yml`. |
-| `chain_number` | `0` | Internal: chain continuation number (do not set manually) |
-
-### Auto-Detected Test Commands
-
-If `test-command` is not set, Sloppy detects your test runner:
-
-| File detected | Command run |
-|---|---|
-| `package.json` (with test script) | `npm test` |
-| `Cargo.toml` | `cargo test` |
-| `go.mod` | `go test ./...` |
-| `pytest.ini` or `pyproject.toml` | `python -m pytest` |
-| `build.gradle` or `build.gradle.kts` | `./gradlew test` |
-| `pom.xml` | `mvn test` |
-| `Gemfile` + `spec/` | `bundle exec rspec` |
-| `Gemfile` + `test/` | `bundle exec rake test` |
-| `phpunit.xml` or `phpunit.xml.dist` | `vendor/bin/phpunit` |
-| `mix.exs` | `mix test` |
-| `Makefile` | `make test` |
-
-If nothing is detected, fixes proceed without test verification.
-
----
-
-## All Outputs
+## Outputs
 
 Use these in subsequent workflow steps via `${{ steps.sloppy.outputs.score }}`.
 
@@ -423,55 +364,7 @@ allow:
     reason: "Content is sanitized by DOMPurify upstream"
 ```
 
-### Config reference
-
-| Key | Type | Description |
-|---|---|---|
-| **Operational** | | |
-| `mode` | `scan \| fix` | Scan (report only) or fix (auto-fix + PR) |
-| `agent` | `claude \| codex` | AI agent to use |
-| `timeout` | `string` | Max run time (e.g. `30m`, `2h`) |
-| `max-cost` | `string` | Max API spend (e.g. `$5.00`) |
-| `max-passes` | `number` | Max scan/fix iterations |
-| `min-passes` | `number` | Consecutive clean passes required |
-| `max-chains` | `number` | Max self-continuations |
-| `model` | `string` | Override AI model |
-| `github-models-model` | `string` | Model for free scan tier |
-| `scan-scope` | `auto \| pr \| full` | What to scan |
-| `verbose` | `boolean` | Stream agent output |
-| `max-turns` | `number` | Max agent turns per invocation |
-| `max-issues-per-pass` | `number` | Cap issues per pass (0 = unlimited) |
-| `output-file` | `string` | Path for issues JSON export |
-| `parallel-agents` | `number` | Parallel agents (1-8) |
-| `plugins` | `boolean` | Enable/disable plugin system |
-| `custom-prompt` | `string` | Inline custom prompt text |
-| `custom-prompt-file` | `string` | Path to file with custom prompt |
-| **Filtering** | | |
-| `strictness` | `low \| medium \| high` | Issue detection strictness |
-| `min-severity` | `critical \| high \| medium \| low` | Minimum severity to report/fix |
-| `fail-below` | `number` | Minimum passing score (0-100) |
-| `test-command` | `string` | Override test runner |
-| `fix-types` | `IssueType[]` | Issue types to scan/fix |
-| `ignore` | `string[]` | Glob patterns to exclude |
-| `rules` | `Record<type, severity \| 'off'>` | Per-type severity overrides |
-| **App Context** | | |
-| `app.type` | `web-app \| api \| cli \| library \| worker \| mobile \| desktop` | Application type |
-| `app.exposure` | `public \| internal \| local` | Deployment exposure |
-| `app.auth` | `boolean` | Whether the app has authentication |
-| `app.network` | `internet \| vpn \| localhost` | Network boundary |
-| `app.data-sensitivity` | `high \| medium \| low` | Data sensitivity level |
-| **Technology** | | |
-| `framework` | `string` | Framework hint (e.g. `next.js`, `django`, `rails`) |
-| `runtime` | `string` | Runtime hint (e.g. `node-20`, `python-3.12`) |
-| **Trust** | | |
-| `trust-internal` | `string[]` | Package patterns treated as first-party |
-| `trust-untrusted` | `string[]` | File paths that handle untrusted input |
-| **Suppressions** | | |
-| `allow` | `{pattern, reason}[]` | Regex patterns to suppress (false positives) |
-
-### How it works
-
-Repo config overrides action.yml defaults but **not** explicit user inputs. Priority:
+Every action input (the `with:` block in your workflow YAML) maps 1:1 to a key in this file. The only action-specific input is `github-token` (defaults to `${{ github.token }}`). Repo config overrides action defaults but **not** explicit workflow inputs. Priority:
 
 1. Explicit action input (in workflow YAML) — highest
 2. Profile overlay (`.sloppy/profiles/<name>.yml`)
@@ -500,6 +393,26 @@ min-severity: critical
 ```
 
 This is a pure output filter. The scanner still *finds* all issues internally, but issues below your threshold are dropped before reporting and fixing.
+
+### Auto-detected test commands
+
+If `test-command` is not set, Sloppy detects your test runner:
+
+| File detected | Command run |
+|---|---|
+| `package.json` (with test script) | `npm test` |
+| `Cargo.toml` | `cargo test` |
+| `go.mod` | `go test ./...` |
+| `pytest.ini` or `pyproject.toml` | `python -m pytest` |
+| `build.gradle` or `build.gradle.kts` | `./gradlew test` |
+| `pom.xml` | `mvn test` |
+| `Gemfile` + `spec/` | `bundle exec rspec` |
+| `Gemfile` + `test/` | `bundle exec rake test` |
+| `phpunit.xml` or `phpunit.xml.dist` | `vendor/bin/phpunit` |
+| `mix.exs` | `mix test` |
+| `Makefile` | `make test` |
+
+If nothing is detected, fixes proceed without test verification.
 
 ### Profiles
 
@@ -620,7 +533,7 @@ Add it as a repository secret named `GIST_TOKEN`.
 
 ---
 
-## Dashboard & History
+## Dashboard, History & Generated Files
 
 **Job Summary:** Every run writes results to the GitHub Actions Job Summary tab. No setup required.
 
@@ -635,55 +548,22 @@ Add it as a repository secret named `GIST_TOKEN`.
     path: .sloppy/site/
 ```
 
+**Generated files:**
+
+| Path | When |
+|---|---|
+| `.sloppy/history.json` | Every run — score history |
+| `.sloppy/site/index.html` | Every run — HTML dashboard |
+| `.sloppy/state.json` | Fix mode — checkpoint for chained runs |
+| `.sloppy/scan-cache.json` | Scan mode — SHA256 file hashes + cached issues |
+
 ---
 
 ## Supported Languages
 
-**File extensions scanned:**
+**30+ file extensions scanned:** `.ts` `.tsx` `.js` `.jsx` `.py` `.rb` `.go` `.rs` `.java` `.c` `.cpp` `.h` `.hpp` `.cs` `.php` `.swift` `.kt` `.scala` `.vue` `.svelte` `.html` `.css` `.scss` `.sql` `.sh` `.yaml` `.yml` `.json` `.toml` `.xml` `.dockerfile`
 
-`.ts` `.tsx` `.js` `.jsx` `.py` `.rb` `.go` `.rs` `.java` `.c` `.cpp` `.h` `.hpp` `.cs` `.php` `.swift` `.kt` `.scala` `.vue` `.svelte` `.html` `.css` `.scss` `.sql` `.sh` `.yaml` `.yml` `.json` `.toml` `.xml` `.dockerfile`
-
-**Ignored directories:**
-
-`node_modules` `.git` `dist` `build` `out` `.next` `vendor` `__pycache__` `.venv` `venv` `target` `coverage` `.sloppy`
-
----
-
-## Environment Variables
-
-| Variable | Required | Mode | Purpose |
-|---|---|---|---|
-| `GITHUB_TOKEN` | Auto-provided | Both | GitHub API access + GitHub Models free tier |
-| `ANTHROPIC_API_KEY` | For Claude fix | Fix | Anthropic API key. Triggers fix mode if set. |
-| `CLAUDE_CODE_OAUTH_TOKEN` | For Claude Max fix | Fix | Claude Max subscription OAuth token (alternative to API key) |
-| `OPENAI_API_KEY` | For Codex fix | Fix | OpenAI API key (when using `agent: codex`) |
-
-GitHub Actions also auto-provides `GITHUB_WORKSPACE`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `GITHUB_RUN_NUMBER`, and `GITHUB_REF_NAME`.
-
----
-
-## Generated Files
-
-| Path | What | When |
-|---|---|---|
-| `.sloppy/history.json` | Score history (JSON array of run entries) | Every run |
-| `.sloppy/site/index.html` | Standalone HTML dashboard with charts | Every run |
-| `.sloppy/state.json` | Checkpoint for chained runs | Fix mode |
-| `.sloppy/scan-cache.json` | SHA256 file hashes + cached issues | Scan mode |
-| `output-file` path | Full issues JSON export | If `output-file` is set |
-
----
-
-## Recommended Setup
-
-Two workflow files:
-
-```
-.github/workflows/sloppy.yml       # Free scan on every PR
-.github/workflows/sloppy-fix.yml   # Fix on-demand or weekly (BYOK)
-```
-
-They stay independent. Scan never triggers fix. Fix never blocks PRs.
+**Auto-ignored directories:** `node_modules` `.git` `dist` `build` `out` `.next` `vendor` `__pycache__` `.venv` `venv` `target` `coverage` `.sloppy`
 
 ---
 
@@ -714,7 +594,7 @@ In your repo. History in `.sloppy/history.json`. Badge data in a Gist you contro
 No. Zero infrastructure. No servers, no databases, no SaaS. The action runs on your GitHub Actions runner with your API keys.
 
 **What languages?**
-Scan works with any language supported by GitHub Models. Fix supports whatever Claude Code or OpenAI Codex can handle. 30+ file extensions scanned (see [Supported Languages](#supported-languages)).
+Any language supported by GitHub Models (scan) or Claude Code / OpenAI Codex (fix). See [Supported Languages](#supported-languages).
 
 ---
 
