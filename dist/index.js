@@ -31901,6 +31901,12 @@ function detectMissingReturnTypesTS(content, relativePath) {
         for (let j = closeLine + 1; j < Math.min(closeLine + 3, lines.length); j++) {
             afterParen += ' ' + lines[j].trim();
         }
+        // For arrow functions, verify `=>` actually exists after the closing paren.
+        // This prevents matching parenthesized expressions like:
+        //   const section = (e as CustomEvent).detail as AISection
+        // where the `(` is a type-cast grouping, not function parameters.
+        if (isArrow && !afterParen.includes('=>'))
+            continue;
         // A return type annotation starts with `:` after the closing paren.
         // For arrow functions, also check for `=>` — if `:` comes before `=>` it's a return type.
         const hasReturnType = isArrow
@@ -35175,11 +35181,69 @@ function calculateScore(issues, loc) {
 // Post-scan verification — catch AI hallucinations without API calls
 // ---------------------------------------------------------------------------
 /**
+ * Check whether a security claim has supporting evidence in the actual file.
+ * Used for high-severity security issues that lack verifiable line_content
+ * (common in fingerprint scans where the AI sees signatures, not code).
+ *
+ * Searches ±15 lines around the reported line for patterns matching the claim.
+ * Returns true if evidence is found, false if the claim appears hallucinated.
+ */
+function verifySecurityEvidence(issue, fullPath) {
+    try {
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const lines = content.split('\n');
+        const searchStart = Math.max(0, (issue.line || 1) - 16);
+        const searchEnd = Math.min(lines.length, (issue.line || 1) + 15);
+        const region = lines.slice(searchStart, searchEnd).join('\n');
+        // If evidence field is substantial, check if it exists in the region or full file
+        if (issue.evidence && issue.evidence.trim().length > 15) {
+            const evidenceNorm = issue.evidence.trim().toLowerCase().replace(/\s+/g, ' ');
+            const regionNorm = region.toLowerCase().replace(/\s+/g, ' ');
+            if (regionNorm.includes(evidenceNorm))
+                return true;
+            // Also search the full file (AI line numbers can be way off)
+            if (content.toLowerCase().replace(/\s+/g, ' ').includes(evidenceNorm))
+                return true;
+        }
+        // Pattern-match: check if the claimed security issue type has a basis in the code
+        const desc = issue.description.toLowerCase();
+        // Hardcoded secrets/passwords
+        if (desc.includes('hardcoded') || desc.includes('password') || desc.includes('secret') || desc.includes('api key') || desc.includes('credential')) {
+            return /(?:password|passwd|secret|api_key|apikey|auth_token|credential)\s*[=:]\s*['"][^'"]{4,}/i.test(region);
+        }
+        // XSS / innerHTML
+        if (desc.includes('xss') || desc.includes('cross-site') || desc.includes('innerhtml')) {
+            return /(?:\.innerHTML\s*=|dangerouslySetInnerHTML|document\.write\s*\()/i.test(region);
+        }
+        // SQL injection
+        if (desc.includes('sql') && desc.includes('injection')) {
+            return /(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b/i.test(region) && /(?:\$\{|%s|\+\s*['"])/i.test(region);
+        }
+        // Logging sensitive data
+        if (desc.includes('log') && (desc.includes('sensitive') || desc.includes('password') || desc.includes('token') || desc.includes('secret'))) {
+            const hasLogging = /(?:console\.log|console\.info|console\.debug|logger\.\w+|log\.\w+|print\s*\()/i.test(region);
+            const hasSensitive = /(?:password|token|secret|credential|api_key|private_key)/i.test(region);
+            return hasLogging && hasSensitive;
+        }
+        // Command/shell injection
+        if (desc.includes('command injection') || desc.includes('shell injection')) {
+            return /(?:exec\s*\(|spawn\s*\(|system\s*\(|os\.system|subprocess)/i.test(region);
+        }
+        // Generic: no specific pattern recognized — reject unverifiable security claims
+        return false;
+    }
+    catch {
+        // File read failed — be conservative, allow it through
+        return true;
+    }
+}
+/**
  * Verify AI-reported issues against actual file contents.
  * Discards issues where:
  *   1. The file doesn't exist
  *   2. The reported line_content doesn't match anything near the reported line
  *   3. The issue duplicates something already caught locally
+ *   4. High-severity security issues lack verifiable evidence in the actual file
  *
  * This is a zero-cost safety net (file reads only, no API calls).
  */
@@ -35217,6 +35281,7 @@ function verifyIssues(aiIssues, localIssues, cwd) {
             continue;
         }
         // 3. If AI provided line_content, verify it matches the actual file
+        let contentVerified = false;
         if (issue.lineContent && issue.line) {
             try {
                 const content = fs.readFileSync(fullPath, 'utf-8');
@@ -35224,7 +35289,6 @@ function verifyIssues(aiIssues, localIssues, cwd) {
                 // Check ±5 lines around the reported line for the claimed content
                 const searchStart = Math.max(0, issue.line - 6);
                 const searchEnd = Math.min(lines.length, issue.line + 5);
-                let found = false;
                 // Normalize for comparison: trim and collapse whitespace
                 const normalize = (s) => s.trim().replace(/\s+/g, ' ').toLowerCase();
                 const claimedNorm = normalize(issue.lineContent);
@@ -35234,7 +35298,7 @@ function verifyIssues(aiIssues, localIssues, cwd) {
                         const actualNorm = normalize(lines[j] || '');
                         // Fuzzy match: claimed content is a substring of actual or vice versa
                         if (actualNorm.includes(claimedNorm) || claimedNorm.includes(actualNorm)) {
-                            found = true;
+                            contentVerified = true;
                             // Correct the line number to the actual match
                             if (j + 1 !== issue.line) {
                                 issue.line = j + 1;
@@ -35242,7 +35306,7 @@ function verifyIssues(aiIssues, localIssues, cwd) {
                             break;
                         }
                     }
-                    if (!found) {
+                    if (!contentVerified) {
                         rejected.push(issue);
                         continue;
                     }
@@ -35250,6 +35314,17 @@ function verifyIssues(aiIssues, localIssues, cwd) {
             }
             catch {
                 // File read failed — don't reject, just pass through
+            }
+        }
+        // 4. For high-severity security issues not verified by line_content,
+        //    require evidence-based verification against actual file contents.
+        //    This catches AI hallucinations from fingerprint scans where the AI
+        //    sees signatures but not code, and invents security issues.
+        if (!contentVerified && issue.type === 'security' &&
+            (issue.severity === 'high' || issue.severity === 'critical')) {
+            if (!verifySecurityEvidence(issue, fullPath)) {
+                rejected.push(issue);
+                continue;
             }
         }
         verified.push(issue);
