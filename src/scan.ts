@@ -79,6 +79,34 @@ const ISSUES_SCHEMA = {
   },
 };
 
+const VERIFICATION_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'verification_results',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        results: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              index: { type: 'number' },
+              is_real: { type: 'boolean' },
+              reason: { type: 'string' },
+            },
+            required: ['index', 'is_real', 'reason'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['results'],
+      additionalProperties: false,
+    },
+  },
+};
+
 export function collectFiles(dir: string, files: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith('.') && entry.name !== '.github') continue;
@@ -372,6 +400,117 @@ function verifyIssues(
   }
 
   return { verified, rejected };
+}
+
+/**
+ * AI verification pass: send actual code to a low-tier model to confirm issues.
+ * Groups issues into batches, reads ±15 lines of real code around each,
+ * and asks the model which issues are genuine.
+ * Costs 1 API call per ~8 issues (~500 tokens each).
+ */
+async function runAIVerificationPass(
+  issues: Issue[],
+  cwd: string,
+  primaryModel: string,
+  budget: ScanBudget,
+): Promise<Issue[]> {
+  if (issues.length === 0) return [];
+
+  const verifyModel = budget.selectModel(primaryModel, 'fingerprint');
+  if (budget.remaining(verifyModel) < 1) {
+    core.info(`  No API budget for verification — keeping all issues`);
+    return issues;
+  }
+
+  core.info(`  Verifying ${issues.length} AI issues against actual code...`);
+
+  const BATCH_SIZE = 8;
+  const verified: Issue[] = [];
+
+  for (let batchStart = 0; batchStart < issues.length; batchStart += BATCH_SIZE) {
+    const batch = issues.slice(batchStart, batchStart + BATCH_SIZE);
+
+    // Build context: actual code around each issue
+    const snippets: string[] = [];
+    for (let i = 0; i < batch.length; i++) {
+      const issue = batch[i];
+      const fullPath = path.join(cwd, issue.file);
+      let codeContext = '[file not readable]';
+      try {
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const fileLines = content.split('\n');
+        const start = Math.max(0, (issue.line || 1) - 16);
+        const end = Math.min(fileLines.length, (issue.line || 1) + 15);
+        codeContext = fileLines
+          .slice(start, end)
+          .map((l, j) => `${start + j + 1}: ${l}`)
+          .join('\n');
+      } catch {}
+
+      snippets.push(
+        `--- Issue #${i} ---\n` +
+        `File: ${issue.file}\n` +
+        `Line: ${issue.line}\n` +
+        `Type: ${issue.type} (${issue.severity})\n` +
+        `Claim: ${issue.description}\n` +
+        `Actual code:\n${codeContext}\n`,
+      );
+    }
+
+    const prompt = `You are verifying code issues. For each issue, the ACTUAL source code is shown. Determine if each is REAL or FALSE POSITIVE.
+
+Key rules:
+- A framework decorator providing the return type (FastAPI response_model=, Flask, Django) means it is NOT missing a return type.
+- f-strings or template literals in logger/print/error calls are NOT SQL injection.
+- Config defaults, placeholder values, or env var fallbacks are NOT hardcoded secrets.
+- Input models/schemas accepting secrets is normal — only flag if secrets appear in unmasked output.
+- When in doubt, mark FALSE POSITIVE. We prefer missing a real issue over reporting a fake one.
+
+${snippets.join('\n')}
+For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
+
+    try {
+      const model = budget.selectModel(primaryModel, 'fingerprint');
+      if (budget.remaining(model) < 1) {
+        verified.push(...batch);
+        break;
+      }
+
+      const { content } = await callGitHubModels(
+        [
+          { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+          { role: 'user', content: prompt },
+        ],
+        model,
+        { responseFormat: VERIFICATION_SCHEMA },
+      );
+      budget.recordRequest(model);
+
+      const data = JSON.parse(content);
+      const results: Array<{ index: number; is_real: boolean }> = data.results || [];
+      const realIndices = new Set(results.filter(r => r.is_real).map(r => r.index));
+
+      for (let j = 0; j < batch.length; j++) {
+        if (realIndices.has(j)) {
+          verified.push(batch[j]);
+        }
+      }
+
+      const rejectedCount = batch.length - realIndices.size;
+      if (rejectedCount > 0) {
+        core.info(`    ${ui.c(String(rejectedCount), ui.S.yellow)} issues rejected by AI verification`);
+      }
+    } catch (e) {
+      core.warning(`  AI verification failed: ${e}. Keeping batch.`);
+      verified.push(...batch);
+    }
+
+    if (batchStart + BATCH_SIZE < issues.length) {
+      await sleep(2000);
+    }
+  }
+
+  return verified;
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +916,46 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
         aiIssues = fpResult.issues;
         totalTokens += fpResult.tokens;
         totalApiCalls += fpResult.apiCalls;
+
+        // TARGETED DEEP SCAN (Option C)
+        // Fingerprint scan identifies suspicious files. Deep scan them with full
+        // code for higher accuracy. Uses 1-3 extra API calls on suspicious files.
+        if (aiIssues.length > 0 && scanLevel === 'flush') {
+          const suspiciousFileSet = new Set(aiIssues.map(i => i.file));
+          const suspiciousFilePaths = filesToScan
+            .filter(fp => suspiciousFileSet.has(path.relative(cwd, fp)))
+            .slice(0, 5);
+
+          if (suspiciousFilePaths.length > 0) {
+            const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
+            if (budget.remaining(deepModel) > 0) {
+              core.info(`  ${ui.c('Targeted deep scan:', ui.S.gray)} ${suspiciousFilePaths.length} suspicious files`);
+              const deepChunks = prepareChunks(suspiciousFilePaths, cwd, deepModel);
+
+              for (const chunk of deepChunks) {
+                if (budget.remaining(deepModel) < 1) break;
+                try {
+                  const chunkStart = Date.now();
+                  const { issues: deepIssues, tokens } = await scanChunk(
+                    chunk, 1, deepChunks.length, deepModel, 0, customPrompt || undefined,
+                  );
+                  budget.recordRequest(deepModel);
+                  totalTokens += tokens;
+                  totalApiCalls++;
+                  aiIssues.push(...deepIssues);
+                  const elapsed = formatDuration(Date.now() - chunkStart);
+                  if (deepIssues.length > 0) {
+                    core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Deep scan found ${ui.c(String(deepIssues.length), ui.S.bold)} additional issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                  } else {
+                    core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Deep scan clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                  }
+                } catch (e) {
+                  core.warning(`  Targeted deep scan chunk failed: ${e}`);
+                }
+              }
+            }
+          }
+        }
       }
 
       // ================================================================
@@ -789,6 +968,12 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
           core.info(`  ${ui.c('Verification:', ui.S.gray)} ${verified.length} verified, ${ui.c(String(rejected.length), ui.S.yellow)} rejected (duplicates/hallucinations)`);
         }
         aiIssues = verified;
+      }
+
+      // AI VERIFICATION PASS (Option B)
+      // Send actual code context to a low-tier model to catch hallucinations.
+      if (aiIssues.length > 0) {
+        aiIssues = await runAIVerificationPass(aiIssues, cwd, config.githubModelsModel, budget);
       }
 
       allIssues.push(...aiIssues);
