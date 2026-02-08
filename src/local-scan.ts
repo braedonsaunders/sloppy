@@ -63,26 +63,12 @@ const PATTERNS: Pattern[] = [
     extensions: ['.py'],
   },
   // ── Security: SQL injection ──────────────────────────────────────
-  {
-    regex: /f["'](?:[^"']*?)(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^"']*?\{/gi,
-    type: 'security',
-    severity: 'critical',
-    description: 'Possible SQL injection via f-string interpolation',
-    extensions: ['.py'],
-  },
-  {
-    regex: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^`]*\$\{/gi,
-    type: 'security',
-    severity: 'critical',
-    description: 'Possible SQL injection via template literal interpolation',
-    extensions: ['.ts', '.tsx', '.js', '.jsx'],
-  },
-  {
-    regex: /["']\s*\+\s*\w+\s*\+\s*["'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP)/gi,
-    type: 'security',
-    severity: 'high',
-    description: 'Possible SQL injection via string concatenation',
-  },
+  // NOTE: SQL injection detection has been moved to the AI layer.
+  // Regex-only detection produces near-100% false positive rates because it
+  // cannot distinguish SQL in database queries from SQL keywords in log
+  // messages, UI strings, URLs, or CSS values. The fingerprint hotspot
+  // labels (SQL_FSTRING, SQL_TEMPLATE, RAW_QUERY) still surface suspicious
+  // lines to the AI, which can reason about context.
   // ── Stubs ────────────────────────────────────────────────────────
   {
     regex: /\b(?:TODO|FIXME|HACK|XXX)\b[:\s]*.{0,80}/g,
@@ -105,20 +91,11 @@ const PATTERNS: Pattern[] = [
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
   },
   // ── Bugs: empty error handling ───────────────────────────────────
-  {
-    regex: /except\s*(?:(?:Exception|BaseException)(?:\s+as\s+\w+)?\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
-    type: 'bugs',
-    severity: 'high',
-    description: 'Empty except clause silently swallows errors',
-    extensions: ['.py'],
-  },
-  {
-    regex: /catch\s*\([^)]*\)\s*\{\s*\}/g,
-    type: 'bugs',
-    severity: 'high',
-    description: 'Empty catch block silently swallows errors',
-    extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
-  },
+  // NOTE: Empty except/catch detection has been moved to the AI layer.
+  // Regex cannot distinguish intentional silencing (teardown, graceful
+  // shutdown, multi-attempt fallback chains) from genuinely swallowed
+  // errors. The fingerprint hotspot labels (EMPTY_EXCEPT, EMPTY_CATCH)
+  // still surface these to the AI for contextual analysis.
   // ── Lint: debugging leftovers ──────────────────────────────────
   {
     regex: /\bconsole\.log\s*\(/g,

@@ -470,6 +470,19 @@ Mark FALSE POSITIVE if:
 - The issue is in test files and relates to mock data, fixtures, or assertions
 - The claimed problem simply does not exist in the shown code
 
+SQL INJECTION — apply these checks carefully:
+- The file MUST import a database library (sqlalchemy, sqlite3, psycopg2, django.db, knex, sequelize, etc.) for SQL injection to be possible
+- The interpolated string MUST reach a database query (.execute(), .raw(), cursor.execute(), etc.) — not a logger, print, error message, UI string, URL, or CSS value
+- Frontend files (.tsx, .jsx) NEVER have direct SQL access. Template literals in frontend/React code are NEVER SQL injection
+- Table/column names from hardcoded dicts or ORM models are safe. Only flag when untrusted USER INPUT is interpolated into raw SQL
+- Parameterized queries with :param, ?, or %s with separate value bindings are safe
+
+EMPTY EXCEPT/CATCH — apply these checks carefully:
+- except/catch inside close(), stop(), shutdown(), cleanup(), teardown(), dispose(), __del__(), __exit__() methods is INTENTIONAL cleanup — mark FALSE POSITIVE
+- Multiple sequential try/except blocks trying different approaches (fallback chains) are INTENTIONAL — mark FALSE POSITIVE
+- except/catch during graceful shutdown or optional import loading is INTENTIONAL — mark FALSE POSITIVE
+- Only mark REAL when a broad handler (except:, except Exception:, catch(e){}) silently swallows errors in business logic where failures should be logged or propagated
+
 ${snippets.join('\n')}
 For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
 
@@ -481,7 +494,7 @@ For each issue, respond with its index (0-based within this batch), whether it's
 
       const result = await callGitHubModels(
         [
-          { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Confirm issues that have clear evidence in the code. Reject issues where the code clearly contradicts the claim or the issue is fabricated.' },
+          { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Confirm issues that have clear evidence in the code. Reject issues where the code clearly contradicts the claim or the issue is fabricated. You are skeptical by default — only confirm issues where the evidence is unambiguous. Pay special attention to context: SQL keywords in log messages are not injection, empty except in cleanup/teardown is intentional, and frontend code cannot perform SQL injection.' },
           { role: 'user', content: prompt },
         ],
         primaryModel,

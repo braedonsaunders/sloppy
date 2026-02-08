@@ -31190,12 +31190,29 @@ Focus your analysis on issues that require REASONING — things a static analyze
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
 - DUPLICATES: Similar function signatures across different files that should be shared.
 
+IMPORTANT — SQL injection and empty error handlers are YOUR responsibility:
+These require contextual reasoning that static analysis cannot do. You MUST evaluate every SQL_FSTRING, SQL_TEMPLATE, RAW_QUERY, EMPTY_EXCEPT, and EMPTY_CATCH hotspot carefully:
+
+For SQL hotspots, determine:
+1. Does the file import ANY database library? (sqlalchemy, sqlite3, psycopg2, pymysql, asyncpg, django.db, knex, sequelize, prisma, etc.)
+2. Does the interpolated string actually reach a database query, or is it used in logging/error messages/UI text/URLs?
+3. Are query parameters properly bound via parameterized queries (:param, ?, %s with separate args)?
+If the answer to #1 is NO, or #2 shows non-SQL usage, it is NOT SQL injection. Only report when user input is interpolated into a raw SQL string that reaches a database.
+
+For empty except/catch hotspots, determine:
+1. Is the except/catch inside a cleanup, teardown, close, stop, shutdown, dispose, or __del__ method? If so, it is INTENTIONAL — do not flag.
+2. Is it part of a multi-attempt/fallback pattern (multiple try blocks trying alternatives in sequence)? If so, it is INTENTIONAL — do not flag.
+3. Is the except/catch in graceful shutdown or optional import code? If so, it is INTENTIONAL — do not flag.
+4. Only flag when a broad exception handler (except:, except Exception:, catch(e){}) silently swallows errors in BUSINESS LOGIC where failures should be visible.
+
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
 CRITICAL — avoid false positives:
 - ORM query builders, parameterized queries, and prepared statements are NOT SQL injection — regardless of language or framework. Only flag raw SQL strings with unsanitized user input directly interpolated.
 - String interpolation in log messages, error messages, or print statements is NOT SQL injection. SQL injection requires the string to reach a database query.
+- Frontend code (.tsx, .jsx, React components) NEVER has direct SQL access. Template literals in JSX/frontend code are NEVER SQL injection. Do not flag them.
+- Table/column names from hardcoded dicts or validated against DB schemas are safe — only flag when untrusted user input is interpolated.
 - Decorated route handlers or annotated endpoints where the framework infers the return type are NOT missing return types.
 - Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
 - Input validation models or schemas that accept sensitive fields are normal. Only flag secrets appearing unmasked in responses or logs.
@@ -31428,13 +31445,19 @@ async function runAgentScan(config, customPrompt) {
     const loc = (0, scan_1.countSourceLOC)(files);
     ui.kv('Files', `${files.length} files, ${loc.toLocaleString()} LOC`);
     const customSection = customPrompt ? `\nCUSTOM RULES:\n${customPrompt}\n` : '';
-    const prompt = `You are a senior code quality auditor performing a comprehensive codebase review.
+    const prompt = `You are a senior code quality auditor performing a comprehensive, high-accuracy codebase review. Accuracy is MORE important than quantity — every reported issue must be real.
 
-TASK: Scan every file in this repository. Find all code quality issues.
+TASK: Scan every file in this repository. Find all REAL code quality issues.
 
 SPEED: Use the Task tool to dispatch subagents scanning different directories
 in parallel. For example, dispatch one subagent per top-level directory, each
 scanning all files within it. Collect their results and merge into a single output.
+
+METHODOLOGY — follow this multi-phase approach:
+1. UNDERSTAND: Read imports, understand what frameworks/libraries are used, and what each file's role is (API route, UI component, data model, utility, test, etc.)
+2. SCAN: Look for issues in each file, noting the file's context and purpose
+3. VERIFY: For every issue you find, re-read the surrounding code (±15 lines) and confirm the issue is real. Ask yourself: "Could this be intentional? Does the context explain why this pattern exists?"
+4. Only include issues that survive verification
 
 ISSUE CATEGORIES (use these exact type values):
   security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
@@ -31442,7 +31465,7 @@ ISSUE CATEGORIES (use these exact type values):
   types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
   lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
   dead-code   — functions/classes/exports never called or imported anywhere
-  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  stubs       — TODO, FIXME, HACK, placeholder implementations
   duplicates  — copy-pasted logic that should be extracted to a shared function
   coverage    — public functions with zero test coverage, untested error paths, missing edge cases
 
@@ -31451,6 +31474,29 @@ SEVERITY LEVELS:
   high     — will cause bugs in normal usage or data corruption
   medium   — code smell, maintainability risk, potential future bugs
   low      — style issue, minor improvement, naming consistency
+
+CRITICAL — false positive avoidance (you MUST follow these rules):
+
+SQL Injection:
+- A file MUST import a database library (sqlalchemy, sqlite3, psycopg2, django.db, knex, sequelize, prisma, etc.) for SQL injection to be possible
+- The interpolated string MUST reach a database query (.execute(), .raw(), cursor.execute(), etc.)
+- String interpolation in log messages, error messages, print statements, UI text, URLs, or CSS values is NEVER SQL injection
+- Frontend files (.tsx, .jsx, React components) NEVER have direct SQL access. Template literals in frontend code are NEVER SQL injection
+- ORM query builders, parameterized queries (:param, ?, %s with separate args), and prepared statements are NOT SQL injection
+- Table/column names from hardcoded dicts or validated against DB schemas are safe
+
+Empty Except/Catch:
+- except/catch inside close(), stop(), shutdown(), cleanup(), teardown(), dispose(), __del__(), __exit__() is INTENTIONAL cleanup — do NOT flag
+- Multiple sequential try/except blocks trying different approaches (fallback chains) are INTENTIONAL — do NOT flag
+- except/catch during graceful shutdown or optional import loading is INTENTIONAL — do NOT flag
+- Only flag when a broad handler (except:, except Exception:, catch(e){}) silently swallows errors in business logic where failures should be visible
+
+Other false positive traps:
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets
+- dangerouslySetInnerHTML with sanitized input (DOMPurify, sanitize-html) is safe
+- Test files: mock data, fixtures, and test helpers are NOT real issues
+- Re-export modules and package __init__ files are NOT dead code
+- Abstract methods or interface implementations may intentionally omit types
 ${customSection}
 RULES:
 - Check EVERY file. Do not skip any directory.
@@ -31458,6 +31504,7 @@ RULES:
 - Do not invent issues. If code is clean, return empty issues array.
 - Be precise: exact file, exact line, exact description of what's wrong.
 - Prioritize: security > bugs > types > everything else.
+- Prefer fewer, high-confidence issues over many uncertain ones. Every issue you report should be actionable.
 
 Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 {"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path/to/file.ts","line":42,"description":"what is wrong and why it matters"}]}`;
@@ -31811,26 +31858,12 @@ const PATTERNS = [
         extensions: ['.py'],
     },
     // ── Security: SQL injection ──────────────────────────────────────
-    {
-        regex: /f["'](?:[^"']*?)(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^"']*?\{/gi,
-        type: 'security',
-        severity: 'critical',
-        description: 'Possible SQL injection via f-string interpolation',
-        extensions: ['.py'],
-    },
-    {
-        regex: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^`]*\$\{/gi,
-        type: 'security',
-        severity: 'critical',
-        description: 'Possible SQL injection via template literal interpolation',
-        extensions: ['.ts', '.tsx', '.js', '.jsx'],
-    },
-    {
-        regex: /["']\s*\+\s*\w+\s*\+\s*["'].*(?:SELECT|INSERT|UPDATE|DELETE|DROP)/gi,
-        type: 'security',
-        severity: 'high',
-        description: 'Possible SQL injection via string concatenation',
-    },
+    // NOTE: SQL injection detection has been moved to the AI layer.
+    // Regex-only detection produces near-100% false positive rates because it
+    // cannot distinguish SQL in database queries from SQL keywords in log
+    // messages, UI strings, URLs, or CSS values. The fingerprint hotspot
+    // labels (SQL_FSTRING, SQL_TEMPLATE, RAW_QUERY) still surface suspicious
+    // lines to the AI, which can reason about context.
     // ── Stubs ────────────────────────────────────────────────────────
     {
         regex: /\b(?:TODO|FIXME|HACK|XXX)\b[:\s]*.{0,80}/g,
@@ -31853,20 +31886,11 @@ const PATTERNS = [
         extensions: ['.ts', '.tsx', '.js', '.jsx'],
     },
     // ── Bugs: empty error handling ───────────────────────────────────
-    {
-        regex: /except\s*(?:(?:Exception|BaseException)(?:\s+as\s+\w+)?\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
-        type: 'bugs',
-        severity: 'high',
-        description: 'Empty except clause silently swallows errors',
-        extensions: ['.py'],
-    },
-    {
-        regex: /catch\s*\([^)]*\)\s*\{\s*\}/g,
-        type: 'bugs',
-        severity: 'high',
-        description: 'Empty catch block silently swallows errors',
-        extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
-    },
+    // NOTE: Empty except/catch detection has been moved to the AI layer.
+    // Regex cannot distinguish intentional silencing (teardown, graceful
+    // shutdown, multi-attempt fallback chains) from genuinely swallowed
+    // errors. The fingerprint hotspot labels (EMPTY_EXCEPT, EMPTY_CATCH)
+    // still surface these to the AI for contextual analysis.
     // ── Lint: debugging leftovers ──────────────────────────────────
     {
         regex: /\bconsole\.log\s*\(/g,
@@ -35185,6 +35209,19 @@ Mark FALSE POSITIVE if:
 - The issue is in test files and relates to mock data, fixtures, or assertions
 - The claimed problem simply does not exist in the shown code
 
+SQL INJECTION — apply these checks carefully:
+- The file MUST import a database library (sqlalchemy, sqlite3, psycopg2, django.db, knex, sequelize, etc.) for SQL injection to be possible
+- The interpolated string MUST reach a database query (.execute(), .raw(), cursor.execute(), etc.) — not a logger, print, error message, UI string, URL, or CSS value
+- Frontend files (.tsx, .jsx) NEVER have direct SQL access. Template literals in frontend/React code are NEVER SQL injection
+- Table/column names from hardcoded dicts or ORM models are safe. Only flag when untrusted USER INPUT is interpolated into raw SQL
+- Parameterized queries with :param, ?, or %s with separate value bindings are safe
+
+EMPTY EXCEPT/CATCH — apply these checks carefully:
+- except/catch inside close(), stop(), shutdown(), cleanup(), teardown(), dispose(), __del__(), __exit__() methods is INTENTIONAL cleanup — mark FALSE POSITIVE
+- Multiple sequential try/except blocks trying different approaches (fallback chains) are INTENTIONAL — mark FALSE POSITIVE
+- except/catch during graceful shutdown or optional import loading is INTENTIONAL — mark FALSE POSITIVE
+- Only mark REAL when a broad handler (except:, except Exception:, catch(e){}) silently swallows errors in business logic where failures should be logged or propagated
+
 ${snippets.join('\n')}
 For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
         try {
@@ -35193,7 +35230,7 @@ For each issue, respond with its index (0-based within this batch), whether it's
                 break;
             }
             const result = await (0, github_models_1.callGitHubModels)([
-                { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Confirm issues that have clear evidence in the code. Reject issues where the code clearly contradicts the claim or the issue is fabricated.' },
+                { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Confirm issues that have clear evidence in the code. Reject issues where the code clearly contradicts the claim or the issue is fabricated. You are skeptical by default — only confirm issues where the evidence is unambiguous. Pay special attention to context: SQL keywords in log messages are not injection, empty except in cleanup/teardown is intentional, and frontend code cannot perform SQL injection.' },
                 { role: 'user', content: prompt },
             ], primaryModel, { responseFormat: VERIFICATION_SCHEMA });
             const content = result.content;
