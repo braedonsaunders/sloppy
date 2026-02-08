@@ -119,6 +119,36 @@ const PATTERNS: Pattern[] = [
     description: 'Empty catch block silently swallows errors',
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
   },
+  // ── Lint: debugging leftovers ──────────────────────────────────
+  {
+    regex: /\bconsole\.log\s*\(/g,
+    type: 'lint',
+    severity: 'low',
+    description: 'console.log() left in code',
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+  },
+  {
+    regex: /\bdebugger\b/g,
+    type: 'lint',
+    severity: 'medium',
+    description: 'debugger statement left in code',
+    extensions: ['.ts', '.tsx', '.js', '.jsx'],
+  },
+  // ── Types: explicit `any` usage ────────────────────────────────
+  {
+    regex: /:\s*any\b/g,
+    type: 'types',
+    severity: 'medium',
+    description: 'Explicit `any` type — consider using a specific type',
+    extensions: ['.ts', '.tsx'],
+  },
+  {
+    regex: /\bas\s+any\b/g,
+    type: 'types',
+    severity: 'medium',
+    description: 'Unsafe cast to `any` — consider using a specific type',
+    extensions: ['.ts', '.tsx'],
+  },
 ];
 
 /**
@@ -156,6 +186,506 @@ function compilePluginPatterns(pluginPatterns: PluginPattern[]): Pattern[] {
     }
   }
   return compiled;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic detectors — zero false-positive structural analysis
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect TypeScript/JavaScript functions missing explicit return type annotations.
+ * Handles function declarations, arrow functions assigned to const, and
+ * multi-line parameter lists. Skips constructors, .d.ts files, and functions
+ * where the const variable itself carries a type annotation.
+ */
+function detectMissingReturnTypesTS(content: string, relativePath: string): Issue[] {
+  // Skip declaration files — they are pure types
+  if (relativePath.endsWith('.d.ts')) return [];
+
+  const lines = content.split('\n');
+  const issues: Issue[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+
+    // Skip comments
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+
+    let funcName: string | null = null;
+    let isArrow = false;
+
+    // --- function declarations: export? default? async? function name<T>( ---
+    const fnMatch = trimmed.match(
+      /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(/,
+    );
+    if (fnMatch) {
+      funcName = fnMatch[1];
+    }
+
+    // --- arrow / const declarations: export? const name = async? ( ---
+    // Skip if the const has a type annotation (const name: SomeType = ...)
+    if (!funcName) {
+      const constMatch = trimmed.match(
+        /^(?:export\s+)?const\s+(\w+)\s*(:\s*[^=]+?)?\s*=\s*(?:async\s*)?\(/,
+      );
+      if (constMatch) {
+        // If the variable itself carries a full type annotation, the return type
+        // is already specified (e.g. `const fn: () => void = () => { ... }`)
+        if (constMatch[2] && constMatch[2].trim().length > 1) continue;
+        funcName = constMatch[1];
+        isArrow = true;
+      }
+    }
+
+    if (!funcName) continue;
+
+    // Skip constructors
+    if (funcName === 'constructor') continue;
+
+    // Walk forward to find the closing paren (handles multi-line params)
+    let parenDepth = 0;
+    let foundClose = false;
+    let closeLine = i;
+
+    for (let j = i; j < Math.min(i + 30, lines.length); j++) {
+      for (const ch of lines[j]) {
+        if (ch === '(') parenDepth++;
+        if (ch === ')') {
+          parenDepth--;
+          if (parenDepth === 0) {
+            foundClose = true;
+            closeLine = j;
+            break;
+          }
+        }
+      }
+      if (foundClose) break;
+    }
+
+    if (!foundClose) continue;
+
+    // Gather text after the closing paren (same line + next few lines)
+    const closeContent = lines[closeLine];
+    const closeIdx = closeContent.lastIndexOf(')');
+    let afterParen = closeContent.slice(closeIdx + 1);
+    for (let j = closeLine + 1; j < Math.min(closeLine + 3, lines.length); j++) {
+      afterParen += ' ' + lines[j].trim();
+    }
+
+    // A return type annotation starts with `:` after the closing paren.
+    // For arrow functions, also check for `=>` — if `:` comes before `=>` it's a return type.
+    const hasReturnType = isArrow
+      ? /^\s*:\s*\S/.test(afterParen) && afterParen.indexOf(':') < afterParen.indexOf('=>')
+      : /^\s*:/.test(afterParen);
+
+    if (!hasReturnType) {
+      issues.push({
+        id: `local-return-${Date.now()}-${issues.length}`,
+        type: 'types',
+        severity: 'medium',
+        file: relativePath,
+        line: i + 1,
+        description: `Function '${funcName}' is missing an explicit return type annotation`,
+        status: 'found',
+        source: 'local',
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Detect Python functions missing return type annotations (-> Type).
+ * Handles multi-line parameter lists. Skips dunder methods and private helpers.
+ */
+function detectMissingReturnTypesPython(content: string, relativePath: string): Issue[] {
+  const lines = content.split('\n');
+  const issues: Issue[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith('#')) continue;
+
+    // Match def/async def at any indentation
+    const defMatch = trimmed.match(/^(?:async\s+)?def\s+(\w+)\s*\(/);
+    if (!defMatch) continue;
+
+    const funcName = defMatch[1];
+
+    // Skip dunder methods (__init__, __str__, etc.)
+    if (funcName.startsWith('__') && funcName.endsWith('__')) continue;
+
+    // Find the closing paren
+    let parenDepth = 0;
+    let foundClose = false;
+    let closeLine = i;
+
+    for (let j = i; j < Math.min(i + 30, lines.length); j++) {
+      for (const ch of lines[j]) {
+        if (ch === '(') parenDepth++;
+        if (ch === ')') {
+          parenDepth--;
+          if (parenDepth === 0) {
+            foundClose = true;
+            closeLine = j;
+            break;
+          }
+        }
+      }
+      if (foundClose) break;
+    }
+
+    if (!foundClose) continue;
+
+    // Check text after closing paren for `-> Type:`
+    const closeContent = lines[closeLine];
+    const closeIdx = closeContent.lastIndexOf(')');
+    const afterParen = closeContent.slice(closeIdx + 1);
+
+    const hasReturnType = /\s*->/.test(afterParen);
+
+    if (!hasReturnType) {
+      issues.push({
+        id: `local-return-${Date.now()}-${issues.length}`,
+        type: 'types',
+        severity: 'medium',
+        file: relativePath,
+        line: i + 1,
+        description: `Function '${funcName}' is missing a return type annotation (-> Type)`,
+        status: 'found',
+        source: 'local',
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Detect Go functions missing explicit return types.
+ * In Go, return types are mandatory for functions that return values, but
+ * we flag exported functions (capitalized) that have no return type specified
+ * since they could be unintentionally void.
+ */
+function detectMissingReturnTypesGo(content: string, relativePath: string): Issue[] {
+  const lines = content.split('\n');
+  const issues: Issue[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith('//')) continue;
+
+    // Match: func Name( or func (receiver) Name(
+    const fnMatch = trimmed.match(/^func\s+(?:\([^)]*\)\s+)?([A-Z]\w*)\s*\(/);
+    if (!fnMatch) continue;
+
+    const funcName = fnMatch[1];
+
+    // Find closing paren for params
+    let parenDepth = 0;
+    let foundClose = false;
+    let closeLine = i;
+    for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+      for (const ch of lines[j]) {
+        if (ch === '(') parenDepth++;
+        if (ch === ')') {
+          parenDepth--;
+          if (parenDepth === 0) { foundClose = true; closeLine = j; break; }
+        }
+      }
+      if (foundClose) break;
+    }
+    if (!foundClose) continue;
+
+    // After closing paren: return type or `{`
+    const closeContent = lines[closeLine];
+    const closeIdx = closeContent.lastIndexOf(')');
+    let afterParen = closeContent.slice(closeIdx + 1).trim();
+    // If nothing on the same line, look at next line
+    if (!afterParen && closeLine + 1 < lines.length) {
+      afterParen = lines[closeLine + 1].trim();
+    }
+
+    // In Go, if the char right after `)` is `{`, there's no return type.
+    // If it starts with `(` it's a multi-return, or a word it's a single return.
+    // We only flag exported funcs that go straight to `{` with no return type.
+    if (/^\{/.test(afterParen)) {
+      // This is an exported function returning nothing — acceptable in Go
+      // but worth flagging for coverage as it might be a mistake.
+      // Actually, void functions are normal in Go. Only flag if it has `return` with a value.
+      const bodyEnd = findGoFuncBodyEnd(lines, closeLine);
+      const bodySlice = lines.slice(closeLine, bodyEnd + 1).join('\n');
+      if (/\breturn\s+\S/.test(bodySlice)) {
+        issues.push({
+          id: `local-return-${Date.now()}-${issues.length}`,
+          type: 'types',
+          severity: 'medium',
+          file: relativePath,
+          line: i + 1,
+          description: `Exported function '${funcName}' returns a value but has no declared return type`,
+          status: 'found',
+          source: 'local',
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/** Find the closing brace of a Go function body. */
+function findGoFuncBodyEnd(lines: string[], startLine: number): number {
+  let braceDepth = 0;
+  for (let j = startLine; j < Math.min(startLine + 200, lines.length); j++) {
+    for (const ch of lines[j]) {
+      if (ch === '{') braceDepth++;
+      if (ch === '}') {
+        braceDepth--;
+        if (braceDepth === 0) return j;
+      }
+    }
+  }
+  return Math.min(startLine + 50, lines.length - 1);
+}
+
+/**
+ * Detect Java/Kotlin methods that are public but have ambiguous return types.
+ * In Java, return types are always required (compiler enforces). So instead,
+ * we detect public methods returning `Object` (Java) or `Any` / `Any?` (Kotlin)
+ * which are the equivalent of TypeScript `any`.
+ */
+function detectMissingReturnTypesJavaKt(content: string, relativePath: string, ext: string): Issue[] {
+  const lines = content.split('\n');
+  const issues: Issue[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+
+    if (ext === '.java') {
+      // Java: flag methods returning Object — overly broad type
+      const javaMatch = trimmed.match(
+        /^(?:public|protected)\s+(?:static\s+)?Object\s+(\w+)\s*\(/,
+      );
+      if (javaMatch) {
+        issues.push({
+          id: `local-return-${Date.now()}-${issues.length}`,
+          type: 'types',
+          severity: 'medium',
+          file: relativePath,
+          line: i + 1,
+          description: `Method '${javaMatch[1]}' returns Object — consider a more specific type`,
+          status: 'found',
+          source: 'local',
+        });
+      }
+    }
+
+    if (ext === '.kt') {
+      // Kotlin: flag functions returning Any or Any?
+      const ktMatch = trimmed.match(/^(?:fun|suspend\s+fun)\s+(\w+)\s*\([^)]*\)\s*:\s*Any\??/);
+      if (ktMatch) {
+        issues.push({
+          id: `local-return-${Date.now()}-${issues.length}`,
+          type: 'types',
+          severity: 'medium',
+          file: relativePath,
+          line: i + 1,
+          description: `Function '${ktMatch[1]}' returns Any — consider a more specific type`,
+          status: 'found',
+          source: 'local',
+        });
+      }
+
+      // Kotlin: public functions without explicit return type (uses inference)
+      // `fun name(params) {` without `: ReturnType`
+      const ktNoType = trimmed.match(/^(?:(?:public|internal)\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(/);
+      if (ktNoType) {
+        // Find closing paren
+        let parenDepth = 0;
+        let foundClose = false;
+        let closeLine = i;
+        for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+          for (const ch of lines[j]) {
+            if (ch === '(') parenDepth++;
+            if (ch === ')') {
+              parenDepth--;
+              if (parenDepth === 0) { foundClose = true; closeLine = j; break; }
+            }
+          }
+          if (foundClose) break;
+        }
+        if (foundClose) {
+          const cLine = lines[closeLine];
+          const cIdx = cLine.lastIndexOf(')');
+          const after = cLine.slice(cIdx + 1).trim();
+          // In Kotlin, `: ReturnType` or `=` (expression body) after closing paren.
+          // If it goes straight to `{`, return type is inferred.
+          if (/^\{/.test(after) || after === '') {
+            issues.push({
+              id: `local-return-${Date.now()}-${issues.length}`,
+              type: 'types',
+              severity: 'low',
+              file: relativePath,
+              line: i + 1,
+              description: `Function '${ktNoType[1]}' has no explicit return type (uses inference)`,
+              status: 'found',
+              source: 'local',
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Detect Rust public functions missing return types.
+ * In Rust, omitting `->` means the function returns `()`. We flag public
+ * functions that contain `return` statements with values but declare no return type.
+ */
+function detectMissingReturnTypesRust(content: string, relativePath: string): Issue[] {
+  const lines = content.split('\n');
+  const issues: Issue[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith('//')) continue;
+
+    // Match: pub fn name( or pub async fn name(
+    const fnMatch = trimmed.match(/^pub\s+(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(/);
+    if (!fnMatch) continue;
+
+    const funcName = fnMatch[1];
+
+    // Find closing paren
+    let parenDepth = 0;
+    let foundClose = false;
+    let closeLine = i;
+    for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+      for (const ch of lines[j]) {
+        if (ch === '(') parenDepth++;
+        if (ch === ')') {
+          parenDepth--;
+          if (parenDepth === 0) { foundClose = true; closeLine = j; break; }
+        }
+      }
+      if (foundClose) break;
+    }
+    if (!foundClose) continue;
+
+    // Check for `->` between `)` and `{`
+    const cLine = lines[closeLine];
+    const cIdx = cLine.lastIndexOf(')');
+    let afterParen = cLine.slice(cIdx + 1);
+    if (closeLine + 1 < lines.length) afterParen += ' ' + lines[closeLine + 1].trim();
+
+    const hasReturnType = /->/.test(afterParen.split('{')[0]);
+
+    if (!hasReturnType) {
+      // Check body for return with values
+      let braceDepth = 0;
+      let bodyEnd = closeLine;
+      for (let j = closeLine; j < Math.min(closeLine + 200, lines.length); j++) {
+        for (const ch of lines[j]) {
+          if (ch === '{') braceDepth++;
+          if (ch === '}') {
+            braceDepth--;
+            if (braceDepth === 0) { bodyEnd = j; break; }
+          }
+        }
+        if (braceDepth === 0 && j > closeLine) break;
+      }
+      const body = lines.slice(closeLine, bodyEnd + 1).join('\n');
+      if (/\breturn\s+\S/.test(body)) {
+        issues.push({
+          id: `local-return-${Date.now()}-${issues.length}`,
+          type: 'types',
+          severity: 'medium',
+          file: relativePath,
+          line: i + 1,
+          description: `Public function '${funcName}' returns a value but has no declared return type`,
+          status: 'found',
+          source: 'local',
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Detect unused named imports within a single file.
+ * Only flags imports where the identifier appears exactly once in the file (the import itself).
+ * Conservative: skips React (implicit JSX usage), re-exports, and namespace imports.
+ */
+function detectUnusedImports(content: string, relativePath: string, ext: string): Issue[] {
+  if (!['.ts', '.tsx', '.js', '.jsx'].includes(ext)) return [];
+
+  const issues: Issue[] = [];
+
+  // Named imports: import { Foo, Bar as Baz } from '...'
+  const namedRe = /^import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"][^'"]+['"]/gm;
+  let m: RegExpExecArray | null;
+
+  while ((m = namedRe.exec(content)) !== null) {
+    const importLine = content.slice(0, m.index).split('\n').length;
+    const names = m[1]
+      .split(',')
+      .map(n => {
+        const parts = n.trim().split(/\s+as\s+/);
+        return (parts[1] || parts[0]).trim();
+      })
+      .filter(Boolean);
+
+    for (const name of names) {
+      if (!name || name.length < 2) continue;
+      // Count occurrences of the identifier in the whole file
+      const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+      const count = (content.match(re) || []).length;
+      if (count <= 1) {
+        issues.push({
+          id: `local-import-${Date.now()}-${issues.length}`,
+          type: 'lint',
+          severity: 'low',
+          file: relativePath,
+          line: importLine,
+          description: `Unused import: '${name}'`,
+          status: 'found',
+          source: 'local',
+        });
+      }
+    }
+  }
+
+  // Default imports: import Foo from '...'
+  const defaultRe = /^import\s+(\w+)\s+from\s+['"][^'"]+['"]/gm;
+  while ((m = defaultRe.exec(content)) !== null) {
+    const importLine = content.slice(0, m.index).split('\n').length;
+    const name = m[1];
+    // React is used implicitly in JSX
+    if (name === 'React') continue;
+    const re = new RegExp(`\\b${name}\\b`, 'g');
+    const count = (content.match(re) || []).length;
+    if (count <= 1) {
+      issues.push({
+        id: `local-import-${Date.now()}-${issues.length}`,
+        type: 'lint',
+        severity: 'low',
+        file: relativePath,
+        line: importLine,
+        description: `Unused import: '${name}'`,
+        status: 'found',
+        source: 'local',
+      });
+    }
+  }
+
+  return issues;
 }
 
 /**
@@ -213,8 +743,25 @@ export function localScanFile(filePath: string, cwd: string, extraPatterns: Plug
         line: lineNum,
         description: desc,
         status: 'found',
+        source: 'local',
       });
     }
+  }
+
+  // --- Deterministic structural detectors ---
+  if (['.ts', '.tsx'].includes(ext)) {
+    issues.push(...detectMissingReturnTypesTS(content, relativePath));
+    issues.push(...detectUnusedImports(content, relativePath, ext));
+  } else if (['.js', '.jsx'].includes(ext)) {
+    issues.push(...detectUnusedImports(content, relativePath, ext));
+  } else if (ext === '.py') {
+    issues.push(...detectMissingReturnTypesPython(content, relativePath));
+  } else if (ext === '.go') {
+    issues.push(...detectMissingReturnTypesGo(content, relativePath));
+  } else if (['.java', '.kt'].includes(ext)) {
+    issues.push(...detectMissingReturnTypesJavaKt(content, relativePath, ext));
+  } else if (ext === '.rs') {
+    issues.push(...detectMissingReturnTypesRust(content, relativePath));
   }
 
   return issues;

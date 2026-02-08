@@ -104,10 +104,16 @@ function extractSignaturesFromContent(content: string, ext: string): ExtractedSi
     }
 
     if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
-      // TS/JS: function, class, const arrow, export
-      const fnMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/);
+      // TS/JS: function declarations — capture return type after closing paren
+      const fnMatch = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*([^{]+?))?(?:\s*\{|$)/);
       if (fnMatch) {
-        sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1, params: fnMatch[2]?.trim() });
+        sigs.push({
+          kind: 'fn',
+          name: fnMatch[1],
+          line: i + 1,
+          params: fnMatch[2]?.trim(),
+          returns: fnMatch[3]?.trim(),
+        });
         continue;
       }
       const classMatch = trimmed.match(/^(?:export\s+)?class\s+(\w+)/);
@@ -115,9 +121,30 @@ function extractSignaturesFromContent(content: string, ext: string): ExtractedSi
         sigs.push({ kind: 'class', name: classMatch[1], line: i + 1 });
         continue;
       }
-      const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*\w+)?\s*=\s*(?:async\s*)?\(/);
+      // TS/JS: arrow / const functions — capture return type between `)` and `=>`
+      const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*([^=]+?))?\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::\s*([^=>{]+?))?(?:\s*=>|$)/);
       if (constMatch) {
-        sigs.push({ kind: 'fn', name: constMatch[1], line: i + 1 });
+        // Return type can be on the variable annotation (constMatch[2]) or after the params (constMatch[4])
+        const varType = constMatch[2]?.trim();
+        const paramReturnType = constMatch[4]?.trim();
+        sigs.push({
+          kind: 'fn',
+          name: constMatch[1],
+          line: i + 1,
+          params: constMatch[3]?.trim(),
+          returns: paramReturnType || varType,
+        });
+        continue;
+      }
+      // Fallback: simpler const match for multi-line arrow functions
+      const constSimple = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*([^=]+?))?\s*=\s*(?:async\s*)?\(/);
+      if (constSimple) {
+        sigs.push({
+          kind: 'fn',
+          name: constSimple[1],
+          line: i + 1,
+          returns: constSimple[2]?.trim(),
+        });
         continue;
       }
       const ifaceMatch = trimmed.match(/^(?:export\s+)?(?:interface|type)\s+(\w+)/);
@@ -128,9 +155,17 @@ function extractSignaturesFromContent(content: string, ext: string): ExtractedSi
     }
 
     if (['.go'].includes(ext)) {
-      const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/);
+      // Go: func Name(params) ReturnType { or func (r Recv) Name(params) (Multi, Return) {
+      const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)\s*([^{]*)/);
       if (fnMatch) {
-        sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+        const retRaw = fnMatch[3]?.trim();
+        sigs.push({
+          kind: 'fn',
+          name: fnMatch[1],
+          line: i + 1,
+          params: fnMatch[2]?.trim(),
+          returns: retRaw || undefined,
+        });
         continue;
       }
       const typeMatch = trimmed.match(/^type\s+(\w+)\s+(?:struct|interface)/);
@@ -140,9 +175,48 @@ function extractSignaturesFromContent(content: string, ext: string): ExtractedSi
     }
 
     if (['.java', '.kt'].includes(ext)) {
-      const fnMatch = trimmed.match(/(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)?(\w+)\s*\([^)]*\)\s*(?:throws\s+\w+\s*)?[{:]/);
-      if (fnMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(fnMatch[1])) {
-        sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+      // Java: modifier returnType name(params) { — capture return type
+      const javaMatch = trimmed.match(/(?:public|private|protected)\s+(?:static\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+\w+\s*)?[{]/);
+      if (javaMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(javaMatch[2])) {
+        sigs.push({
+          kind: 'fn',
+          name: javaMatch[2],
+          line: i + 1,
+          params: javaMatch[3]?.trim(),
+          returns: javaMatch[1]?.trim(),
+        });
+        continue;
+      }
+      // Kotlin: fun name(params): ReturnType { or suspend fun name(...)
+      const ktMatch = trimmed.match(/(?:(?:public|private|internal|override)\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*(\S+))?/);
+      if (ktMatch) {
+        sigs.push({
+          kind: 'fn',
+          name: ktMatch[1],
+          line: i + 1,
+          params: ktMatch[2]?.trim(),
+          returns: ktMatch[3]?.trim(),
+        });
+        continue;
+      }
+    }
+
+    // Rust: pub fn name(params) -> ReturnType {
+    if (['.rs'].includes(ext)) {
+      const rsMatch = trimmed.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?(?:\s*(?:where\s|{)|$)/);
+      if (rsMatch) {
+        sigs.push({
+          kind: 'fn',
+          name: rsMatch[1],
+          line: i + 1,
+          params: rsMatch[2]?.trim(),
+          returns: rsMatch[3]?.trim(),
+        });
+        continue;
+      }
+      const rsTypeMatch = trimmed.match(/^(?:pub\s+)?(?:struct|enum|trait)\s+(\w+)/);
+      if (rsTypeMatch) {
+        sigs.push({ kind: 'type', name: rsTypeMatch[1], line: i + 1 });
       }
     }
   }
@@ -226,13 +300,22 @@ export interface FileFingerprint {
   /** Pre-rendered compact text representation. */
   text: string;
   tokens: number;
+  /** Number of issues already caught locally for this file. */
+  localIssueCount: number;
 }
 
 /**
  * Generate a compact fingerprint for a single file.
  * Typically 80-200 tokens depending on file size and complexity.
+ *
+ * When `localIssues` are provided, they're embedded in the fingerprint text
+ * so the AI knows what Layer 0 already caught and can skip those.
  */
-export function generateFingerprint(filePath: string, cwd: string): FileFingerprint | null {
+export function generateFingerprint(
+  filePath: string,
+  cwd: string,
+  localIssues?: Array<{ line?: number; type: string; description: string }>,
+): FileFingerprint | null {
   let content: string;
   try {
     content = fs.readFileSync(filePath, 'utf-8');
@@ -247,6 +330,9 @@ export function generateFingerprint(filePath: string, cwd: string): FileFingerpr
   const signatures = extractSignaturesFromContent(content, ext);
   const hotspots = findHotspots(content, ext);
 
+  // Filter issues relevant to this file
+  const fileLocalIssues = (localIssues || []).filter(Boolean);
+
   // Build compact text representation
   let text = `=== ${relativePath} (${lines.length} lines) ===\n`;
 
@@ -258,9 +344,13 @@ export function generateFingerprint(filePath: string, cwd: string): FileFingerpr
 
   if (signatures.length > 0) {
     const sigStrs = signatures.map(s => {
-      let str = `${s.name}`;
+      let str = `L${s.line}:${s.name}`;
       if (s.params !== undefined) str += `(${s.params.slice(0, 60)})`;
-      if (s.returns) str += `->${s.returns}`;
+      if (s.returns) {
+        str += `->${s.returns.slice(0, 40)}`;
+      } else {
+        str += ' [NO_RETURN_TYPE]';
+      }
       return str;
     });
     text += `DEFS: ${sigStrs.join(', ')}\n`;
@@ -276,9 +366,24 @@ export function generateFingerprint(filePath: string, cwd: string): FileFingerpr
     }
   }
 
+  // Option 5: Embed local findings so the AI knows what's already caught
+  if (fileLocalIssues.length > 0) {
+    text += 'ALREADY_CAUGHT_LOCALLY:\n';
+    for (const li of fileLocalIssues.slice(0, 6)) {
+      text += `  L${li.line || '?'}:${li.type}: ${li.description.slice(0, 60)}\n`;
+    }
+    if (fileLocalIssues.length > 6) {
+      text += `  +${fileLocalIssues.length - 6} more local issues\n`;
+    }
+  }
+
   const tokens = estimateTokens(text);
 
-  return { relativePath, fullPath: filePath, lineCount: lines.length, ext, imports, signatures, hotspots, text, tokens };
+  return {
+    relativePath, fullPath: filePath, lineCount: lines.length, ext,
+    imports, signatures, hotspots, text, tokens,
+    localIssueCount: fileLocalIssues.length,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -336,23 +441,29 @@ function buildFingerprintChunk(
   const fileCount = fingerprints.length;
   const hotspotCount = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
 
-  let promptText = `Analyze these ${fileCount} file fingerprints for code quality issues.
-Each fingerprint shows: file path, line count, imports, function/class signatures, and flagged hotspot lines.
+  const localCaughtCount = fingerprints.reduce((n, f) => n + f.localIssueCount, 0);
 
-You can detect most issues from this information:
-- SECURITY: Look at hotspot flags (EVAL, SQL_FSTRING, HARDCODED_SECRET, etc.) and function signatures that handle user input.
-- BUGS: Empty catch/except blocks, missing error handling in function signatures, suspicious patterns.
-- TYPES: ANY_TYPE flags, TYPE_IGNORE flags, function signatures missing return types.
-- STUBS: STUB and NOT_IMPL flags.
+  let promptText = `Analyze these ${fileCount} file fingerprints for code quality issues.
+Each fingerprint shows: file path, line count, imports, function/class signatures (with line numbers and return types), and flagged hotspot lines.
+
+Signature annotations:
+- L42:funcName(params)->ReturnType  — function at line 42 WITH a return type
+- L42:funcName(params) [NO_RETURN_TYPE]  — function at line 42 WITHOUT a return type
+${localCaughtCount > 0 ? `\nIMPORTANT: Some files have an ALREADY_CAUGHT_LOCALLY section listing issues that our static analyzer already detected. Do NOT re-report these issues. Focus only on NEW issues the static analyzer cannot catch.\n` : ''}
+Focus your analysis on issues that require REASONING — things a static analyzer cannot catch:
+- SECURITY: Injection patterns, auth bypass, data exposure, unsafe data flows between functions.
+- BUGS: Logic errors, race conditions, incorrect error handling, edge cases.
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
-- DUPLICATES: Similar function signatures across different files.
-- LINT: CONSOLE_LOG/PRINT/DEBUGGER flags, unused imports.
+- DUPLICATES: Similar function signatures across different files that should be shared.
 - COVERAGE: Public functions with no apparent test coverage.
+
+DO NOT report these (already handled by local static analysis):
+- Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
 RULES:
 - Only report REAL issues visible from the fingerprints. No speculation.
-- Be specific: exact file, exact line number, exact description.
-- Hotspot flags are hints, not confirmed issues — verify from context before reporting.
+- Be specific: exact file, use the exact line number from the L-prefixed signatures/flags.
+- Provide the evidence field with the exact code pattern you observed.
 - If everything looks clean, return an empty issues array.
 
 ${hotspotCount > 0 ? `Note: ${hotspotCount} hotspot lines flagged across ${fileCount} files.\n` : ''}

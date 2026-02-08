@@ -71,6 +71,9 @@ export function mapRawToIssue(raw: unknown, idPrefix: string, index: number): Is
     line: typeof r.line === 'number' ? r.line : undefined,
     description: typeof r.description === 'string' && r.description ? r.description : 'Unknown issue',
     status: 'found' as const,
+    evidence: typeof r.evidence === 'string' ? r.evidence : undefined,
+    lineContent: typeof r.line_content === 'string' ? r.line_content : undefined,
+    source: 'ai' as const,
   };
 }
 

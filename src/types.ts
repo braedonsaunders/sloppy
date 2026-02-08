@@ -116,6 +116,12 @@ export interface Issue {
   status: 'found' | 'fixed' | 'skipped';
   skipReason?: string;
   commitSha?: string;
+  /** The evidence the AI cited for this issue (used for post-verification). */
+  evidence?: string;
+  /** The actual line content the AI claims to have seen. */
+  lineContent?: string;
+  /** Whether this issue was detected locally (Layer 0) vs by AI. */
+  source?: 'local' | 'ai';
 }
 
 export interface PassResult {
