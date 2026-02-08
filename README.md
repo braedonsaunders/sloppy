@@ -113,6 +113,34 @@ jobs:
 
 `scan-scope: auto` scans only PR-changed files on `pull_request`, full repo otherwise.
 
+#### Agent-powered scan
+
+Want higher quality scans using the same AI model as fix mode? Set `scan-provider: agent` to use Claude or Codex for scanning instead of the GitHub Models free tier. Requires an API key.
+
+```yaml
+# .sloppy.yml
+scan-provider: agent    # use fix-mode agent for scans
+agent: claude            # claude | codex
+model: ""                # optional model override
+```
+
+Or in the workflow:
+
+```yaml
+- uses: braedonsaunders/sloppy@v1
+  with:
+    mode: scan
+    scan-provider: agent
+    agent: claude
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+| Provider | Cost | Quality | Speed |
+|---|---|---|---|
+| `github-models` (default) | Free | Good (GPT-4o-mini) | Fast (~20s) |
+| `agent` | Your API key | Higher (Claude/GPT-4o) | Slower (~60s) |
+
 ### Fix Mode
 
 Bring your own API key. Sloppy uses **Claude Code CLI** or **OpenAI Codex CLI** to find and fix issues, then opens a PR with atomic commits.
@@ -295,6 +323,7 @@ max-chains: 3                       # max self-continuations (6h each)
 model: ""                           # override AI model (e.g. claude-sonnet-4-5-20250929)
 github-models-model: openai/gpt-4o-mini  # model for free scan tier
 scan-scope: auto                    # auto | pr | full
+scan-provider: github-models        # github-models (free) | agent (uses fix-mode provider)
 verbose: false                      # stream agent output to logs
 max-turns: 30                       # max agent turns per invocation
 max-issues-per-pass: 0              # 0 = unlimited

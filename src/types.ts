@@ -12,6 +12,7 @@ export type Severity = 'critical' | 'high' | 'medium' | 'low';
 export type AgentType = 'claude' | 'codex';
 
 export type ScanScope = 'auto' | 'pr' | 'full';
+export type ScanProvider = 'github-models' | 'agent';
 
 export type AppType = 'web-app' | 'api' | 'cli' | 'library' | 'worker' | 'mobile' | 'desktop';
 export type AppExposure = 'public' | 'internal' | 'local';
@@ -52,6 +53,7 @@ export interface SloppyConfig {
   maxTurns: { scan: number; fix: number };
   maxIssuesPerPass: number;
   scanScope: ScanScope;
+  scanProvider: ScanProvider;
   outputFile: string;
   customPrompt: string;
   customPromptFile: string;
@@ -91,6 +93,7 @@ export interface RepoConfig {
   maxTurns?: number;
   maxIssuesPerPass?: number;
   scanScope?: ScanScope;
+  scanProvider?: ScanProvider;
   outputFile?: string;
   customPrompt?: string;
   customPromptFile?: string;

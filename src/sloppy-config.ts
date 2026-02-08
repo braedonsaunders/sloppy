@@ -27,6 +27,7 @@
  *   max-turns        max agent turns
  *   max-issues-per-pass  cap issues per pass
  *   scan-scope       auto | pr | full
+ *   scan-provider    github-models | agent
  *   output-file      path for issues JSON
  *   custom-prompt    inline prompt text
  *   custom-prompt-file   path to prompt file
@@ -54,6 +55,7 @@ import {
   DataSensitivity,
   AllowRule,
   ScanScope,
+  ScanProvider,
   AgentType,
   SloppyConfig,
 } from './types';
@@ -70,6 +72,7 @@ const VALID_DATA_SENSITIVITY = new Set<string>(['high', 'medium', 'low']);
 const VALID_MODES = new Set<string>(['scan', 'fix']);
 const VALID_AGENTS = new Set<string>(['claude', 'codex']);
 const VALID_SCOPES = new Set<string>(['auto', 'pr', 'full']);
+const VALID_SCAN_PROVIDERS = new Set<string>(['github-models', 'agent']);
 
 function parseYamlConfig(raw: string): RepoConfig {
   const data = parseSimpleYaml(raw);
@@ -186,6 +189,10 @@ function parseYamlConfig(raw: string): RepoConfig {
 
   if (typeof data['scan-scope'] === 'string' && VALID_SCOPES.has(data['scan-scope'].toLowerCase())) {
     config.scanScope = data['scan-scope'].toLowerCase() as ScanScope;
+  }
+
+  if (typeof data['scan-provider'] === 'string' && VALID_SCAN_PROVIDERS.has(data['scan-provider'].toLowerCase())) {
+    config.scanProvider = data['scan-provider'].toLowerCase() as ScanProvider;
   }
 
   if (typeof data['output-file'] === 'string') {
@@ -365,6 +372,7 @@ export function applyProfile(base: RepoConfig, profile: RepoConfig): RepoConfig 
   if (profile.maxTurns !== undefined) merged.maxTurns = profile.maxTurns;
   if (profile.maxIssuesPerPass !== undefined) merged.maxIssuesPerPass = profile.maxIssuesPerPass;
   if (profile.scanScope) merged.scanScope = profile.scanScope;
+  if (profile.scanProvider) merged.scanProvider = profile.scanProvider;
   if (profile.outputFile !== undefined) merged.outputFile = profile.outputFile;
   if (profile.parallelAgents !== undefined) merged.parallelAgents = profile.parallelAgents;
   if (profile.app) merged.app = { ...base.app, ...profile.app };
@@ -449,6 +457,9 @@ export function mergeRepoConfig(
   }
   if (isDefault(actionInputs['scan-scope'], 'auto') && repo.scanScope) {
     config.scanScope = repo.scanScope;
+  }
+  if (isDefault(actionInputs['scan-provider'], 'github-models') && repo.scanProvider) {
+    config.scanProvider = repo.scanProvider;
   }
   if (isDefault(actionInputs['output-file'], '') && repo.outputFile) {
     config.outputFile = repo.outputFile;
