@@ -17,6 +17,7 @@ import { localScanAll } from './local-scan';
 import { runHook, applyFilters, applyAllowRules, formatCustomPromptSection } from './plugins';
 import { generateFingerprint, packFingerprints, FingerprintChunk } from './fingerprint';
 import { partitionByCache, updateCacheEntries, saveCache, ScanStrategy } from './scan-cache';
+import { ScanBudget, getModelTier } from './scan-budget';
 import * as ui from './ui';
 import { formatDuration, sleep, mapRawToIssue } from './utils';
 
@@ -39,6 +40,7 @@ const IGNORE_DIRS = new Set([
 ]);
 
 // Structured output schema — the model MUST conform to this exact shape.
+// Includes evidence and line_content fields for post-scan verification.
 const ISSUES_SCHEMA = {
   type: 'json_schema' as const,
   json_schema: {
@@ -63,8 +65,10 @@ const ISSUES_SCHEMA = {
               file: { type: 'string' },
               line: { type: 'number' },
               description: { type: 'string' },
+              evidence: { type: 'string' },
+              line_content: { type: 'string' },
             },
-            required: ['type', 'severity', 'file', 'line', 'description'],
+            required: ['type', 'severity', 'file', 'line', 'description', 'evidence', 'line_content'],
             additionalProperties: false,
           },
         },
@@ -192,6 +196,109 @@ export function calculateScore(issues: Issue[], loc?: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Post-scan verification — catch AI hallucinations without API calls
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify AI-reported issues against actual file contents.
+ * Discards issues where:
+ *   1. The file doesn't exist
+ *   2. The reported line_content doesn't match anything near the reported line
+ *   3. The issue duplicates something already caught locally
+ *
+ * This is a zero-cost safety net (file reads only, no API calls).
+ */
+function verifyIssues(
+  aiIssues: Issue[],
+  localIssues: Issue[],
+  cwd: string,
+): { verified: Issue[]; rejected: Issue[] } {
+  const verified: Issue[] = [];
+  const rejected: Issue[] = [];
+
+  // Build a set of local issue keys for dedup
+  const localKeys = new Set(
+    localIssues.map(i => `${i.file}:${i.line}:${i.type}`),
+  );
+
+  for (const issue of aiIssues) {
+    // 1. Skip issues that duplicate local findings
+    const key = `${issue.file}:${issue.line}:${issue.type}`;
+    if (localKeys.has(key)) {
+      rejected.push(issue);
+      continue;
+    }
+
+    // Also check nearby lines (±3) for the same type — AI line numbers can be off by a few
+    if (issue.line) {
+      let isDupNearby = false;
+      for (let offset = -3; offset <= 3; offset++) {
+        const nearKey = `${issue.file}:${(issue.line || 0) + offset}:${issue.type}`;
+        if (localKeys.has(nearKey)) {
+          isDupNearby = true;
+          break;
+        }
+      }
+      if (isDupNearby) {
+        rejected.push(issue);
+        continue;
+      }
+    }
+
+    // 2. Verify file exists
+    const fullPath = path.join(cwd, issue.file);
+    if (!fs.existsSync(fullPath)) {
+      rejected.push(issue);
+      continue;
+    }
+
+    // 3. If AI provided line_content, verify it matches the actual file
+    if (issue.lineContent && issue.line) {
+      try {
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const lines = content.split('\n');
+
+        // Check ±5 lines around the reported line for the claimed content
+        const searchStart = Math.max(0, issue.line - 6);
+        const searchEnd = Math.min(lines.length, issue.line + 5);
+        let found = false;
+
+        // Normalize for comparison: trim and collapse whitespace
+        const normalize = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+        const claimedNorm = normalize(issue.lineContent);
+
+        // Only verify if the AI gave us something substantial (>10 chars)
+        if (claimedNorm.length > 10) {
+          for (let j = searchStart; j < searchEnd; j++) {
+            const actualNorm = normalize(lines[j] || '');
+            // Fuzzy match: claimed content is a substring of actual or vice versa
+            if (actualNorm.includes(claimedNorm) || claimedNorm.includes(actualNorm)) {
+              found = true;
+              // Correct the line number to the actual match
+              if (j + 1 !== issue.line) {
+                issue.line = j + 1;
+              }
+              break;
+            }
+          }
+
+          if (!found) {
+            rejected.push(issue);
+            continue;
+          }
+        }
+      } catch {
+        // File read failed — don't reject, just pass through
+      }
+    }
+
+    verified.push(issue);
+  }
+
+  return { verified, rejected };
+}
+
+// ---------------------------------------------------------------------------
 // Layer 1: Fingerprint scanning (compact representations → fewer API calls)
 // ---------------------------------------------------------------------------
 
@@ -200,10 +307,26 @@ async function runFingerprintScan(
   cwd: string,
   model: string,
   customPrompt?: string,
+  localIssues?: Issue[],
+  budget?: ScanBudget,
 ): Promise<{ issues: Issue[]; tokens: number; apiCalls: number }> {
-  // Generate fingerprints for all files
+  // Group local issues by file for annotation injection
+  const localByFile = new Map<string, Issue[]>();
+  if (localIssues) {
+    for (const issue of localIssues) {
+      const existing = localByFile.get(issue.file) || [];
+      existing.push(issue);
+      localByFile.set(issue.file, existing);
+    }
+  }
+
+  // Generate fingerprints with local issue annotations
   const fingerprints = filePaths
-    .map(fp => generateFingerprint(fp, cwd))
+    .map(fp => {
+      const relativePath = path.relative(cwd, fp);
+      const fileLocalIssues = localByFile.get(relativePath) || [];
+      return generateFingerprint(fp, cwd, fileLocalIssues);
+    })
     .filter((fp): fp is NonNullable<typeof fp> => fp !== null);
 
   if (fingerprints.length === 0) return { issues: [], tokens: 0, apiCalls: 0 };
@@ -220,15 +343,16 @@ async function runFingerprintScan(
   let totalTokens = 0;
   let apiCalls = 0;
 
-  const CONCURRENCY = 3; // Fire up to 3 API calls simultaneously
+  // Multi-model routing: use budget tracker to select optimal model per chunk
+  const tierInfo = getModelTier(model);
+  const CONCURRENCY = Math.min(3, tierInfo.concurrent);
   const systemMsg = customPrompt
-    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.\n\n${customPrompt}`
+    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.';
 
   // Process chunks in concurrent batches
   for (let batchStart = 0; batchStart < chunks.length; batchStart += CONCURRENCY) {
     const batch = chunks.slice(batchStart, batchStart + CONCURRENCY);
-    const batchStartTime = Date.now();
 
     // Log what we're dispatching
     for (let j = 0; j < batch.length; j++) {
@@ -237,22 +361,31 @@ async function runFingerprintScan(
       core.info(ui.progressBar(idx + 1, chunks.length, 20, `${fileCount} files (~${batch[j].totalTokens} tokens)`));
     }
 
-    // Fire all requests in this batch concurrently
+    // Fire all requests in this batch concurrently, with per-chunk model selection
     const results = await Promise.allSettled(
       batch.map(async (chunk, j) => {
-        const idx = batchStart + j;
         // Stagger starts slightly to avoid hitting rate limits simultaneously
         if (j > 0) await sleep(500 * j);
+
+        // Select model: prefer low-tier for fingerprint scans to conserve primary budget
+        const chunkModel = budget
+          ? budget.selectModel(model, 'fingerprint')
+          : model;
+
         const chunkStart = Date.now();
         const { content, tokens } = await callGitHubModels(
           [
             { role: 'system', content: systemMsg },
             { role: 'user', content: chunk.promptText },
           ],
-          model,
+          chunkModel,
           { responseFormat: ISSUES_SCHEMA },
         );
-        return { content, tokens, idx, elapsed: Date.now() - chunkStart };
+
+        // Record the API call in the budget tracker
+        if (budget) budget.recordRequest(chunkModel);
+
+        return { content, tokens, elapsed: Date.now() - chunkStart, usedModel: chunkModel };
       }),
     );
 
@@ -260,17 +393,18 @@ async function runFingerprintScan(
     for (let j = 0; j < results.length; j++) {
       const r = results[j];
       if (r.status === 'fulfilled') {
-        const { content, tokens, elapsed } = r.value;
+        const { content, tokens, elapsed, usedModel } = r.value;
         totalTokens += tokens;
         apiCalls++;
         const chunkIssues = parseIssues(content);
         allIssues.push(...chunkIssues);
 
         const elapsedStr = formatDuration(elapsed);
+        const modelLabel = usedModel !== model ? ` via ${usedModel}` : '';
         if (chunkIssues.length > 0) {
-          core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+          core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr}${modelLabel})`, ui.S.gray)}`);
         } else {
-          core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+          core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr}${modelLabel})`, ui.S.gray)}`);
         }
       } else {
         core.warning(`    FAILED: ${r.reason}`);
@@ -300,8 +434,8 @@ async function scanChunk(
 ): Promise<{ issues: Issue[]; tokens: number }> {
   const prompt = buildSmartPrompt(chunk, chunkNum, totalChunks);
   const systemMsg = customPrompt
-    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+    ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.\n\n${customPrompt}`
+    : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.';
 
   try {
     const { content, tokens } = await callGitHubModels(
@@ -365,6 +499,9 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
   const scanStart = Date.now();
 
+  // Initialize adaptive budget tracker (Option 6)
+  const budget = new ScanBudget(cwd);
+
   const scope = config.scanScope;
   const isPR = !!github.context.payload.pull_request;
   const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
@@ -372,6 +509,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   ui.section('SCAN');
   ui.kv('Model', config.githubModelsModel);
   ui.kv('Scope', `${scope}${scope === 'auto' ? (isPR ? ' \u2192 pr' : ' \u2192 full') : ''}`);
+  budget.logStatus(config.githubModelsModel);
 
   let files: string[];
   let scopeLabel: string;
@@ -439,110 +577,154 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   } else {
     // ================================================================
     // LAYER 0: Local static analysis (zero API calls)
+    // Now includes: missing return types, unused imports, console.log,
+    // debugger, any-type usage, plus all original patterns.
     // ================================================================
     ui.section('Layer 0: Local Analysis');
     const extraPatterns = pluginCtx?.extraPatterns || [];
     const { issues: localIssues, flaggedFiles } = localScanAll(filesToScan, cwd, extraPatterns);
     if (localIssues.length > 0) {
-      core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files)`, ui.S.gray)}`);
+      // Break down local findings by type for visibility
+      const localByType: Record<string, number> = {};
+      for (const i of localIssues) localByType[i.type] = (localByType[i.type] || 0) + 1;
+      const localBreakdown = Object.entries(localByType)
+        .sort((a, b) => b[1] - a[1])
+        .map(([t, n]) => `${t}(${n})`)
+        .join(', ');
+      core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files: ${localBreakdown})`, ui.S.gray)}`);
       allIssues.push(...localIssues);
     } else {
       core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No local issues found`);
     }
 
     // ================================================================
-    // LAYER 1: AI scan — strategy depends on file count
-    //
-    // PR / small sets (≤15 files): deep scan with full file contents.
-    //   Accuracy matters more than speed when the set is small, and
-    //   full content fits in a handful of API calls anyway.
-    //
-    // Full repo / large sets (>15 files): fingerprint scan.
-    //   Compact representations (~100 tokens/file) let us pack 20+
-    //   files per request, cutting 33 API calls to 3-5.
+    // ADAPTIVE BUDGET CHECK (Option 6)
+    // Adjust AI scan strategy based on remaining API budget.
     // ================================================================
-    const useDeepScan = scanStrategy === 'deep';
-    let aiIssues: Issue[] = [];
+    const scanLevel = budget.getScanLevel(config.githubModelsModel);
 
-    // Run pre-scan hooks
-    if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
+    if (scanLevel === 'critical') {
+      core.info(`  ${ui.c('!', ui.S.yellow)} API budget critical — skipping AI scan, using local results only`);
+    } else {
+      // ================================================================
+      // LAYER 1: AI scan — strategy depends on file count + budget
+      //
+      // PR / small sets (≤15 files): deep scan with full file contents.
+      //   Accuracy matters more than speed when the set is small, and
+      //   full content fits in a handful of API calls anyway.
+      //
+      // Full repo / large sets (>15 files): fingerprint scan.
+      //   Compact representations (~100 tokens/file) let us pack 20+
+      //   files per request, cutting 33 API calls to 3-5.
+      //
+      // Budget-aware: fingerprint scans route to low-tier models
+      // to conserve high-tier budget for deep scans (Option 4).
+      // ================================================================
+      const useDeepScan = scanStrategy === 'deep' && scanLevel === 'flush';
+      let aiIssues: Issue[] = [];
 
-    const customPrompt = pluginCtx ? formatCustomPromptSection(pluginCtx, config) : '';
+      // Run pre-scan hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'pre-scan');
 
-    if (useDeepScan) {
-      ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
+      const customPrompt = pluginCtx ? formatCustomPromptSection(pluginCtx, config) : '';
 
-      const modelLimit = getModelInputLimit(config.githubModelsModel);
-      const codeBudget = calculateCodeBudget(modelLimit);
-      const chunks = prepareChunks(filesToScan, cwd, config.githubModelsModel);
+      if (useDeepScan) {
+        ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
 
-      const compressedCount = chunks.reduce(
-        (n, c) => n + c.files.filter(f => f.compressed).length, 0,
-      );
-      core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
+        const modelLimit = getModelInputLimit(config.githubModelsModel);
+        const codeBudget = calculateCodeBudget(modelLimit);
+        const chunks = prepareChunks(filesToScan, cwd, config.githubModelsModel);
 
-      const DEEP_CONCURRENCY = 3;
-      for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
-        const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
+        const compressedCount = chunks.reduce(
+          (n, c) => n + c.files.filter(f => f.compressed).length, 0,
+        );
+        core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
 
-        for (let j = 0; j < batch.length; j++) {
-          const idx = batchStart + j;
-          const chunkFileNames = batch[j].files.map(f => f.relativePath);
-          const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
-          const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-          core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
+        // Select model for deep scan via budget tracker (Option 4)
+        const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
+        if (deepModel !== config.githubModelsModel) {
+          core.info(`  ${ui.c('Model routed:', ui.S.gray)} ${deepModel} (primary budget conserved)`);
         }
 
-        const results = await Promise.allSettled(
-          batch.map(async (chunk, j) => {
-            const idx = batchStart + j;
-            if (j > 0) await sleep(500 * j);
-            const chunkStart = Date.now();
-            const { issues: chunkIssues, tokens } = await scanChunk(
-              chunk, idx + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined,
-            );
-            return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
-          }),
-        );
+        const DEEP_CONCURRENCY = Math.min(3, getModelTier(deepModel).concurrent);
+        for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
+          const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
 
-        for (const r of results) {
-          if (r.status === 'fulfilled') {
-            const { chunkIssues, tokens, elapsed } = r.value;
-            totalTokens += tokens;
-            totalApiCalls++;
-            aiIssues.push(...chunkIssues);
-            const elapsedStr = formatDuration(elapsed);
-            if (chunkIssues.length > 0) {
-              core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+          for (let j = 0; j < batch.length; j++) {
+            const idx = batchStart + j;
+            const chunkFileNames = batch[j].files.map(f => f.relativePath);
+            const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
+            const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+            core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
+          }
+
+          const results = await Promise.allSettled(
+            batch.map(async (chunk, j) => {
+              if (j > 0) await sleep(500 * j);
+              const chunkStart = Date.now();
+              const { issues: chunkIssues, tokens } = await scanChunk(
+                chunk, batchStart + j + 1, chunks.length, deepModel, 0, customPrompt || undefined,
+              );
+              budget.recordRequest(deepModel);
+              return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
+            }),
+          );
+
+          for (const r of results) {
+            if (r.status === 'fulfilled') {
+              const { chunkIssues, tokens, elapsed } = r.value;
+              totalTokens += tokens;
+              totalApiCalls++;
+              aiIssues.push(...chunkIssues);
+              const elapsedStr = formatDuration(elapsed);
+              if (chunkIssues.length > 0) {
+                core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+              } else {
+                core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+              }
             } else {
-              core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+              core.warning(`         FAILED: ${r.reason}`);
             }
-          } else {
-            core.warning(`         FAILED: ${r.reason}`);
+          }
+
+          if (batchStart + DEEP_CONCURRENCY < chunks.length) {
+            await sleep(3000);
           }
         }
-
-        if (batchStart + DEEP_CONCURRENCY < chunks.length) {
-          await sleep(3000);
-        }
+      } else {
+        ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
+        // Pass local issues for annotation (Option 5) and budget for model routing (Option 4)
+        const fpResult = await runFingerprintScan(
+          filesToScan, cwd, config.githubModelsModel,
+          customPrompt || undefined, localIssues, budget,
+        );
+        aiIssues = fpResult.issues;
+        totalTokens += fpResult.tokens;
+        totalApiCalls += fpResult.apiCalls;
       }
-    } else {
-      ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
-      const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
-      aiIssues = fpResult.issues;
-      totalTokens += fpResult.tokens;
-      totalApiCalls += fpResult.apiCalls;
+
+      // ================================================================
+      // POST-SCAN VERIFICATION (Option 3)
+      // Verify AI issues against actual file contents. Zero API cost.
+      // ================================================================
+      if (aiIssues.length > 0) {
+        const { verified, rejected } = verifyIssues(aiIssues, localIssues, cwd);
+        if (rejected.length > 0) {
+          core.info(`  ${ui.c('Verification:', ui.S.gray)} ${verified.length} verified, ${ui.c(String(rejected.length), ui.S.yellow)} rejected (duplicates/hallucinations)`);
+        }
+        aiIssues = verified;
+      }
+
+      allIssues.push(...aiIssues);
+
+      // Run post-scan hooks
+      if (pluginCtx) await runHook(pluginCtx.plugins, 'post-scan');
+
+      // Update cache with new results
+      const newIssues = [...localIssues, ...aiIssues];
+      updateCacheEntries(cache, newIssues, filesToScan, cwd, scanStrategy);
+      saveCache(cwd, cache);
     }
-
-    allIssues.push(...aiIssues);
-
-    // Run post-scan hooks
-    if (pluginCtx) await runHook(pluginCtx.plugins, 'post-scan');
-
-    // Update cache with new results
-    const newIssues = [...localIssues, ...aiIssues];
-    updateCacheEntries(cache, newIssues, filesToScan, cwd, scanStrategy);
-    saveCache(cwd, cache);
   }
 
   // ================================================================
@@ -606,11 +788,20 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
   ui.banner('SCAN COMPLETE');
   ui.score(score, `Score`);
   ui.stat('LOC', loc.toLocaleString());
-  ui.stat('Issues', `${unique.length} found`);
+  const localCount = unique.filter(i => i.source === 'local').length;
+  const aiCount = unique.filter(i => i.source === 'ai').length;
+  const otherCount = unique.length - localCount - aiCount;
+  const sourceBreakdown = [
+    localCount > 0 ? `${localCount} local` : '',
+    aiCount > 0 ? `${aiCount} AI` : '',
+    otherCount > 0 ? `${otherCount} cached` : '',
+  ].filter(Boolean).join(', ');
+  ui.stat('Issues', `${unique.length} found${sourceBreakdown ? ` (${sourceBreakdown})` : ''}`);
   ui.stat('API calls', String(totalApiCalls));
   ui.stat('Cache', `${cacheHits}/${files.length} files`);
   ui.stat('Tokens', totalTokens.toLocaleString());
   ui.stat('Duration', totalElapsed);
+  budget.logStatus(config.githubModelsModel);
 
   if (unique.length > 0) {
     ui.blank();

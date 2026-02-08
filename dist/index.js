@@ -30909,10 +30909,16 @@ function extractSignaturesFromContent(content, ext) {
             }
         }
         if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) {
-            // TS/JS: function, class, const arrow, export
-            const fnMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/);
+            // TS/JS: function declarations — capture return type after closing paren
+            const fnMatch = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*([^{]+?))?(?:\s*\{|$)/);
             if (fnMatch) {
-                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1, params: fnMatch[2]?.trim() });
+                sigs.push({
+                    kind: 'fn',
+                    name: fnMatch[1],
+                    line: i + 1,
+                    params: fnMatch[2]?.trim(),
+                    returns: fnMatch[3]?.trim(),
+                });
                 continue;
             }
             const classMatch = trimmed.match(/^(?:export\s+)?class\s+(\w+)/);
@@ -30920,9 +30926,30 @@ function extractSignaturesFromContent(content, ext) {
                 sigs.push({ kind: 'class', name: classMatch[1], line: i + 1 });
                 continue;
             }
-            const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*\w+)?\s*=\s*(?:async\s*)?\(/);
+            // TS/JS: arrow / const functions — capture return type between `)` and `=>`
+            const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*([^=]+?))?\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::\s*([^=>{]+?))?(?:\s*=>|$)/);
             if (constMatch) {
-                sigs.push({ kind: 'fn', name: constMatch[1], line: i + 1 });
+                // Return type can be on the variable annotation (constMatch[2]) or after the params (constMatch[4])
+                const varType = constMatch[2]?.trim();
+                const paramReturnType = constMatch[4]?.trim();
+                sigs.push({
+                    kind: 'fn',
+                    name: constMatch[1],
+                    line: i + 1,
+                    params: constMatch[3]?.trim(),
+                    returns: paramReturnType || varType,
+                });
+                continue;
+            }
+            // Fallback: simpler const match for multi-line arrow functions
+            const constSimple = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(?::\s*([^=]+?))?\s*=\s*(?:async\s*)?\(/);
+            if (constSimple) {
+                sigs.push({
+                    kind: 'fn',
+                    name: constSimple[1],
+                    line: i + 1,
+                    returns: constSimple[2]?.trim(),
+                });
                 continue;
             }
             const ifaceMatch = trimmed.match(/^(?:export\s+)?(?:interface|type)\s+(\w+)/);
@@ -30932,9 +30959,17 @@ function extractSignaturesFromContent(content, ext) {
             }
         }
         if (['.go'].includes(ext)) {
-            const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(/);
+            // Go: func Name(params) ReturnType { or func (r Recv) Name(params) (Multi, Return) {
+            const fnMatch = trimmed.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)\s*([^{]*)/);
             if (fnMatch) {
-                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+                const retRaw = fnMatch[3]?.trim();
+                sigs.push({
+                    kind: 'fn',
+                    name: fnMatch[1],
+                    line: i + 1,
+                    params: fnMatch[2]?.trim(),
+                    returns: retRaw || undefined,
+                });
                 continue;
             }
             const typeMatch = trimmed.match(/^type\s+(\w+)\s+(?:struct|interface)/);
@@ -30943,9 +30978,47 @@ function extractSignaturesFromContent(content, ext) {
             }
         }
         if (['.java', '.kt'].includes(ext)) {
-            const fnMatch = trimmed.match(/(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)?(\w+)\s*\([^)]*\)\s*(?:throws\s+\w+\s*)?[{:]/);
-            if (fnMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(fnMatch[1])) {
-                sigs.push({ kind: 'fn', name: fnMatch[1], line: i + 1 });
+            // Java: modifier returnType name(params) { — capture return type
+            const javaMatch = trimmed.match(/(?:public|private|protected)\s+(?:static\s+)?(\w[\w<>,\s]*?)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+\w+\s*)?[{]/);
+            if (javaMatch && !['if', 'for', 'while', 'switch', 'catch'].includes(javaMatch[2])) {
+                sigs.push({
+                    kind: 'fn',
+                    name: javaMatch[2],
+                    line: i + 1,
+                    params: javaMatch[3]?.trim(),
+                    returns: javaMatch[1]?.trim(),
+                });
+                continue;
+            }
+            // Kotlin: fun name(params): ReturnType { or suspend fun name(...)
+            const ktMatch = trimmed.match(/(?:(?:public|private|internal|override)\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*(\S+))?/);
+            if (ktMatch) {
+                sigs.push({
+                    kind: 'fn',
+                    name: ktMatch[1],
+                    line: i + 1,
+                    params: ktMatch[2]?.trim(),
+                    returns: ktMatch[3]?.trim(),
+                });
+                continue;
+            }
+        }
+        // Rust: pub fn name(params) -> ReturnType {
+        if (['.rs'].includes(ext)) {
+            const rsMatch = trimmed.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?:->\s*([^{]+?))?(?:\s*(?:where\s|{)|$)/);
+            if (rsMatch) {
+                sigs.push({
+                    kind: 'fn',
+                    name: rsMatch[1],
+                    line: i + 1,
+                    params: rsMatch[2]?.trim(),
+                    returns: rsMatch[3]?.trim(),
+                });
+                continue;
+            }
+            const rsTypeMatch = trimmed.match(/^(?:pub\s+)?(?:struct|enum|trait)\s+(\w+)/);
+            if (rsTypeMatch) {
+                sigs.push({ kind: 'type', name: rsTypeMatch[1], line: i + 1 });
             }
         }
     }
@@ -31001,8 +31074,11 @@ function findHotspots(content, ext) {
 /**
  * Generate a compact fingerprint for a single file.
  * Typically 80-200 tokens depending on file size and complexity.
+ *
+ * When `localIssues` are provided, they're embedded in the fingerprint text
+ * so the AI knows what Layer 0 already caught and can skip those.
  */
-function generateFingerprint(filePath, cwd) {
+function generateFingerprint(filePath, cwd, localIssues) {
     let content;
     try {
         content = fs.readFileSync(filePath, 'utf-8');
@@ -31016,6 +31092,8 @@ function generateFingerprint(filePath, cwd) {
     const imports = extractImportLines(content, ext);
     const signatures = extractSignaturesFromContent(content, ext);
     const hotspots = findHotspots(content, ext);
+    // Filter issues relevant to this file
+    const fileLocalIssues = (localIssues || []).filter(Boolean);
     // Build compact text representation
     let text = `=== ${relativePath} (${lines.length} lines) ===\n`;
     if (imports.length > 0) {
@@ -31026,11 +31104,15 @@ function generateFingerprint(filePath, cwd) {
     }
     if (signatures.length > 0) {
         const sigStrs = signatures.map(s => {
-            let str = `${s.name}`;
+            let str = `L${s.line}:${s.name}`;
             if (s.params !== undefined)
                 str += `(${s.params.slice(0, 60)})`;
-            if (s.returns)
-                str += `->${s.returns}`;
+            if (s.returns) {
+                str += `->${s.returns.slice(0, 40)}`;
+            }
+            else {
+                str += ' [NO_RETURN_TYPE]';
+            }
             return str;
         });
         text += `DEFS: ${sigStrs.join(', ')}\n`;
@@ -31044,8 +31126,22 @@ function generateFingerprint(filePath, cwd) {
             text += `  +${hotspots.length - 8} more hotspots\n`;
         }
     }
+    // Option 5: Embed local findings so the AI knows what's already caught
+    if (fileLocalIssues.length > 0) {
+        text += 'ALREADY_CAUGHT_LOCALLY:\n';
+        for (const li of fileLocalIssues.slice(0, 6)) {
+            text += `  L${li.line || '?'}:${li.type}: ${li.description.slice(0, 60)}\n`;
+        }
+        if (fileLocalIssues.length > 6) {
+            text += `  +${fileLocalIssues.length - 6} more local issues\n`;
+        }
+    }
     const tokens = (0, smart_split_1.estimateTokens)(text);
-    return { relativePath, fullPath: filePath, lineCount: lines.length, ext, imports, signatures, hotspots, text, tokens };
+    return {
+        relativePath, fullPath: filePath, lineCount: lines.length, ext,
+        imports, signatures, hotspots, text, tokens,
+        localIssueCount: fileLocalIssues.length,
+    };
 }
 /**
  * Pack fingerprints into chunks that fit within the model's token budget.
@@ -31078,23 +31174,28 @@ function packFingerprints(fingerprints, model) {
 function buildFingerprintChunk(fingerprints, totalTokens, chunkNum) {
     const fileCount = fingerprints.length;
     const hotspotCount = fingerprints.reduce((n, f) => n + f.hotspots.length, 0);
+    const localCaughtCount = fingerprints.reduce((n, f) => n + f.localIssueCount, 0);
     let promptText = `Analyze these ${fileCount} file fingerprints for code quality issues.
-Each fingerprint shows: file path, line count, imports, function/class signatures, and flagged hotspot lines.
+Each fingerprint shows: file path, line count, imports, function/class signatures (with line numbers and return types), and flagged hotspot lines.
 
-You can detect most issues from this information:
-- SECURITY: Look at hotspot flags (EVAL, SQL_FSTRING, HARDCODED_SECRET, etc.) and function signatures that handle user input.
-- BUGS: Empty catch/except blocks, missing error handling in function signatures, suspicious patterns.
-- TYPES: ANY_TYPE flags, TYPE_IGNORE flags, function signatures missing return types.
-- STUBS: STUB and NOT_IMPL flags.
+Signature annotations:
+- L42:funcName(params)->ReturnType  — function at line 42 WITH a return type
+- L42:funcName(params) [NO_RETURN_TYPE]  — function at line 42 WITHOUT a return type
+${localCaughtCount > 0 ? `\nIMPORTANT: Some files have an ALREADY_CAUGHT_LOCALLY section listing issues that our static analyzer already detected. Do NOT re-report these issues. Focus only on NEW issues the static analyzer cannot catch.\n` : ''}
+Focus your analysis on issues that require REASONING — things a static analyzer cannot catch:
+- SECURITY: Injection patterns, auth bypass, data exposure, unsafe data flows between functions.
+- BUGS: Logic errors, race conditions, incorrect error handling, edge cases.
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
-- DUPLICATES: Similar function signatures across different files.
-- LINT: CONSOLE_LOG/PRINT/DEBUGGER flags, unused imports.
+- DUPLICATES: Similar function signatures across different files that should be shared.
 - COVERAGE: Public functions with no apparent test coverage.
+
+DO NOT report these (already handled by local static analysis):
+- Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
 RULES:
 - Only report REAL issues visible from the fingerprints. No speculation.
-- Be specific: exact file, exact line number, exact description.
-- Hotspot flags are hints, not confirmed issues — verify from context before reporting.
+- Be specific: exact file, use the exact line number from the L-prefixed signatures/flags.
+- Provide the evidence field with the exact code pattern you observed.
 - If everything looks clean, return an empty issues array.
 
 ${hotspotCount > 0 ? `Note: ${hotspotCount} hotspot lines flagged across ${fileCount} files.\n` : ''}
@@ -31659,6 +31760,36 @@ const PATTERNS = [
         description: 'Empty catch block silently swallows errors',
         extensions: ['.ts', '.tsx', '.js', '.jsx', '.java', '.kt'],
     },
+    // ── Lint: debugging leftovers ──────────────────────────────────
+    {
+        regex: /\bconsole\.log\s*\(/g,
+        type: 'lint',
+        severity: 'low',
+        description: 'console.log() left in code',
+        extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    },
+    {
+        regex: /\bdebugger\b/g,
+        type: 'lint',
+        severity: 'medium',
+        description: 'debugger statement left in code',
+        extensions: ['.ts', '.tsx', '.js', '.jsx'],
+    },
+    // ── Types: explicit `any` usage ────────────────────────────────
+    {
+        regex: /:\s*any\b/g,
+        type: 'types',
+        severity: 'medium',
+        description: 'Explicit `any` type — consider using a specific type',
+        extensions: ['.ts', '.tsx'],
+    },
+    {
+        regex: /\bas\s+any\b/g,
+        type: 'types',
+        severity: 'medium',
+        description: 'Unsafe cast to `any` — consider using a specific type',
+        extensions: ['.ts', '.tsx'],
+    },
 ];
 /**
  * Basic check for common ReDoS patterns (nested quantifiers).
@@ -31695,6 +31826,490 @@ function compilePluginPatterns(pluginPatterns) {
         }
     }
     return compiled;
+}
+// ---------------------------------------------------------------------------
+// Deterministic detectors — zero false-positive structural analysis
+// ---------------------------------------------------------------------------
+/**
+ * Detect TypeScript/JavaScript functions missing explicit return type annotations.
+ * Handles function declarations, arrow functions assigned to const, and
+ * multi-line parameter lists. Skips constructors, .d.ts files, and functions
+ * where the const variable itself carries a type annotation.
+ */
+function detectMissingReturnTypesTS(content, relativePath) {
+    // Skip declaration files — they are pure types
+    if (relativePath.endsWith('.d.ts'))
+        return [];
+    const lines = content.split('\n');
+    const issues = [];
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trimStart();
+        // Skip comments
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
+            continue;
+        let funcName = null;
+        let isArrow = false;
+        // --- function declarations: export? default? async? function name<T>( ---
+        const fnMatch = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<[^>]*>)?\s*\(/);
+        if (fnMatch) {
+            funcName = fnMatch[1];
+        }
+        // --- arrow / const declarations: export? const name = async? ( ---
+        // Skip if the const has a type annotation (const name: SomeType = ...)
+        if (!funcName) {
+            const constMatch = trimmed.match(/^(?:export\s+)?const\s+(\w+)\s*(:\s*[^=]+?)?\s*=\s*(?:async\s*)?\(/);
+            if (constMatch) {
+                // If the variable itself carries a full type annotation, the return type
+                // is already specified (e.g. `const fn: () => void = () => { ... }`)
+                if (constMatch[2] && constMatch[2].trim().length > 1)
+                    continue;
+                funcName = constMatch[1];
+                isArrow = true;
+            }
+        }
+        if (!funcName)
+            continue;
+        // Skip constructors
+        if (funcName === 'constructor')
+            continue;
+        // Walk forward to find the closing paren (handles multi-line params)
+        let parenDepth = 0;
+        let foundClose = false;
+        let closeLine = i;
+        for (let j = i; j < Math.min(i + 30, lines.length); j++) {
+            for (const ch of lines[j]) {
+                if (ch === '(')
+                    parenDepth++;
+                if (ch === ')') {
+                    parenDepth--;
+                    if (parenDepth === 0) {
+                        foundClose = true;
+                        closeLine = j;
+                        break;
+                    }
+                }
+            }
+            if (foundClose)
+                break;
+        }
+        if (!foundClose)
+            continue;
+        // Gather text after the closing paren (same line + next few lines)
+        const closeContent = lines[closeLine];
+        const closeIdx = closeContent.lastIndexOf(')');
+        let afterParen = closeContent.slice(closeIdx + 1);
+        for (let j = closeLine + 1; j < Math.min(closeLine + 3, lines.length); j++) {
+            afterParen += ' ' + lines[j].trim();
+        }
+        // A return type annotation starts with `:` after the closing paren.
+        // For arrow functions, also check for `=>` — if `:` comes before `=>` it's a return type.
+        const hasReturnType = isArrow
+            ? /^\s*:\s*\S/.test(afterParen) && afterParen.indexOf(':') < afterParen.indexOf('=>')
+            : /^\s*:/.test(afterParen);
+        if (!hasReturnType) {
+            issues.push({
+                id: `local-return-${Date.now()}-${issues.length}`,
+                type: 'types',
+                severity: 'medium',
+                file: relativePath,
+                line: i + 1,
+                description: `Function '${funcName}' is missing an explicit return type annotation`,
+                status: 'found',
+                source: 'local',
+            });
+        }
+    }
+    return issues;
+}
+/**
+ * Detect Python functions missing return type annotations (-> Type).
+ * Handles multi-line parameter lists. Skips dunder methods and private helpers.
+ */
+function detectMissingReturnTypesPython(content, relativePath) {
+    const lines = content.split('\n');
+    const issues = [];
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trimStart();
+        if (trimmed.startsWith('#'))
+            continue;
+        // Match def/async def at any indentation
+        const defMatch = trimmed.match(/^(?:async\s+)?def\s+(\w+)\s*\(/);
+        if (!defMatch)
+            continue;
+        const funcName = defMatch[1];
+        // Skip dunder methods (__init__, __str__, etc.)
+        if (funcName.startsWith('__') && funcName.endsWith('__'))
+            continue;
+        // Find the closing paren
+        let parenDepth = 0;
+        let foundClose = false;
+        let closeLine = i;
+        for (let j = i; j < Math.min(i + 30, lines.length); j++) {
+            for (const ch of lines[j]) {
+                if (ch === '(')
+                    parenDepth++;
+                if (ch === ')') {
+                    parenDepth--;
+                    if (parenDepth === 0) {
+                        foundClose = true;
+                        closeLine = j;
+                        break;
+                    }
+                }
+            }
+            if (foundClose)
+                break;
+        }
+        if (!foundClose)
+            continue;
+        // Check text after closing paren for `-> Type:`
+        const closeContent = lines[closeLine];
+        const closeIdx = closeContent.lastIndexOf(')');
+        const afterParen = closeContent.slice(closeIdx + 1);
+        const hasReturnType = /\s*->/.test(afterParen);
+        if (!hasReturnType) {
+            issues.push({
+                id: `local-return-${Date.now()}-${issues.length}`,
+                type: 'types',
+                severity: 'medium',
+                file: relativePath,
+                line: i + 1,
+                description: `Function '${funcName}' is missing a return type annotation (-> Type)`,
+                status: 'found',
+                source: 'local',
+            });
+        }
+    }
+    return issues;
+}
+/**
+ * Detect Go functions missing explicit return types.
+ * In Go, return types are mandatory for functions that return values, but
+ * we flag exported functions (capitalized) that have no return type specified
+ * since they could be unintentionally void.
+ */
+function detectMissingReturnTypesGo(content, relativePath) {
+    const lines = content.split('\n');
+    const issues = [];
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trimStart();
+        if (trimmed.startsWith('//'))
+            continue;
+        // Match: func Name( or func (receiver) Name(
+        const fnMatch = trimmed.match(/^func\s+(?:\([^)]*\)\s+)?([A-Z]\w*)\s*\(/);
+        if (!fnMatch)
+            continue;
+        const funcName = fnMatch[1];
+        // Find closing paren for params
+        let parenDepth = 0;
+        let foundClose = false;
+        let closeLine = i;
+        for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+            for (const ch of lines[j]) {
+                if (ch === '(')
+                    parenDepth++;
+                if (ch === ')') {
+                    parenDepth--;
+                    if (parenDepth === 0) {
+                        foundClose = true;
+                        closeLine = j;
+                        break;
+                    }
+                }
+            }
+            if (foundClose)
+                break;
+        }
+        if (!foundClose)
+            continue;
+        // After closing paren: return type or `{`
+        const closeContent = lines[closeLine];
+        const closeIdx = closeContent.lastIndexOf(')');
+        let afterParen = closeContent.slice(closeIdx + 1).trim();
+        // If nothing on the same line, look at next line
+        if (!afterParen && closeLine + 1 < lines.length) {
+            afterParen = lines[closeLine + 1].trim();
+        }
+        // In Go, if the char right after `)` is `{`, there's no return type.
+        // If it starts with `(` it's a multi-return, or a word it's a single return.
+        // We only flag exported funcs that go straight to `{` with no return type.
+        if (/^\{/.test(afterParen)) {
+            // This is an exported function returning nothing — acceptable in Go
+            // but worth flagging for coverage as it might be a mistake.
+            // Actually, void functions are normal in Go. Only flag if it has `return` with a value.
+            const bodyEnd = findGoFuncBodyEnd(lines, closeLine);
+            const bodySlice = lines.slice(closeLine, bodyEnd + 1).join('\n');
+            if (/\breturn\s+\S/.test(bodySlice)) {
+                issues.push({
+                    id: `local-return-${Date.now()}-${issues.length}`,
+                    type: 'types',
+                    severity: 'medium',
+                    file: relativePath,
+                    line: i + 1,
+                    description: `Exported function '${funcName}' returns a value but has no declared return type`,
+                    status: 'found',
+                    source: 'local',
+                });
+            }
+        }
+    }
+    return issues;
+}
+/** Find the closing brace of a Go function body. */
+function findGoFuncBodyEnd(lines, startLine) {
+    let braceDepth = 0;
+    for (let j = startLine; j < Math.min(startLine + 200, lines.length); j++) {
+        for (const ch of lines[j]) {
+            if (ch === '{')
+                braceDepth++;
+            if (ch === '}') {
+                braceDepth--;
+                if (braceDepth === 0)
+                    return j;
+            }
+        }
+    }
+    return Math.min(startLine + 50, lines.length - 1);
+}
+/**
+ * Detect Java/Kotlin methods that are public but have ambiguous return types.
+ * In Java, return types are always required (compiler enforces). So instead,
+ * we detect public methods returning `Object` (Java) or `Any` / `Any?` (Kotlin)
+ * which are the equivalent of TypeScript `any`.
+ */
+function detectMissingReturnTypesJavaKt(content, relativePath, ext) {
+    const lines = content.split('\n');
+    const issues = [];
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trimStart();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
+            continue;
+        if (ext === '.java') {
+            // Java: flag methods returning Object — overly broad type
+            const javaMatch = trimmed.match(/^(?:public|protected)\s+(?:static\s+)?Object\s+(\w+)\s*\(/);
+            if (javaMatch) {
+                issues.push({
+                    id: `local-return-${Date.now()}-${issues.length}`,
+                    type: 'types',
+                    severity: 'medium',
+                    file: relativePath,
+                    line: i + 1,
+                    description: `Method '${javaMatch[1]}' returns Object — consider a more specific type`,
+                    status: 'found',
+                    source: 'local',
+                });
+            }
+        }
+        if (ext === '.kt') {
+            // Kotlin: flag functions returning Any or Any?
+            const ktMatch = trimmed.match(/^(?:fun|suspend\s+fun)\s+(\w+)\s*\([^)]*\)\s*:\s*Any\??/);
+            if (ktMatch) {
+                issues.push({
+                    id: `local-return-${Date.now()}-${issues.length}`,
+                    type: 'types',
+                    severity: 'medium',
+                    file: relativePath,
+                    line: i + 1,
+                    description: `Function '${ktMatch[1]}' returns Any — consider a more specific type`,
+                    status: 'found',
+                    source: 'local',
+                });
+            }
+            // Kotlin: public functions without explicit return type (uses inference)
+            // `fun name(params) {` without `: ReturnType`
+            const ktNoType = trimmed.match(/^(?:(?:public|internal)\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(/);
+            if (ktNoType) {
+                // Find closing paren
+                let parenDepth = 0;
+                let foundClose = false;
+                let closeLine = i;
+                for (let j = i; j < Math.min(i + 15, lines.length); j++) {
+                    for (const ch of lines[j]) {
+                        if (ch === '(')
+                            parenDepth++;
+                        if (ch === ')') {
+                            parenDepth--;
+                            if (parenDepth === 0) {
+                                foundClose = true;
+                                closeLine = j;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundClose)
+                        break;
+                }
+                if (foundClose) {
+                    const cLine = lines[closeLine];
+                    const cIdx = cLine.lastIndexOf(')');
+                    const after = cLine.slice(cIdx + 1).trim();
+                    // In Kotlin, `: ReturnType` or `=` (expression body) after closing paren.
+                    // If it goes straight to `{`, return type is inferred.
+                    if (/^\{/.test(after) || after === '') {
+                        issues.push({
+                            id: `local-return-${Date.now()}-${issues.length}`,
+                            type: 'types',
+                            severity: 'low',
+                            file: relativePath,
+                            line: i + 1,
+                            description: `Function '${ktNoType[1]}' has no explicit return type (uses inference)`,
+                            status: 'found',
+                            source: 'local',
+                        });
+                    }
+                }
+            }
+        }
+    }
+    return issues;
+}
+/**
+ * Detect Rust public functions missing return types.
+ * In Rust, omitting `->` means the function returns `()`. We flag public
+ * functions that contain `return` statements with values but declare no return type.
+ */
+function detectMissingReturnTypesRust(content, relativePath) {
+    const lines = content.split('\n');
+    const issues = [];
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trimStart();
+        if (trimmed.startsWith('//'))
+            continue;
+        // Match: pub fn name( or pub async fn name(
+        const fnMatch = trimmed.match(/^pub\s+(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(/);
+        if (!fnMatch)
+            continue;
+        const funcName = fnMatch[1];
+        // Find closing paren
+        let parenDepth = 0;
+        let foundClose = false;
+        let closeLine = i;
+        for (let j = i; j < Math.min(i + 20, lines.length); j++) {
+            for (const ch of lines[j]) {
+                if (ch === '(')
+                    parenDepth++;
+                if (ch === ')') {
+                    parenDepth--;
+                    if (parenDepth === 0) {
+                        foundClose = true;
+                        closeLine = j;
+                        break;
+                    }
+                }
+            }
+            if (foundClose)
+                break;
+        }
+        if (!foundClose)
+            continue;
+        // Check for `->` between `)` and `{`
+        const cLine = lines[closeLine];
+        const cIdx = cLine.lastIndexOf(')');
+        let afterParen = cLine.slice(cIdx + 1);
+        if (closeLine + 1 < lines.length)
+            afterParen += ' ' + lines[closeLine + 1].trim();
+        const hasReturnType = /->/.test(afterParen.split('{')[0]);
+        if (!hasReturnType) {
+            // Check body for return with values
+            let braceDepth = 0;
+            let bodyEnd = closeLine;
+            for (let j = closeLine; j < Math.min(closeLine + 200, lines.length); j++) {
+                for (const ch of lines[j]) {
+                    if (ch === '{')
+                        braceDepth++;
+                    if (ch === '}') {
+                        braceDepth--;
+                        if (braceDepth === 0) {
+                            bodyEnd = j;
+                            break;
+                        }
+                    }
+                }
+                if (braceDepth === 0 && j > closeLine)
+                    break;
+            }
+            const body = lines.slice(closeLine, bodyEnd + 1).join('\n');
+            if (/\breturn\s+\S/.test(body)) {
+                issues.push({
+                    id: `local-return-${Date.now()}-${issues.length}`,
+                    type: 'types',
+                    severity: 'medium',
+                    file: relativePath,
+                    line: i + 1,
+                    description: `Public function '${funcName}' returns a value but has no declared return type`,
+                    status: 'found',
+                    source: 'local',
+                });
+            }
+        }
+    }
+    return issues;
+}
+/**
+ * Detect unused named imports within a single file.
+ * Only flags imports where the identifier appears exactly once in the file (the import itself).
+ * Conservative: skips React (implicit JSX usage), re-exports, and namespace imports.
+ */
+function detectUnusedImports(content, relativePath, ext) {
+    if (!['.ts', '.tsx', '.js', '.jsx'].includes(ext))
+        return [];
+    const issues = [];
+    // Named imports: import { Foo, Bar as Baz } from '...'
+    const namedRe = /^import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"][^'"]+['"]/gm;
+    let m;
+    while ((m = namedRe.exec(content)) !== null) {
+        const importLine = content.slice(0, m.index).split('\n').length;
+        const names = m[1]
+            .split(',')
+            .map(n => {
+            const parts = n.trim().split(/\s+as\s+/);
+            return (parts[1] || parts[0]).trim();
+        })
+            .filter(Boolean);
+        for (const name of names) {
+            if (!name || name.length < 2)
+                continue;
+            // Count occurrences of the identifier in the whole file
+            const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+            const count = (content.match(re) || []).length;
+            if (count <= 1) {
+                issues.push({
+                    id: `local-import-${Date.now()}-${issues.length}`,
+                    type: 'lint',
+                    severity: 'low',
+                    file: relativePath,
+                    line: importLine,
+                    description: `Unused import: '${name}'`,
+                    status: 'found',
+                    source: 'local',
+                });
+            }
+        }
+    }
+    // Default imports: import Foo from '...'
+    const defaultRe = /^import\s+(\w+)\s+from\s+['"][^'"]+['"]/gm;
+    while ((m = defaultRe.exec(content)) !== null) {
+        const importLine = content.slice(0, m.index).split('\n').length;
+        const name = m[1];
+        // React is used implicitly in JSX
+        if (name === 'React')
+            continue;
+        const re = new RegExp(`\\b${name}\\b`, 'g');
+        const count = (content.match(re) || []).length;
+        if (count <= 1) {
+            issues.push({
+                id: `local-import-${Date.now()}-${issues.length}`,
+                type: 'lint',
+                severity: 'low',
+                file: relativePath,
+                line: importLine,
+                description: `Unused import: '${name}'`,
+                status: 'found',
+                source: 'local',
+            });
+        }
+    }
+    return issues;
 }
 /**
  * Run local static analysis on a single file.
@@ -31745,8 +32360,29 @@ function localScanFile(filePath, cwd, extraPatterns = []) {
                 line: lineNum,
                 description: desc,
                 status: 'found',
+                source: 'local',
             });
         }
+    }
+    // --- Deterministic structural detectors ---
+    if (['.ts', '.tsx'].includes(ext)) {
+        issues.push(...detectMissingReturnTypesTS(content, relativePath));
+        issues.push(...detectUnusedImports(content, relativePath, ext));
+    }
+    else if (['.js', '.jsx'].includes(ext)) {
+        issues.push(...detectUnusedImports(content, relativePath, ext));
+    }
+    else if (ext === '.py') {
+        issues.push(...detectMissingReturnTypesPython(content, relativePath));
+    }
+    else if (ext === '.go') {
+        issues.push(...detectMissingReturnTypesGo(content, relativePath));
+    }
+    else if (['.java', '.kt'].includes(ext)) {
+        issues.push(...detectMissingReturnTypesJavaKt(content, relativePath, ext));
+    }
+    else if (ext === '.rs') {
+        issues.push(...detectMissingReturnTypesRust(content, relativePath));
     }
     return issues;
 }
@@ -33898,6 +34534,222 @@ function loadOutputFile(filePath) {
 
 /***/ }),
 
+/***/ 3614:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+/**
+ * Adaptive API budget tracking for GitHub Models free tier.
+ *
+ * Rate limits are per-model, so using multiple models multiplies capacity:
+ *   - High-tier (GPT-4o, GPT-4o-mini): 50 requests/day, 10/min
+ *   - Low-tier (Mistral, Llama): 150 requests/day, 15/min
+ *
+ * This module tracks usage across models and routes requests to
+ * models with remaining budget, maximizing total daily capacity.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ScanBudget = void 0;
+exports.getModelTier = getModelTier;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const core = __importStar(__nccwpck_require__(7484));
+const MODEL_TIERS = {
+    'openai/gpt-4o': {
+        requestsPerDay: 50, requestsPerMinute: 10,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
+    },
+    'openai/gpt-4o-mini': {
+        requestsPerDay: 50, requestsPerMinute: 10,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
+    },
+    'mistral-ai/mistral-small': {
+        requestsPerDay: 150, requestsPerMinute: 15,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
+    },
+    'meta-llama/Meta-Llama-3.1-70B-Instruct': {
+        requestsPerDay: 150, requestsPerMinute: 15,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
+    },
+    'meta-llama/Meta-Llama-3.1-8B-Instruct': {
+        requestsPerDay: 150, requestsPerMinute: 15,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
+    },
+};
+function getModelTier(model) {
+    return MODEL_TIERS[model] || {
+        requestsPerDay: 50, requestsPerMinute: 10,
+        inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
+    };
+}
+const BUDGET_FILE = '.sloppy/budget.json';
+function today() {
+    return new Date().toISOString().slice(0, 10);
+}
+function loadBudget(cwd) {
+    try {
+        const p = path.join(cwd, BUDGET_FILE);
+        if (!fs.existsSync(p))
+            return { entries: [] };
+        const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        // Prune old entries (only keep today)
+        data.entries = (data.entries || []).filter((e) => e.date === today());
+        return data;
+    }
+    catch {
+        return { entries: [] };
+    }
+}
+function saveBudget(cwd, budget) {
+    try {
+        const dir = path.join(cwd, '.sloppy');
+        if (!fs.existsSync(dir))
+            fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(cwd, BUDGET_FILE), JSON.stringify(budget, null, 2));
+    }
+    catch {
+        // Non-fatal
+    }
+}
+function getEntry(budget, model) {
+    let entry = budget.entries.find(e => e.model === model && e.date === today());
+    if (!entry) {
+        entry = { model, date: today(), requestsUsed: 0, lastRequestAt: 0 };
+        budget.entries.push(entry);
+    }
+    return entry;
+}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+class ScanBudget {
+    budget;
+    cwd;
+    constructor(cwd) {
+        this.cwd = cwd;
+        this.budget = loadBudget(cwd);
+    }
+    /** Record that a request was made to a model. */
+    recordRequest(model) {
+        const entry = getEntry(this.budget, model);
+        entry.requestsUsed++;
+        entry.lastRequestAt = Date.now();
+        saveBudget(this.cwd, this.budget);
+    }
+    /** Get remaining requests for a model today. */
+    remaining(model) {
+        const tier = getModelTier(model);
+        const entry = getEntry(this.budget, model);
+        return Math.max(0, tier.requestsPerDay - entry.requestsUsed);
+    }
+    /** Get total remaining requests across all known models. */
+    totalRemaining() {
+        let total = 0;
+        for (const model of Object.keys(MODEL_TIERS)) {
+            total += this.remaining(model);
+        }
+        return total;
+    }
+    /** Get the number of requests used for a model today. */
+    used(model) {
+        return getEntry(this.budget, model).requestsUsed;
+    }
+    /**
+     * Select the best model for a given scan type.
+     * For fingerprint scans: prefer low-tier models (more daily budget).
+     * For deep scans: prefer the user-configured model (typically higher quality).
+     *
+     * Falls back to the primary model if all secondary models are exhausted.
+     */
+    selectModel(primaryModel, scanType) {
+        // For deep scans, always use the primary model if budget allows
+        if (scanType === 'deep') {
+            if (this.remaining(primaryModel) > 0)
+                return primaryModel;
+            // Try low-tier fallbacks
+            return this.findAvailableModel('low') || primaryModel;
+        }
+        // For fingerprint scans, prefer low-tier models to conserve primary budget
+        const lowTier = this.findAvailableModel('low');
+        if (lowTier)
+            return lowTier;
+        // Fall back to primary
+        if (this.remaining(primaryModel) > 0)
+            return primaryModel;
+        // Try any available model
+        return this.findAvailableModel() || primaryModel;
+    }
+    /** Find a model with remaining budget, optionally filtered by tier. */
+    findAvailableModel(tier) {
+        const candidates = Object.entries(MODEL_TIERS)
+            .filter(([, t]) => !tier || t.tier === tier)
+            .filter(([m]) => this.remaining(m) > 0)
+            .sort((a, b) => this.remaining(b[0]) - this.remaining(a[0]));
+        return candidates.length > 0 ? candidates[0][0] : null;
+    }
+    /**
+     * Determine the scan aggressiveness based on remaining budget.
+     * - flush: 40+ calls remaining → deep scan + fingerprint
+     * - normal: 15-40 calls remaining → fingerprint-only, rely on Layer 0
+     * - critical: <15 calls remaining → Layer 0 only, skip AI
+     */
+    getScanLevel(primaryModel) {
+        const primaryRemaining = this.remaining(primaryModel);
+        const totalRemaining = this.totalRemaining();
+        if (totalRemaining < 15)
+            return 'critical';
+        if (primaryRemaining >= 20 || totalRemaining >= 40)
+            return 'flush';
+        return 'normal';
+    }
+    /** Log budget status. */
+    logStatus(primaryModel) {
+        const level = this.getScanLevel(primaryModel);
+        const primaryRemaining = this.remaining(primaryModel);
+        const totalRemaining = this.totalRemaining();
+        const levelLabel = level === 'flush' ? 'flush' : level === 'normal' ? 'normal' : 'CRITICAL';
+        core.info(`  Budget: ${primaryRemaining} primary (${primaryModel}), ${totalRemaining} total across all models [${levelLabel}]`);
+    }
+}
+exports.ScanBudget = ScanBudget;
+
+
+/***/ }),
+
 /***/ 1629:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -34140,6 +34992,7 @@ const local_scan_1 = __nccwpck_require__(4708);
 const plugins_1 = __nccwpck_require__(6067);
 const fingerprint_1 = __nccwpck_require__(2659);
 const scan_cache_1 = __nccwpck_require__(1629);
+const scan_budget_1 = __nccwpck_require__(3614);
 const ui = __importStar(__nccwpck_require__(5125));
 const utils_1 = __nccwpck_require__(1798);
 const CODE_EXTENSIONS = new Set([
@@ -34158,6 +35011,7 @@ const IGNORE_DIRS = new Set([
     '__pycache__', '.venv', 'venv', 'target', 'coverage', '.sloppy',
 ]);
 // Structured output schema — the model MUST conform to this exact shape.
+// Includes evidence and line_content fields for post-scan verification.
 const ISSUES_SCHEMA = {
     type: 'json_schema',
     json_schema: {
@@ -34182,8 +35036,10 @@ const ISSUES_SCHEMA = {
                             file: { type: 'string' },
                             line: { type: 'number' },
                             description: { type: 'string' },
+                            evidence: { type: 'string' },
+                            line_content: { type: 'string' },
                         },
-                        required: ['type', 'severity', 'file', 'line', 'description'],
+                        required: ['type', 'severity', 'file', 'line', 'description', 'evidence', 'line_content'],
                         additionalProperties: false,
                     },
                 },
@@ -34316,12 +35172,110 @@ function calculateScore(issues, loc) {
     return Math.max(0, Math.min(100, Math.round(100 - totalPenalty)));
 }
 // ---------------------------------------------------------------------------
+// Post-scan verification — catch AI hallucinations without API calls
+// ---------------------------------------------------------------------------
+/**
+ * Verify AI-reported issues against actual file contents.
+ * Discards issues where:
+ *   1. The file doesn't exist
+ *   2. The reported line_content doesn't match anything near the reported line
+ *   3. The issue duplicates something already caught locally
+ *
+ * This is a zero-cost safety net (file reads only, no API calls).
+ */
+function verifyIssues(aiIssues, localIssues, cwd) {
+    const verified = [];
+    const rejected = [];
+    // Build a set of local issue keys for dedup
+    const localKeys = new Set(localIssues.map(i => `${i.file}:${i.line}:${i.type}`));
+    for (const issue of aiIssues) {
+        // 1. Skip issues that duplicate local findings
+        const key = `${issue.file}:${issue.line}:${issue.type}`;
+        if (localKeys.has(key)) {
+            rejected.push(issue);
+            continue;
+        }
+        // Also check nearby lines (±3) for the same type — AI line numbers can be off by a few
+        if (issue.line) {
+            let isDupNearby = false;
+            for (let offset = -3; offset <= 3; offset++) {
+                const nearKey = `${issue.file}:${(issue.line || 0) + offset}:${issue.type}`;
+                if (localKeys.has(nearKey)) {
+                    isDupNearby = true;
+                    break;
+                }
+            }
+            if (isDupNearby) {
+                rejected.push(issue);
+                continue;
+            }
+        }
+        // 2. Verify file exists
+        const fullPath = path.join(cwd, issue.file);
+        if (!fs.existsSync(fullPath)) {
+            rejected.push(issue);
+            continue;
+        }
+        // 3. If AI provided line_content, verify it matches the actual file
+        if (issue.lineContent && issue.line) {
+            try {
+                const content = fs.readFileSync(fullPath, 'utf-8');
+                const lines = content.split('\n');
+                // Check ±5 lines around the reported line for the claimed content
+                const searchStart = Math.max(0, issue.line - 6);
+                const searchEnd = Math.min(lines.length, issue.line + 5);
+                let found = false;
+                // Normalize for comparison: trim and collapse whitespace
+                const normalize = (s) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+                const claimedNorm = normalize(issue.lineContent);
+                // Only verify if the AI gave us something substantial (>10 chars)
+                if (claimedNorm.length > 10) {
+                    for (let j = searchStart; j < searchEnd; j++) {
+                        const actualNorm = normalize(lines[j] || '');
+                        // Fuzzy match: claimed content is a substring of actual or vice versa
+                        if (actualNorm.includes(claimedNorm) || claimedNorm.includes(actualNorm)) {
+                            found = true;
+                            // Correct the line number to the actual match
+                            if (j + 1 !== issue.line) {
+                                issue.line = j + 1;
+                            }
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        rejected.push(issue);
+                        continue;
+                    }
+                }
+            }
+            catch {
+                // File read failed — don't reject, just pass through
+            }
+        }
+        verified.push(issue);
+    }
+    return { verified, rejected };
+}
+// ---------------------------------------------------------------------------
 // Layer 1: Fingerprint scanning (compact representations → fewer API calls)
 // ---------------------------------------------------------------------------
-async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
-    // Generate fingerprints for all files
+async function runFingerprintScan(filePaths, cwd, model, customPrompt, localIssues, budget) {
+    // Group local issues by file for annotation injection
+    const localByFile = new Map();
+    if (localIssues) {
+        for (const issue of localIssues) {
+            const existing = localByFile.get(issue.file) || [];
+            existing.push(issue);
+            localByFile.set(issue.file, existing);
+        }
+    }
+    // Generate fingerprints with local issue annotations
     const fingerprints = filePaths
-        .map(fp => (0, fingerprint_1.generateFingerprint)(fp, cwd))
+        .map(fp => {
+        const relativePath = path.relative(cwd, fp);
+        const fileLocalIssues = localByFile.get(relativePath) || [];
+        return (0, fingerprint_1.generateFingerprint)(fp, cwd, fileLocalIssues);
+    })
         .filter((fp) => fp !== null);
     if (fingerprints.length === 0)
         return { issues: [], tokens: 0, apiCalls: 0 };
@@ -34334,48 +35288,56 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
     const allIssues = [];
     let totalTokens = 0;
     let apiCalls = 0;
-    const CONCURRENCY = 3; // Fire up to 3 API calls simultaneously
+    // Multi-model routing: use budget tracker to select optimal model per chunk
+    const tierInfo = (0, scan_budget_1.getModelTier)(model);
+    const CONCURRENCY = Math.min(3, tierInfo.concurrent);
     const systemMsg = customPrompt
-        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.\n\n${customPrompt}`
+        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.';
     // Process chunks in concurrent batches
     for (let batchStart = 0; batchStart < chunks.length; batchStart += CONCURRENCY) {
         const batch = chunks.slice(batchStart, batchStart + CONCURRENCY);
-        const batchStartTime = Date.now();
         // Log what we're dispatching
         for (let j = 0; j < batch.length; j++) {
             const idx = batchStart + j;
             const fileCount = batch[j].fingerprints.length;
             core.info(ui.progressBar(idx + 1, chunks.length, 20, `${fileCount} files (~${batch[j].totalTokens} tokens)`));
         }
-        // Fire all requests in this batch concurrently
+        // Fire all requests in this batch concurrently, with per-chunk model selection
         const results = await Promise.allSettled(batch.map(async (chunk, j) => {
-            const idx = batchStart + j;
             // Stagger starts slightly to avoid hitting rate limits simultaneously
             if (j > 0)
                 await (0, utils_1.sleep)(500 * j);
+            // Select model: prefer low-tier for fingerprint scans to conserve primary budget
+            const chunkModel = budget
+                ? budget.selectModel(model, 'fingerprint')
+                : model;
             const chunkStart = Date.now();
             const { content, tokens } = await (0, github_models_1.callGitHubModels)([
                 { role: 'system', content: systemMsg },
                 { role: 'user', content: chunk.promptText },
-            ], model, { responseFormat: ISSUES_SCHEMA });
-            return { content, tokens, idx, elapsed: Date.now() - chunkStart };
+            ], chunkModel, { responseFormat: ISSUES_SCHEMA });
+            // Record the API call in the budget tracker
+            if (budget)
+                budget.recordRequest(chunkModel);
+            return { content, tokens, elapsed: Date.now() - chunkStart, usedModel: chunkModel };
         }));
         // Collect results
         for (let j = 0; j < results.length; j++) {
             const r = results[j];
             if (r.status === 'fulfilled') {
-                const { content, tokens, elapsed } = r.value;
+                const { content, tokens, elapsed, usedModel } = r.value;
                 totalTokens += tokens;
                 apiCalls++;
                 const chunkIssues = parseIssues(content);
                 allIssues.push(...chunkIssues);
                 const elapsedStr = (0, utils_1.formatDuration)(elapsed);
+                const modelLabel = usedModel !== model ? ` via ${usedModel}` : '';
                 if (chunkIssues.length > 0) {
-                    core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                    core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr}${modelLabel})`, ui.S.gray)}`);
                 }
                 else {
-                    core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                    core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr}${modelLabel})`, ui.S.gray)}`);
                 }
             }
             else {
@@ -34395,8 +35357,8 @@ async function runFingerprintScan(filePaths, cwd, model, customPrompt) {
 async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customPrompt) {
     const prompt = (0, smart_split_1.buildSmartPrompt)(chunk, chunkNum, totalChunks);
     const systemMsg = customPrompt
-        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers.\n\n${customPrompt}`
-        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers.';
+        ? `You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.\n\n${customPrompt}`
+        : 'You are a code quality analyzer. Report only real issues with exact file paths and line numbers. Include the evidence field with the exact code pattern you saw, and line_content with the actual line text.';
     try {
         const { content, tokens } = await (0, github_models_1.callGitHubModels)([
             { role: 'system', content: systemMsg },
@@ -34447,12 +35409,15 @@ async function scanChunk(chunk, chunkNum, totalChunks, model, depth = 0, customP
 async function runScan(config, pluginCtx) {
     const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
     const scanStart = Date.now();
+    // Initialize adaptive budget tracker (Option 6)
+    const budget = new scan_budget_1.ScanBudget(cwd);
     const scope = config.scanScope;
     const isPR = !!github.context.payload.pull_request;
     const usePrDiff = scope === 'pr' || (scope === 'auto' && isPR);
     ui.section('SCAN');
     ui.kv('Model', config.githubModelsModel);
     ui.kv('Scope', `${scope}${scope === 'auto' ? (isPR ? ' \u2192 pr' : ' \u2192 full') : ''}`);
+    budget.logStatus(config.githubModelsModel);
     let files;
     let scopeLabel;
     if (usePrDiff) {
@@ -34512,97 +35477,137 @@ async function runScan(config, pluginCtx) {
     else {
         // ================================================================
         // LAYER 0: Local static analysis (zero API calls)
+        // Now includes: missing return types, unused imports, console.log,
+        // debugger, any-type usage, plus all original patterns.
         // ================================================================
         ui.section('Layer 0: Local Analysis');
         const extraPatterns = pluginCtx?.extraPatterns || [];
         const { issues: localIssues, flaggedFiles } = (0, local_scan_1.localScanAll)(filesToScan, cwd, extraPatterns);
         if (localIssues.length > 0) {
-            core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files)`, ui.S.gray)}`);
+            // Break down local findings by type for visibility
+            const localByType = {};
+            for (const i of localIssues)
+                localByType[i.type] = (localByType[i.type] || 0) + 1;
+            const localBreakdown = Object.entries(localByType)
+                .sort((a, b) => b[1] - a[1])
+                .map(([t, n]) => `${t}(${n})`)
+                .join(', ');
+            core.info(`  Found ${ui.c(String(localIssues.length), ui.S.bold)} issues locally ${ui.c(`(${flaggedFiles.size} files: ${localBreakdown})`, ui.S.gray)}`);
             allIssues.push(...localIssues);
         }
         else {
             core.info(`  ${ui.c(ui.SYM.check, ui.S.green)} No local issues found`);
         }
         // ================================================================
-        // LAYER 1: AI scan — strategy depends on file count
-        //
-        // PR / small sets (≤15 files): deep scan with full file contents.
-        //   Accuracy matters more than speed when the set is small, and
-        //   full content fits in a handful of API calls anyway.
-        //
-        // Full repo / large sets (>15 files): fingerprint scan.
-        //   Compact representations (~100 tokens/file) let us pack 20+
-        //   files per request, cutting 33 API calls to 3-5.
+        // ADAPTIVE BUDGET CHECK (Option 6)
+        // Adjust AI scan strategy based on remaining API budget.
         // ================================================================
-        const useDeepScan = scanStrategy === 'deep';
-        let aiIssues = [];
-        // Run pre-scan hooks
-        if (pluginCtx)
-            await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
-        const customPrompt = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx, config) : '';
-        if (useDeepScan) {
-            ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
-            const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
-            const codeBudget = (0, smart_split_1.calculateCodeBudget)(modelLimit);
-            const chunks = (0, smart_split_1.prepareChunks)(filesToScan, cwd, config.githubModelsModel);
-            const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
-            core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
-            const DEEP_CONCURRENCY = 3;
-            for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
-                const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
-                for (let j = 0; j < batch.length; j++) {
-                    const idx = batchStart + j;
-                    const chunkFileNames = batch[j].files.map(f => f.relativePath);
-                    const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
-                    const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
-                    core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
-                }
-                const results = await Promise.allSettled(batch.map(async (chunk, j) => {
-                    const idx = batchStart + j;
-                    if (j > 0)
-                        await (0, utils_1.sleep)(500 * j);
-                    const chunkStart = Date.now();
-                    const { issues: chunkIssues, tokens } = await scanChunk(chunk, idx + 1, chunks.length, config.githubModelsModel, 0, customPrompt || undefined);
-                    return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
-                }));
-                for (const r of results) {
-                    if (r.status === 'fulfilled') {
-                        const { chunkIssues, tokens, elapsed } = r.value;
-                        totalTokens += tokens;
-                        totalApiCalls++;
-                        aiIssues.push(...chunkIssues);
-                        const elapsedStr = (0, utils_1.formatDuration)(elapsed);
-                        if (chunkIssues.length > 0) {
-                            core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
-                        }
-                        else {
-                            core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
-                        }
-                    }
-                    else {
-                        core.warning(`         FAILED: ${r.reason}`);
-                    }
-                }
-                if (batchStart + DEEP_CONCURRENCY < chunks.length) {
-                    await (0, utils_1.sleep)(3000);
-                }
-            }
+        const scanLevel = budget.getScanLevel(config.githubModelsModel);
+        if (scanLevel === 'critical') {
+            core.info(`  ${ui.c('!', ui.S.yellow)} API budget critical — skipping AI scan, using local results only`);
         }
         else {
-            ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
-            const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined);
-            aiIssues = fpResult.issues;
-            totalTokens += fpResult.tokens;
-            totalApiCalls += fpResult.apiCalls;
+            // ================================================================
+            // LAYER 1: AI scan — strategy depends on file count + budget
+            //
+            // PR / small sets (≤15 files): deep scan with full file contents.
+            //   Accuracy matters more than speed when the set is small, and
+            //   full content fits in a handful of API calls anyway.
+            //
+            // Full repo / large sets (>15 files): fingerprint scan.
+            //   Compact representations (~100 tokens/file) let us pack 20+
+            //   files per request, cutting 33 API calls to 3-5.
+            //
+            // Budget-aware: fingerprint scans route to low-tier models
+            // to conserve high-tier budget for deep scans (Option 4).
+            // ================================================================
+            const useDeepScan = scanStrategy === 'deep' && scanLevel === 'flush';
+            let aiIssues = [];
+            // Run pre-scan hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'pre-scan');
+            const customPrompt = pluginCtx ? (0, plugins_1.formatCustomPromptSection)(pluginCtx, config) : '';
+            if (useDeepScan) {
+                ui.section(`Layer 1: Deep Scan (${filesToScan.length} files)`);
+                const modelLimit = (0, smart_split_1.getModelInputLimit)(config.githubModelsModel);
+                const codeBudget = (0, smart_split_1.calculateCodeBudget)(modelLimit);
+                const chunks = (0, smart_split_1.prepareChunks)(filesToScan, cwd, config.githubModelsModel);
+                const compressedCount = chunks.reduce((n, c) => n + c.files.filter(f => f.compressed).length, 0);
+                core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
+                // Select model for deep scan via budget tracker (Option 4)
+                const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
+                if (deepModel !== config.githubModelsModel) {
+                    core.info(`  ${ui.c('Model routed:', ui.S.gray)} ${deepModel} (primary budget conserved)`);
+                }
+                const DEEP_CONCURRENCY = Math.min(3, (0, scan_budget_1.getModelTier)(deepModel).concurrent);
+                for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
+                    const batch = chunks.slice(batchStart, batchStart + DEEP_CONCURRENCY);
+                    for (let j = 0; j < batch.length; j++) {
+                        const idx = batchStart + j;
+                        const chunkFileNames = batch[j].files.map(f => f.relativePath);
+                        const compressedInChunk = batch[j].files.filter(f => f.compressed).length;
+                        const compressedLabel = compressedInChunk > 0 ? ` [${compressedInChunk} compressed]` : '';
+                        core.info(ui.progressBar(idx + 1, chunks.length, 20, `${chunkFileNames.slice(0, 3).join(', ')}${chunkFileNames.length > 3 ? ` +${chunkFileNames.length - 3}` : ''}${compressedLabel}`));
+                    }
+                    const results = await Promise.allSettled(batch.map(async (chunk, j) => {
+                        if (j > 0)
+                            await (0, utils_1.sleep)(500 * j);
+                        const chunkStart = Date.now();
+                        const { issues: chunkIssues, tokens } = await scanChunk(chunk, batchStart + j + 1, chunks.length, deepModel, 0, customPrompt || undefined);
+                        budget.recordRequest(deepModel);
+                        return { chunkIssues, tokens, elapsed: Date.now() - chunkStart };
+                    }));
+                    for (const r of results) {
+                        if (r.status === 'fulfilled') {
+                            const { chunkIssues, tokens, elapsed } = r.value;
+                            totalTokens += tokens;
+                            totalApiCalls++;
+                            aiIssues.push(...chunkIssues);
+                            const elapsedStr = (0, utils_1.formatDuration)(elapsed);
+                            if (chunkIssues.length > 0) {
+                                core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Found ${ui.c(String(chunkIssues.length), ui.S.bold)} issues ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                            }
+                            else {
+                                core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Clean ${ui.c(`(${tokens} tokens, ${elapsedStr})`, ui.S.gray)}`);
+                            }
+                        }
+                        else {
+                            core.warning(`         FAILED: ${r.reason}`);
+                        }
+                    }
+                    if (batchStart + DEEP_CONCURRENCY < chunks.length) {
+                        await (0, utils_1.sleep)(3000);
+                    }
+                }
+            }
+            else {
+                ui.section(`Layer 1: Fingerprint Scan (${filesToScan.length} files)`);
+                // Pass local issues for annotation (Option 5) and budget for model routing (Option 4)
+                const fpResult = await runFingerprintScan(filesToScan, cwd, config.githubModelsModel, customPrompt || undefined, localIssues, budget);
+                aiIssues = fpResult.issues;
+                totalTokens += fpResult.tokens;
+                totalApiCalls += fpResult.apiCalls;
+            }
+            // ================================================================
+            // POST-SCAN VERIFICATION (Option 3)
+            // Verify AI issues against actual file contents. Zero API cost.
+            // ================================================================
+            if (aiIssues.length > 0) {
+                const { verified, rejected } = verifyIssues(aiIssues, localIssues, cwd);
+                if (rejected.length > 0) {
+                    core.info(`  ${ui.c('Verification:', ui.S.gray)} ${verified.length} verified, ${ui.c(String(rejected.length), ui.S.yellow)} rejected (duplicates/hallucinations)`);
+                }
+                aiIssues = verified;
+            }
+            allIssues.push(...aiIssues);
+            // Run post-scan hooks
+            if (pluginCtx)
+                await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-scan');
+            // Update cache with new results
+            const newIssues = [...localIssues, ...aiIssues];
+            (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd, scanStrategy);
+            (0, scan_cache_1.saveCache)(cwd, cache);
         }
-        allIssues.push(...aiIssues);
-        // Run post-scan hooks
-        if (pluginCtx)
-            await (0, plugins_1.runHook)(pluginCtx.plugins, 'post-scan');
-        // Update cache with new results
-        const newIssues = [...localIssues, ...aiIssues];
-        (0, scan_cache_1.updateCacheEntries)(cache, newIssues, filesToScan, cwd, scanStrategy);
-        (0, scan_cache_1.saveCache)(cwd, cache);
     }
     // ================================================================
     // Apply plugin filters
@@ -34661,11 +35666,20 @@ async function runScan(config, pluginCtx) {
     ui.banner('SCAN COMPLETE');
     ui.score(score, `Score`);
     ui.stat('LOC', loc.toLocaleString());
-    ui.stat('Issues', `${unique.length} found`);
+    const localCount = unique.filter(i => i.source === 'local').length;
+    const aiCount = unique.filter(i => i.source === 'ai').length;
+    const otherCount = unique.length - localCount - aiCount;
+    const sourceBreakdown = [
+        localCount > 0 ? `${localCount} local` : '',
+        aiCount > 0 ? `${aiCount} AI` : '',
+        otherCount > 0 ? `${otherCount} cached` : '',
+    ].filter(Boolean).join(', ');
+    ui.stat('Issues', `${unique.length} found${sourceBreakdown ? ` (${sourceBreakdown})` : ''}`);
     ui.stat('API calls', String(totalApiCalls));
     ui.stat('Cache', `${cacheHits}/${files.length} files`);
     ui.stat('Tokens', totalTokens.toLocaleString());
     ui.stat('Duration', totalElapsed);
+    budget.logStatus(config.githubModelsModel);
     if (unique.length > 0) {
         ui.blank();
         const bySev = {};
@@ -35281,6 +36295,9 @@ const MODEL_INPUT_LIMITS = {
     'openai/gpt-4o-mini': 8000,
     'openai/gpt-4o': 8000,
     'mistral-ai/mistral-small': 8000,
+    'meta-llama/Meta-Llama-3.1-70B-Instruct': 8000,
+    'meta-llama/Meta-Llama-3.1-8B-Instruct': 8000,
+    'mistral-ai/Mistral-Small-3.1-24B-Instruct-2503': 8000,
 };
 // ---------------------------------------------------------------------------
 // Token estimation
@@ -36142,6 +37159,9 @@ function mapRawToIssue(raw, idPrefix, index) {
         line: typeof r.line === 'number' ? r.line : undefined,
         description: typeof r.description === 'string' && r.description ? r.description : 'Unknown issue',
         status: 'found',
+        evidence: typeof r.evidence === 'string' ? r.evidence : undefined,
+        lineContent: typeof r.line_content === 'string' ? r.line_content : undefined,
+        source: 'ai',
     };
 }
 // ---------------------------------------------------------------------------
