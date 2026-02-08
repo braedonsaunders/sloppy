@@ -416,8 +416,9 @@ async function runAIVerificationPass(
 ): Promise<Issue[]> {
   if (issues.length === 0) return [];
 
-  const verifyModel = budget.selectModel(primaryModel, 'fingerprint');
-  if (budget.remaining(verifyModel) < 1) {
+  // Always use the primary model for verification — it needs json_schema
+  // structured output, which only OpenAI models support on GitHub Models.
+  if (budget.remaining(primaryModel) < 1) {
     core.info(`  No API budget for verification — keeping all issues`);
     return issues;
   }
@@ -459,56 +460,35 @@ async function runAIVerificationPass(
 
     const prompt = `You are verifying code issues. For each issue, the ACTUAL source code is shown. Determine if each is REAL or FALSE POSITIVE.
 
-Key rules:
-- ORM query builders, parameterized queries, and prepared statements are NOT SQL injection. Only flag raw SQL strings with unsanitized user input directly interpolated.
-- String interpolation in log/error/print statements is NOT SQL injection.
-- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
-- Input validation models accepting sensitive fields are normal — only flag secrets in unmasked output.
-- Test files: mock data, fixtures, and test assertions are NOT real issues.
-- Catching specific/narrow exception types and ignoring them is intentional — only flag broad catch-all handlers.
-- When in doubt, mark FALSE POSITIVE. We prefer missing a real issue over reporting a fake one.
+Mark REAL if:
+- The code clearly shows the problem described (e.g. broad exception silently swallowed, real SQL injection with string interpolation reaching a query, actual hardcoded secret)
+- The issue points to a genuine bug, security risk, or code quality problem visible in the code
+
+Mark FALSE POSITIVE if:
+- The code clearly contradicts the claim (e.g. ORM/parameterized queries flagged as SQL injection, specific exception handlers flagged as broad catch-all, config defaults flagged as secrets)
+- String interpolation only appears in log/error/print statements, not database queries
+- The issue is in test files and relates to mock data, fixtures, or assertions
+- The claimed problem simply does not exist in the shown code
 
 ${snippets.join('\n')}
 For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
 
     try {
-      let model = budget.selectModel(primaryModel, 'fingerprint');
-      if (budget.remaining(model) < 1) {
+      if (budget.remaining(primaryModel) < 1) {
         verified.push(...batch);
         break;
       }
 
-      let content: string;
-      try {
-        const result = await callGitHubModels(
-          [
-            { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
-            { role: 'user', content: prompt },
-          ],
-          model,
-          { responseFormat: VERIFICATION_SCHEMA },
-        );
-        content = result.content;
-        budget.recordRequest(model);
-      } catch (modelErr) {
-        // If selected model fails (404 unknown model), fall back to primary
-        if (model !== primaryModel && budget.remaining(primaryModel) > 0) {
-          core.info(`    ${ui.c('Model fallback:', ui.S.gray)} ${model} unavailable, using ${primaryModel}`);
-          model = primaryModel;
-          const result = await callGitHubModels(
-            [
-              { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
-              { role: 'user', content: prompt },
-            ],
-            model,
-            { responseFormat: VERIFICATION_SCHEMA },
-          );
-          content = result.content;
-          budget.recordRequest(model);
-        } else {
-          throw modelErr;
-        }
-      }
+      const result = await callGitHubModels(
+        [
+          { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Confirm issues that have clear evidence in the code. Reject issues where the code clearly contradicts the claim or the issue is fabricated.' },
+          { role: 'user', content: prompt },
+        ],
+        primaryModel,
+        { responseFormat: VERIFICATION_SCHEMA },
+      );
+      const content = result.content;
+      budget.recordRequest(primaryModel);
 
       const data = JSON.parse(content);
       const results: Array<{ index: number; is_real: boolean }> = data.results || [];
@@ -606,10 +586,9 @@ async function runFingerprintScan(
         // Stagger starts slightly to avoid hitting rate limits simultaneously
         if (j > 0) await sleep(500 * j);
 
-        // Select model: prefer low-tier for fingerprint scans to conserve primary budget
-        const chunkModel = budget
-          ? budget.selectModel(model, 'fingerprint')
-          : model;
+        // Use primary model — only OpenAI models support json_schema on GitHub Models.
+        // Low-tier models (Mistral, Llama) return 422 on structured output.
+        const chunkModel = model;
 
         const chunkStart = Date.now();
         const { content, tokens } = await callGitHubModels(
@@ -879,11 +858,8 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
         );
         core.info(`  ${chunks.length} chunks, ~${Math.round(codeBudget / 1024)}KB/chunk${compressedCount > 0 ? `, ${compressedCount} compressed` : ''}`);
 
-        // Select model for deep scan via budget tracker (Option 4)
-        const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
-        if (deepModel !== config.githubModelsModel) {
-          core.info(`  ${ui.c('Model routed:', ui.S.gray)} ${deepModel} (primary budget conserved)`);
-        }
+        // Use primary model — only OpenAI models support json_schema on GitHub Models
+        const deepModel = config.githubModelsModel;
 
         const DEEP_CONCURRENCY = Math.min(3, getModelTier(deepModel).concurrent);
         for (let batchStart = 0; batchStart < chunks.length; batchStart += DEEP_CONCURRENCY) {
@@ -951,7 +927,7 @@ export async function runScan(config: SloppyConfig, pluginCtx?: PluginContext): 
             .slice(0, 5);
 
           if (suspiciousFilePaths.length > 0) {
-            const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
+            const deepModel = config.githubModelsModel;
             if (budget.remaining(deepModel) > 0) {
               core.info(`  ${ui.c('Targeted deep scan:', ui.S.gray)} ${suspiciousFilePaths.length} suspicious files`);
               const deepChunks = prepareChunks(suspiciousFilePaths, cwd, deepModel);
