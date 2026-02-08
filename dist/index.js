@@ -34277,15 +34277,15 @@ const MODEL_TIERS = {
         requestsPerDay: 50, requestsPerMinute: 10,
         inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
     },
-    'mistral-ai/Mistral-small': {
+    'mistral-ai/mistral-small-2503': {
         requestsPerDay: 150, requestsPerMinute: 15,
         inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
     },
-    'meta-llama/Llama-3.3-70B-Instruct': {
+    'meta/llama-3.3-70b-instruct': {
         requestsPerDay: 150, requestsPerMinute: 15,
         inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
     },
-    'meta-llama/Meta-Llama-3.1-8B-Instruct': {
+    'meta/meta-llama-3.1-8b-instruct': {
         requestsPerDay: 150, requestsPerMinute: 15,
         inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
     },
@@ -36223,9 +36223,9 @@ const SIGNATURE_BODY_LINES = 3;
 const MODEL_INPUT_LIMITS = {
     'openai/gpt-4o-mini': 8000,
     'openai/gpt-4o': 8000,
-    'mistral-ai/Mistral-small': 8000,
-    'meta-llama/Llama-3.3-70B-Instruct': 8000,
-    'meta-llama/Meta-Llama-3.1-8B-Instruct': 8000,
+    'mistral-ai/mistral-small-2503': 8000,
+    'meta/llama-3.3-70b-instruct': 8000,
+    'meta/meta-llama-3.1-8b-instruct': 8000,
 };
 // ---------------------------------------------------------------------------
 // Token estimation
