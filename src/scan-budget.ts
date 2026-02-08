@@ -35,15 +35,15 @@ const MODEL_TIERS: Record<string, ModelTier> = {
     requestsPerDay: 50, requestsPerMinute: 10,
     inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
   },
-  'mistral-ai/Mistral-small': {
+  'mistral-ai/mistral-small-2503': {
     requestsPerDay: 150, requestsPerMinute: 15,
     inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
   },
-  'meta-llama/Llama-3.3-70B-Instruct': {
+  'meta/llama-3.3-70b-instruct': {
     requestsPerDay: 150, requestsPerMinute: 15,
     inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
   },
-  'meta-llama/Meta-Llama-3.1-8B-Instruct': {
+  'meta/meta-llama-3.1-8b-instruct': {
     requestsPerDay: 150, requestsPerMinute: 15,
     inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
   },
