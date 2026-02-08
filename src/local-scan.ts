@@ -272,6 +272,12 @@ function detectMissingReturnTypesTS(content: string, relativePath: string): Issu
       afterParen += ' ' + lines[j].trim();
     }
 
+    // For arrow functions, verify `=>` actually exists after the closing paren.
+    // This prevents matching parenthesized expressions like:
+    //   const section = (e as CustomEvent).detail as AISection
+    // where the `(` is a type-cast grouping, not function parameters.
+    if (isArrow && !afterParen.includes('=>')) continue;
+
     // A return type annotation starts with `:` after the closing paren.
     // For arrow functions, also check for `=>` — if `:` comes before `=>` it's a return type.
     const hasReturnType = isArrow
