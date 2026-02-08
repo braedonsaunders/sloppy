@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { SloppyConfig, IssueType, ScanScope, Severity } from './types';
+import { SloppyConfig, IssueType, ScanScope, ScanProvider, Severity } from './types';
 import { parseTimeout, VALID_SEVERITIES } from './utils';
 
 /**
@@ -25,6 +25,7 @@ export function getRawActionInputs(): Record<string, string> {
     'max-turns': core.getInput('max-turns'),
     'max-issues-per-pass': core.getInput('max-issues-per-pass'),
     'scan-scope': core.getInput('scan-scope'),
+    'scan-provider': core.getInput('scan-provider'),
     'output-file': core.getInput('output-file'),
     'custom-prompt': core.getInput('custom-prompt'),
     'custom-prompt-file': core.getInput('custom-prompt-file'),
@@ -71,6 +72,7 @@ export function getConfig(): SloppyConfig {
     },
     maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0') || 0,
     scanScope: (core.getInput('scan-scope') || 'auto') as ScanScope,
+    scanProvider: (core.getInput('scan-provider') || 'github-models') as ScanProvider,
     outputFile: core.getInput('output-file') || '',
     customPrompt: core.getInput('custom-prompt') || '',
     customPromptFile: core.getInput('custom-prompt-file') || '',

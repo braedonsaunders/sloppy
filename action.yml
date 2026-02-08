@@ -91,6 +91,10 @@ inputs:
     description: 'What to scan: auto (PR files on pull_request, full otherwise), pr (PR files only), full (entire repo)'
     required: false
     default: 'auto'
+  scan-provider:
+    description: 'Which AI provider to use for scans: github-models (free tier) or agent (same provider/model as fix mode, requires API key)'
+    required: false
+    default: 'github-models'
   custom-prompt:
     description: 'Custom instructions injected into every scan/fix prompt (inline text)'
     required: false

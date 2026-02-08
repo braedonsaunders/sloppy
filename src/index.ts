@@ -1,7 +1,10 @@
 import * as core from '@actions/core';
 import { getConfig, getRawActionInputs } from './config';
-import { runScan } from './scan';
+import { runScan, collectFiles, countSourceLOC, calculateScore } from './scan';
 import { runFixLoop } from './loop';
+import { installAgent, runAgent } from './agent';
+import { Issue, IssueType, Severity, ScanResult } from './types';
+import { mapRawToIssue } from './utils';
 import { triggerChain } from './chain';
 import {
   writeJobSummary,
@@ -16,6 +19,104 @@ import { deployDashboard } from './dashboard';
 import { resolveCustomPrompt, loadPlugins, buildPluginContext } from './plugins';
 import { loadRepoConfig, mergeRepoConfig, loadProfile, applyProfile } from './sloppy-config';
 import * as ui from './ui';
+
+/**
+ * Run scan using the fix-mode agent (Claude/Codex) instead of GitHub Models.
+ * This gives higher quality scans using the same model as fix mode.
+ */
+async function runAgentScan(config: import('./types').SloppyConfig, customPrompt: string): Promise<ScanResult> {
+  const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+
+  ui.section('SCAN (Agent)');
+  ui.kv('Provider', `${config.agent}${config.model ? ` (${config.model})` : ''}`);
+
+  await installAgent(config.agent);
+
+  const files = collectFiles(cwd);
+  const loc = countSourceLOC(files);
+  ui.kv('Files', `${files.length} files, ${loc.toLocaleString()} LOC`);
+
+  const customSection = customPrompt ? `\nCUSTOM RULES:\n${customPrompt}\n` : '';
+
+  const prompt = `You are a senior code quality auditor performing a comprehensive codebase review.
+
+TASK: Scan every file in this repository. Find all code quality issues.
+
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. For example, dispatch one subagent per top-level directory, each
+scanning all files within it. Collect their results and merge into a single output.
+
+ISSUE CATEGORIES (use these exact type values):
+  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
+  bugs        — null/undefined derefs, off-by-one, race conditions, wrong logic, unhandled errors
+  types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
+  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
+  dead-code   — functions/classes/exports never called or imported anywhere
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  duplicates  — copy-pasted logic that should be extracted to a shared function
+  coverage    — public functions with zero test coverage, untested error paths, missing edge cases
+
+SEVERITY LEVELS:
+  critical — exploitable in production (data loss, auth bypass, RCE, credential leak)
+  high     — will cause bugs in normal usage or data corruption
+  medium   — code smell, maintainability risk, potential future bugs
+  low      — style issue, minor improvement, naming consistency
+${customSection}
+RULES:
+- Check EVERY file. Do not skip any directory.
+- Only report REAL issues with specific file paths and line numbers.
+- Do not invent issues. If code is clean, return empty issues array.
+- Be precise: exact file, exact line, exact description of what's wrong.
+- Prioritize: security > bugs > types > everything else.
+
+Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
+{"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path/to/file.ts","line":42,"description":"what is wrong and why it matters"}]}`;
+
+  core.info(`  Running ${config.agent} agent scan...`);
+  const scanStart = Date.now();
+
+  const { output, exitCode } = await runAgent(config.agent, prompt, {
+    maxTurns: config.maxTurns.scan,
+    model: config.model || undefined,
+    timeout: config.timeout,
+    verbose: config.verbose,
+  });
+
+  const elapsed = Date.now() - scanStart;
+  core.info(`  Agent scan completed in ${Math.round(elapsed / 1000)}s (exit code ${exitCode})`);
+
+  // Parse issues from agent output
+  const issues: Issue[] = [];
+  try {
+    const jsonMatch = output.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      const rawIssues: unknown[] = data.issues || [];
+      for (let i = 0; i < rawIssues.length; i++) {
+        const issue = mapRawToIssue(rawIssues[i], 'scan', i);
+        if (issue) {
+          issue.source = 'ai';
+          issues.push(issue);
+        }
+      }
+    }
+  } catch (e) {
+    core.warning(`Failed to parse agent scan output: ${e}`);
+  }
+
+  const score = calculateScore(issues, loc);
+  const summary = `Found ${issues.length} issues across ${files.length} files. Score: ${score}/100.`;
+
+  ui.blank();
+  ui.banner('SCAN COMPLETE');
+  ui.score(score, 'Score');
+  ui.stat('LOC', loc.toLocaleString());
+  ui.stat('Issues', `${issues.length} found`);
+  ui.stat('Duration', `${Math.round(elapsed / 1000)}s`);
+  core.info(ui.divider());
+
+  return { issues, score, summary, tokens: 0 };
+}
 
 async function run(): Promise<void> {
   try {
@@ -122,8 +223,15 @@ async function run(): Promise<void> {
     }
 
     if (config.mode === 'scan') {
-      // ---- FREE TIER: GitHub Models ----
-      const result = await runScan(config, pluginCtx);
+      let result: ScanResult;
+
+      if (config.scanProvider === 'agent') {
+        // ---- AGENT SCAN: same provider/model as fix mode ----
+        result = await runAgentScan(config, pluginCtx.customPrompt);
+      } else {
+        // ---- FREE TIER: GitHub Models ----
+        result = await runScan(config, pluginCtx);
+      }
 
       core.setOutput('score', result.score);
       core.setOutput('issues-found', result.issues.length);
@@ -156,7 +264,7 @@ async function run(): Promise<void> {
         durationMs: 0,
         byType,
         mode: 'scan',
-        agent: 'github-models',
+        agent: config.scanProvider === 'agent' ? config.agent : 'github-models',
       });
 
       deployDashboard(history);

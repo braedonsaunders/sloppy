@@ -30598,6 +30598,7 @@ function getRawActionInputs() {
         'max-turns': core.getInput('max-turns'),
         'max-issues-per-pass': core.getInput('max-issues-per-pass'),
         'scan-scope': core.getInput('scan-scope'),
+        'scan-provider': core.getInput('scan-provider'),
         'output-file': core.getInput('output-file'),
         'custom-prompt': core.getInput('custom-prompt'),
         'custom-prompt-file': core.getInput('custom-prompt-file'),
@@ -30639,6 +30640,7 @@ function getConfig() {
         },
         maxIssuesPerPass: parseInt(core.getInput('max-issues-per-pass') || '0') || 0,
         scanScope: (core.getInput('scan-scope') || 'auto'),
+        scanProvider: (core.getInput('scan-provider') || 'github-models'),
         outputFile: core.getInput('output-file') || '',
         customPrompt: core.getInput('custom-prompt') || '',
         customPromptFile: core.getInput('custom-prompt-file') || '',
@@ -31405,12 +31407,100 @@ const core = __importStar(__nccwpck_require__(7484));
 const config_1 = __nccwpck_require__(2973);
 const scan_1 = __nccwpck_require__(4798);
 const loop_1 = __nccwpck_require__(3601);
+const agent_1 = __nccwpck_require__(1598);
+const utils_1 = __nccwpck_require__(1798);
 const chain_1 = __nccwpck_require__(2470);
 const report_1 = __nccwpck_require__(665);
 const dashboard_1 = __nccwpck_require__(4299);
 const plugins_1 = __nccwpck_require__(6067);
 const sloppy_config_1 = __nccwpck_require__(7316);
 const ui = __importStar(__nccwpck_require__(5125));
+/**
+ * Run scan using the fix-mode agent (Claude/Codex) instead of GitHub Models.
+ * This gives higher quality scans using the same model as fix mode.
+ */
+async function runAgentScan(config, customPrompt) {
+    const cwd = process.env.GITHUB_WORKSPACE || process.cwd();
+    ui.section('SCAN (Agent)');
+    ui.kv('Provider', `${config.agent}${config.model ? ` (${config.model})` : ''}`);
+    await (0, agent_1.installAgent)(config.agent);
+    const files = (0, scan_1.collectFiles)(cwd);
+    const loc = (0, scan_1.countSourceLOC)(files);
+    ui.kv('Files', `${files.length} files, ${loc.toLocaleString()} LOC`);
+    const customSection = customPrompt ? `\nCUSTOM RULES:\n${customPrompt}\n` : '';
+    const prompt = `You are a senior code quality auditor performing a comprehensive codebase review.
+
+TASK: Scan every file in this repository. Find all code quality issues.
+
+SPEED: Use the Task tool to dispatch subagents scanning different directories
+in parallel. For example, dispatch one subagent per top-level directory, each
+scanning all files within it. Collect their results and merge into a single output.
+
+ISSUE CATEGORIES (use these exact type values):
+  security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
+  bugs        — null/undefined derefs, off-by-one, race conditions, wrong logic, unhandled errors
+  types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
+  lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
+  dead-code   — functions/classes/exports never called or imported anywhere
+  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  duplicates  — copy-pasted logic that should be extracted to a shared function
+  coverage    — public functions with zero test coverage, untested error paths, missing edge cases
+
+SEVERITY LEVELS:
+  critical — exploitable in production (data loss, auth bypass, RCE, credential leak)
+  high     — will cause bugs in normal usage or data corruption
+  medium   — code smell, maintainability risk, potential future bugs
+  low      — style issue, minor improvement, naming consistency
+${customSection}
+RULES:
+- Check EVERY file. Do not skip any directory.
+- Only report REAL issues with specific file paths and line numbers.
+- Do not invent issues. If code is clean, return empty issues array.
+- Be precise: exact file, exact line, exact description of what's wrong.
+- Prioritize: security > bugs > types > everything else.
+
+Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
+{"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path/to/file.ts","line":42,"description":"what is wrong and why it matters"}]}`;
+    core.info(`  Running ${config.agent} agent scan...`);
+    const scanStart = Date.now();
+    const { output, exitCode } = await (0, agent_1.runAgent)(config.agent, prompt, {
+        maxTurns: config.maxTurns.scan,
+        model: config.model || undefined,
+        timeout: config.timeout,
+        verbose: config.verbose,
+    });
+    const elapsed = Date.now() - scanStart;
+    core.info(`  Agent scan completed in ${Math.round(elapsed / 1000)}s (exit code ${exitCode})`);
+    // Parse issues from agent output
+    const issues = [];
+    try {
+        const jsonMatch = output.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const data = JSON.parse(jsonMatch[0]);
+            const rawIssues = data.issues || [];
+            for (let i = 0; i < rawIssues.length; i++) {
+                const issue = (0, utils_1.mapRawToIssue)(rawIssues[i], 'scan', i);
+                if (issue) {
+                    issue.source = 'ai';
+                    issues.push(issue);
+                }
+            }
+        }
+    }
+    catch (e) {
+        core.warning(`Failed to parse agent scan output: ${e}`);
+    }
+    const score = (0, scan_1.calculateScore)(issues, loc);
+    const summary = `Found ${issues.length} issues across ${files.length} files. Score: ${score}/100.`;
+    ui.blank();
+    ui.banner('SCAN COMPLETE');
+    ui.score(score, 'Score');
+    ui.stat('LOC', loc.toLocaleString());
+    ui.stat('Issues', `${issues.length} found`);
+    ui.stat('Duration', `${Math.round(elapsed / 1000)}s`);
+    core.info(ui.divider());
+    return { issues, score, summary, tokens: 0 };
+}
 async function run() {
     try {
         const config = (0, config_1.getConfig)();
@@ -31508,8 +31598,15 @@ async function run() {
             core.info(`Plugins: ${plugins.map(p => p.name).join(', ')}`);
         }
         if (config.mode === 'scan') {
-            // ---- FREE TIER: GitHub Models ----
-            const result = await (0, scan_1.runScan)(config, pluginCtx);
+            let result;
+            if (config.scanProvider === 'agent') {
+                // ---- AGENT SCAN: same provider/model as fix mode ----
+                result = await runAgentScan(config, pluginCtx.customPrompt);
+            }
+            else {
+                // ---- FREE TIER: GitHub Models ----
+                result = await (0, scan_1.runScan)(config, pluginCtx);
+            }
             core.setOutput('score', result.score);
             core.setOutput('issues-found', result.issues.length);
             await (0, report_1.postScanComment)(result);
@@ -31537,7 +31634,7 @@ async function run() {
                 durationMs: 0,
                 byType,
                 mode: 'scan',
-                agent: 'github-models',
+                agent: config.scanProvider === 'agent' ? config.agent : 'github-models',
             });
             (0, dashboard_1.deployDashboard)(history);
             // Fail if below threshold
@@ -35645,6 +35742,7 @@ async function runScan(config, pluginCtx) {
  *   max-turns        max agent turns
  *   max-issues-per-pass  cap issues per pass
  *   scan-scope       auto | pr | full
+ *   scan-provider    github-models | agent
  *   output-file      path for issues JSON
  *   custom-prompt    inline prompt text
  *   custom-prompt-file   path to prompt file
@@ -35710,6 +35808,7 @@ const VALID_DATA_SENSITIVITY = new Set(['high', 'medium', 'low']);
 const VALID_MODES = new Set(['scan', 'fix']);
 const VALID_AGENTS = new Set(['claude', 'codex']);
 const VALID_SCOPES = new Set(['auto', 'pr', 'full']);
+const VALID_SCAN_PROVIDERS = new Set(['github-models', 'agent']);
 function parseYamlConfig(raw) {
     const data = (0, plugins_1.parseSimpleYaml)(raw);
     const config = {};
@@ -35809,6 +35908,9 @@ function parseYamlConfig(raw) {
     }
     if (typeof data['scan-scope'] === 'string' && VALID_SCOPES.has(data['scan-scope'].toLowerCase())) {
         config.scanScope = data['scan-scope'].toLowerCase();
+    }
+    if (typeof data['scan-provider'] === 'string' && VALID_SCAN_PROVIDERS.has(data['scan-provider'].toLowerCase())) {
+        config.scanProvider = data['scan-provider'].toLowerCase();
     }
     if (typeof data['output-file'] === 'string') {
         config.outputFile = data['output-file'];
@@ -35989,6 +36091,8 @@ function applyProfile(base, profile) {
         merged.maxIssuesPerPass = profile.maxIssuesPerPass;
     if (profile.scanScope)
         merged.scanScope = profile.scanScope;
+    if (profile.scanProvider)
+        merged.scanProvider = profile.scanProvider;
     if (profile.outputFile !== undefined)
         merged.outputFile = profile.outputFile;
     if (profile.parallelAgents !== undefined)
@@ -36072,6 +36176,9 @@ function mergeRepoConfig(config, repo, actionInputs) {
     }
     if (isDefault(actionInputs['scan-scope'], 'auto') && repo.scanScope) {
         config.scanScope = repo.scanScope;
+    }
+    if (isDefault(actionInputs['scan-provider'], 'github-models') && repo.scanProvider) {
+        config.scanProvider = repo.scanProvider;
     }
     if (isDefault(actionInputs['output-file'], '') && repo.outputFile) {
         config.outputFile = repo.outputFile;
