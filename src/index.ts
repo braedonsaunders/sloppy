@@ -38,13 +38,19 @@ async function runAgentScan(config: import('./types').SloppyConfig, customPrompt
 
   const customSection = customPrompt ? `\nCUSTOM RULES:\n${customPrompt}\n` : '';
 
-  const prompt = `You are a senior code quality auditor performing a comprehensive codebase review.
+  const prompt = `You are a senior code quality auditor performing a comprehensive, high-accuracy codebase review. Accuracy is MORE important than quantity — every reported issue must be real.
 
-TASK: Scan every file in this repository. Find all code quality issues.
+TASK: Scan every file in this repository. Find all REAL code quality issues.
 
 SPEED: Use the Task tool to dispatch subagents scanning different directories
 in parallel. For example, dispatch one subagent per top-level directory, each
 scanning all files within it. Collect their results and merge into a single output.
+
+METHODOLOGY — follow this multi-phase approach:
+1. UNDERSTAND: Read imports, understand what frameworks/libraries are used, and what each file's role is (API route, UI component, data model, utility, test, etc.)
+2. SCAN: Look for issues in each file, noting the file's context and purpose
+3. VERIFY: For every issue you find, re-read the surrounding code (±15 lines) and confirm the issue is real. Ask yourself: "Could this be intentional? Does the context explain why this pattern exists?"
+4. Only include issues that survive verification
 
 ISSUE CATEGORIES (use these exact type values):
   security    — SQL injection, XSS, hardcoded secrets, auth bypass, path traversal, insecure crypto
@@ -52,7 +58,7 @@ ISSUE CATEGORIES (use these exact type values):
   types       — type mismatches, unsafe casts, missing generics, any-typed values, wrong return types
   lint        — unused vars/imports, inconsistent naming, missing returns, unreachable code
   dead-code   — functions/classes/exports never called or imported anywhere
-  stubs       — TODO, FIXME, HACK, placeholder implementations, empty catch blocks
+  stubs       — TODO, FIXME, HACK, placeholder implementations
   duplicates  — copy-pasted logic that should be extracted to a shared function
   coverage    — public functions with zero test coverage, untested error paths, missing edge cases
 
@@ -61,6 +67,29 @@ SEVERITY LEVELS:
   high     — will cause bugs in normal usage or data corruption
   medium   — code smell, maintainability risk, potential future bugs
   low      — style issue, minor improvement, naming consistency
+
+CRITICAL — false positive avoidance (you MUST follow these rules):
+
+SQL Injection:
+- A file MUST import a database library (sqlalchemy, sqlite3, psycopg2, django.db, knex, sequelize, prisma, etc.) for SQL injection to be possible
+- The interpolated string MUST reach a database query (.execute(), .raw(), cursor.execute(), etc.)
+- String interpolation in log messages, error messages, print statements, UI text, URLs, or CSS values is NEVER SQL injection
+- Frontend files (.tsx, .jsx, React components) NEVER have direct SQL access. Template literals in frontend code are NEVER SQL injection
+- ORM query builders, parameterized queries (:param, ?, %s with separate args), and prepared statements are NOT SQL injection
+- Table/column names from hardcoded dicts or validated against DB schemas are safe
+
+Empty Except/Catch:
+- except/catch inside close(), stop(), shutdown(), cleanup(), teardown(), dispose(), __del__(), __exit__() is INTENTIONAL cleanup — do NOT flag
+- Multiple sequential try/except blocks trying different approaches (fallback chains) are INTENTIONAL — do NOT flag
+- except/catch during graceful shutdown or optional import loading is INTENTIONAL — do NOT flag
+- Only flag when a broad handler (except:, except Exception:, catch(e){}) silently swallows errors in business logic where failures should be visible
+
+Other false positive traps:
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets
+- dangerouslySetInnerHTML with sanitized input (DOMPurify, sanitize-html) is safe
+- Test files: mock data, fixtures, and test helpers are NOT real issues
+- Re-export modules and package __init__ files are NOT dead code
+- Abstract methods or interface implementations may intentionally omit types
 ${customSection}
 RULES:
 - Check EVERY file. Do not skip any directory.
@@ -68,6 +97,7 @@ RULES:
 - Do not invent issues. If code is clean, return empty issues array.
 - Be precise: exact file, exact line, exact description of what's wrong.
 - Prioritize: security > bugs > types > everything else.
+- Prefer fewer, high-confidence issues over many uncertain ones. Every issue you report should be actionable.
 
 Respond with ONLY valid JSON. No markdown. No code fences. No explanation.
 {"issues":[{"type":"security|bugs|types|lint|dead-code|stubs|duplicates|coverage","severity":"critical|high|medium|low","file":"relative/path/to/file.ts","line":42,"description":"what is wrong and why it matters"}]}`;

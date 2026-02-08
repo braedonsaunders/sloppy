@@ -456,12 +456,29 @@ Focus your analysis on issues that require REASONING — things a static analyze
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
 - DUPLICATES: Similar function signatures across different files that should be shared.
 
+IMPORTANT — SQL injection and empty error handlers are YOUR responsibility:
+These require contextual reasoning that static analysis cannot do. You MUST evaluate every SQL_FSTRING, SQL_TEMPLATE, RAW_QUERY, EMPTY_EXCEPT, and EMPTY_CATCH hotspot carefully:
+
+For SQL hotspots, determine:
+1. Does the file import ANY database library? (sqlalchemy, sqlite3, psycopg2, pymysql, asyncpg, django.db, knex, sequelize, prisma, etc.)
+2. Does the interpolated string actually reach a database query, or is it used in logging/error messages/UI text/URLs?
+3. Are query parameters properly bound via parameterized queries (:param, ?, %s with separate args)?
+If the answer to #1 is NO, or #2 shows non-SQL usage, it is NOT SQL injection. Only report when user input is interpolated into a raw SQL string that reaches a database.
+
+For empty except/catch hotspots, determine:
+1. Is the except/catch inside a cleanup, teardown, close, stop, shutdown, dispose, or __del__ method? If so, it is INTENTIONAL — do not flag.
+2. Is it part of a multi-attempt/fallback pattern (multiple try blocks trying alternatives in sequence)? If so, it is INTENTIONAL — do not flag.
+3. Is the except/catch in graceful shutdown or optional import code? If so, it is INTENTIONAL — do not flag.
+4. Only flag when a broad exception handler (except:, except Exception:, catch(e){}) silently swallows errors in BUSINESS LOGIC where failures should be visible.
+
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
 CRITICAL — avoid false positives:
 - ORM query builders, parameterized queries, and prepared statements are NOT SQL injection — regardless of language or framework. Only flag raw SQL strings with unsanitized user input directly interpolated.
 - String interpolation in log messages, error messages, or print statements is NOT SQL injection. SQL injection requires the string to reach a database query.
+- Frontend code (.tsx, .jsx, React components) NEVER has direct SQL access. Template literals in JSX/frontend code are NEVER SQL injection. Do not flag them.
+- Table/column names from hardcoded dicts or validated against DB schemas are safe — only flag when untrusted user input is interpolated.
 - Decorated route handlers or annotated endpoints where the framework infers the return type are NOT missing return types.
 - Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
 - Input validation models or schemas that accept sensitive fields are normal. Only flag secrets appearing unmasked in responses or logs.
