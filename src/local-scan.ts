@@ -106,7 +106,7 @@ const PATTERNS: Pattern[] = [
   },
   // ── Bugs: empty error handling ───────────────────────────────────
   {
-    regex: /except\s*(?:\w+\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
+    regex: /except\s*(?:(?:Exception|BaseException)(?:\s+as\s+\w+)?\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
     type: 'bugs',
     severity: 'high',
     description: 'Empty except clause silently swallows errors',

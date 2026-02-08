@@ -49,10 +49,9 @@ const SIGNATURE_BODY_LINES = 3;
 const MODEL_INPUT_LIMITS: Record<string, number> = {
   'openai/gpt-4o-mini': 8000,
   'openai/gpt-4o': 8000,
-  'mistral-ai/mistral-small': 8000,
-  'meta-llama/Meta-Llama-3.1-70B-Instruct': 8000,
+  'mistral-ai/Mistral-small': 8000,
+  'meta-llama/Llama-3.3-70B-Instruct': 8000,
   'meta-llama/Meta-Llama-3.1-8B-Instruct': 8000,
-  'mistral-ai/Mistral-Small-3.1-24B-Instruct-2503': 8000,
 };
 
 // ---------------------------------------------------------------------------

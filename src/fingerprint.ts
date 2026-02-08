@@ -459,13 +459,16 @@ Focus your analysis on issues that require REASONING — things a static analyze
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
-FRAMEWORK-AWARE RULES (avoid false positives):
-- FastAPI/Flask/Django: A route decorator with response_model= or return type annotation IS the return type. Do NOT flag decorated route handlers for missing return types.
-- f-strings, template literals, or format() calls inside logger/print/error messages are NOT SQL injection. SQL injection requires the interpolated string to reach a database query or cursor.
-- Config defaults, environment variable fallbacks (os.getenv("X", "default")), and placeholder values are NOT hardcoded secrets.
-- Pydantic models or dataclasses that accept secret fields as INPUT are normal. Only flag if secrets appear UNMASKED in API responses or logs.
-- Functions with @override, @abstractmethod, or interface implementations may intentionally omit types to match the parent signature.
-- Empty __init__.py files and re-export modules (from X import *) are NOT dead code.
+CRITICAL — avoid false positives:
+- ORM query builders, parameterized queries, and prepared statements are NOT SQL injection — regardless of language or framework. Only flag raw SQL strings with unsanitized user input directly interpolated.
+- String interpolation in log messages, error messages, or print statements is NOT SQL injection. SQL injection requires the string to reach a database query.
+- Decorated route handlers or annotated endpoints where the framework infers the return type are NOT missing return types.
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
+- Input validation models or schemas that accept sensitive fields are normal. Only flag secrets appearing unmasked in responses or logs.
+- Abstract methods, interface implementations, or overrides may intentionally omit types to match a parent signature.
+- Re-export modules and package init files are NOT dead code.
+- Test files: mock data, fixtures, assertions, and test helpers are NOT real issues. Only flag actual bugs in test logic.
+- Catching specific exception types (e.g. narrowly-scoped errors) and ignoring them is intentional — only flag broad catch-all exception handlers.
 
 RULES:
 - Only report REAL issues clearly visible from the fingerprints. No speculation.
