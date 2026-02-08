@@ -31187,16 +31187,23 @@ Focus your analysis on issues that require REASONING — things a static analyze
 - BUGS: Logic errors, race conditions, incorrect error handling, edge cases.
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
 - DUPLICATES: Similar function signatures across different files that should be shared.
-- COVERAGE: Public functions with no apparent test coverage.
 
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
+FRAMEWORK-AWARE RULES (avoid false positives):
+- FastAPI/Flask/Django: A route decorator with response_model= or return type annotation IS the return type. Do NOT flag decorated route handlers for missing return types.
+- f-strings, template literals, or format() calls inside logger/print/error messages are NOT SQL injection. SQL injection requires the interpolated string to reach a database query or cursor.
+- Config defaults, environment variable fallbacks (os.getenv("X", "default")), and placeholder values are NOT hardcoded secrets.
+- Pydantic models or dataclasses that accept secret fields as INPUT are normal. Only flag if secrets appear UNMASKED in API responses or logs.
+- Functions with @override, @abstractmethod, or interface implementations may intentionally omit types to match the parent signature.
+- Empty __init__.py files and re-export modules (from X import *) are NOT dead code.
+
 RULES:
-- Only report REAL issues visible from the fingerprints. No speculation.
+- Only report REAL issues clearly visible from the fingerprints. No speculation.
 - Be specific: exact file, use the exact line number from the L-prefixed signatures/flags.
 - Provide the evidence field with the exact code pattern you observed.
-- If everything looks clean, return an empty issues array.
+- If everything looks clean, return an empty issues array. Prefer returning fewer, high-confidence issues over many uncertain ones.
 
 ${hotspotCount > 0 ? `Note: ${hotspotCount} hotspot lines flagged across ${fileCount} files.\n` : ''}
 FILE FINGERPRINTS:
@@ -31928,330 +31935,6 @@ function detectMissingReturnTypesTS(content, relativePath) {
     return issues;
 }
 /**
- * Detect Python functions missing return type annotations (-> Type).
- * Handles multi-line parameter lists. Skips dunder methods and private helpers.
- */
-function detectMissingReturnTypesPython(content, relativePath) {
-    const lines = content.split('\n');
-    const issues = [];
-    for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trimStart();
-        if (trimmed.startsWith('#'))
-            continue;
-        // Match def/async def at any indentation
-        const defMatch = trimmed.match(/^(?:async\s+)?def\s+(\w+)\s*\(/);
-        if (!defMatch)
-            continue;
-        const funcName = defMatch[1];
-        // Skip dunder methods (__init__, __str__, etc.)
-        if (funcName.startsWith('__') && funcName.endsWith('__'))
-            continue;
-        // Find the closing paren
-        let parenDepth = 0;
-        let foundClose = false;
-        let closeLine = i;
-        for (let j = i; j < Math.min(i + 30, lines.length); j++) {
-            for (const ch of lines[j]) {
-                if (ch === '(')
-                    parenDepth++;
-                if (ch === ')') {
-                    parenDepth--;
-                    if (parenDepth === 0) {
-                        foundClose = true;
-                        closeLine = j;
-                        break;
-                    }
-                }
-            }
-            if (foundClose)
-                break;
-        }
-        if (!foundClose)
-            continue;
-        // Check text after closing paren for `-> Type:`
-        const closeContent = lines[closeLine];
-        const closeIdx = closeContent.lastIndexOf(')');
-        const afterParen = closeContent.slice(closeIdx + 1);
-        const hasReturnType = /\s*->/.test(afterParen);
-        if (!hasReturnType) {
-            issues.push({
-                id: `local-return-${Date.now()}-${issues.length}`,
-                type: 'types',
-                severity: 'medium',
-                file: relativePath,
-                line: i + 1,
-                description: `Function '${funcName}' is missing a return type annotation (-> Type)`,
-                status: 'found',
-                source: 'local',
-            });
-        }
-    }
-    return issues;
-}
-/**
- * Detect Go functions missing explicit return types.
- * In Go, return types are mandatory for functions that return values, but
- * we flag exported functions (capitalized) that have no return type specified
- * since they could be unintentionally void.
- */
-function detectMissingReturnTypesGo(content, relativePath) {
-    const lines = content.split('\n');
-    const issues = [];
-    for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trimStart();
-        if (trimmed.startsWith('//'))
-            continue;
-        // Match: func Name( or func (receiver) Name(
-        const fnMatch = trimmed.match(/^func\s+(?:\([^)]*\)\s+)?([A-Z]\w*)\s*\(/);
-        if (!fnMatch)
-            continue;
-        const funcName = fnMatch[1];
-        // Find closing paren for params
-        let parenDepth = 0;
-        let foundClose = false;
-        let closeLine = i;
-        for (let j = i; j < Math.min(i + 20, lines.length); j++) {
-            for (const ch of lines[j]) {
-                if (ch === '(')
-                    parenDepth++;
-                if (ch === ')') {
-                    parenDepth--;
-                    if (parenDepth === 0) {
-                        foundClose = true;
-                        closeLine = j;
-                        break;
-                    }
-                }
-            }
-            if (foundClose)
-                break;
-        }
-        if (!foundClose)
-            continue;
-        // After closing paren: return type or `{`
-        const closeContent = lines[closeLine];
-        const closeIdx = closeContent.lastIndexOf(')');
-        let afterParen = closeContent.slice(closeIdx + 1).trim();
-        // If nothing on the same line, look at next line
-        if (!afterParen && closeLine + 1 < lines.length) {
-            afterParen = lines[closeLine + 1].trim();
-        }
-        // In Go, if the char right after `)` is `{`, there's no return type.
-        // If it starts with `(` it's a multi-return, or a word it's a single return.
-        // We only flag exported funcs that go straight to `{` with no return type.
-        if (/^\{/.test(afterParen)) {
-            // This is an exported function returning nothing — acceptable in Go
-            // but worth flagging for coverage as it might be a mistake.
-            // Actually, void functions are normal in Go. Only flag if it has `return` with a value.
-            const bodyEnd = findGoFuncBodyEnd(lines, closeLine);
-            const bodySlice = lines.slice(closeLine, bodyEnd + 1).join('\n');
-            if (/\breturn\s+\S/.test(bodySlice)) {
-                issues.push({
-                    id: `local-return-${Date.now()}-${issues.length}`,
-                    type: 'types',
-                    severity: 'medium',
-                    file: relativePath,
-                    line: i + 1,
-                    description: `Exported function '${funcName}' returns a value but has no declared return type`,
-                    status: 'found',
-                    source: 'local',
-                });
-            }
-        }
-    }
-    return issues;
-}
-/** Find the closing brace of a Go function body. */
-function findGoFuncBodyEnd(lines, startLine) {
-    let braceDepth = 0;
-    for (let j = startLine; j < Math.min(startLine + 200, lines.length); j++) {
-        for (const ch of lines[j]) {
-            if (ch === '{')
-                braceDepth++;
-            if (ch === '}') {
-                braceDepth--;
-                if (braceDepth === 0)
-                    return j;
-            }
-        }
-    }
-    return Math.min(startLine + 50, lines.length - 1);
-}
-/**
- * Detect Java/Kotlin methods that are public but have ambiguous return types.
- * In Java, return types are always required (compiler enforces). So instead,
- * we detect public methods returning `Object` (Java) or `Any` / `Any?` (Kotlin)
- * which are the equivalent of TypeScript `any`.
- */
-function detectMissingReturnTypesJavaKt(content, relativePath, ext) {
-    const lines = content.split('\n');
-    const issues = [];
-    for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trimStart();
-        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*'))
-            continue;
-        if (ext === '.java') {
-            // Java: flag methods returning Object — overly broad type
-            const javaMatch = trimmed.match(/^(?:public|protected)\s+(?:static\s+)?Object\s+(\w+)\s*\(/);
-            if (javaMatch) {
-                issues.push({
-                    id: `local-return-${Date.now()}-${issues.length}`,
-                    type: 'types',
-                    severity: 'medium',
-                    file: relativePath,
-                    line: i + 1,
-                    description: `Method '${javaMatch[1]}' returns Object — consider a more specific type`,
-                    status: 'found',
-                    source: 'local',
-                });
-            }
-        }
-        if (ext === '.kt') {
-            // Kotlin: flag functions returning Any or Any?
-            const ktMatch = trimmed.match(/^(?:fun|suspend\s+fun)\s+(\w+)\s*\([^)]*\)\s*:\s*Any\??/);
-            if (ktMatch) {
-                issues.push({
-                    id: `local-return-${Date.now()}-${issues.length}`,
-                    type: 'types',
-                    severity: 'medium',
-                    file: relativePath,
-                    line: i + 1,
-                    description: `Function '${ktMatch[1]}' returns Any — consider a more specific type`,
-                    status: 'found',
-                    source: 'local',
-                });
-            }
-            // Kotlin: public functions without explicit return type (uses inference)
-            // `fun name(params) {` without `: ReturnType`
-            const ktNoType = trimmed.match(/^(?:(?:public|internal)\s+)?(?:suspend\s+)?fun\s+(\w+)\s*\(/);
-            if (ktNoType) {
-                // Find closing paren
-                let parenDepth = 0;
-                let foundClose = false;
-                let closeLine = i;
-                for (let j = i; j < Math.min(i + 15, lines.length); j++) {
-                    for (const ch of lines[j]) {
-                        if (ch === '(')
-                            parenDepth++;
-                        if (ch === ')') {
-                            parenDepth--;
-                            if (parenDepth === 0) {
-                                foundClose = true;
-                                closeLine = j;
-                                break;
-                            }
-                        }
-                    }
-                    if (foundClose)
-                        break;
-                }
-                if (foundClose) {
-                    const cLine = lines[closeLine];
-                    const cIdx = cLine.lastIndexOf(')');
-                    const after = cLine.slice(cIdx + 1).trim();
-                    // In Kotlin, `: ReturnType` or `=` (expression body) after closing paren.
-                    // If it goes straight to `{`, return type is inferred.
-                    if (/^\{/.test(after) || after === '') {
-                        issues.push({
-                            id: `local-return-${Date.now()}-${issues.length}`,
-                            type: 'types',
-                            severity: 'low',
-                            file: relativePath,
-                            line: i + 1,
-                            description: `Function '${ktNoType[1]}' has no explicit return type (uses inference)`,
-                            status: 'found',
-                            source: 'local',
-                        });
-                    }
-                }
-            }
-        }
-    }
-    return issues;
-}
-/**
- * Detect Rust public functions missing return types.
- * In Rust, omitting `->` means the function returns `()`. We flag public
- * functions that contain `return` statements with values but declare no return type.
- */
-function detectMissingReturnTypesRust(content, relativePath) {
-    const lines = content.split('\n');
-    const issues = [];
-    for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trimStart();
-        if (trimmed.startsWith('//'))
-            continue;
-        // Match: pub fn name( or pub async fn name(
-        const fnMatch = trimmed.match(/^pub\s+(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(/);
-        if (!fnMatch)
-            continue;
-        const funcName = fnMatch[1];
-        // Find closing paren
-        let parenDepth = 0;
-        let foundClose = false;
-        let closeLine = i;
-        for (let j = i; j < Math.min(i + 20, lines.length); j++) {
-            for (const ch of lines[j]) {
-                if (ch === '(')
-                    parenDepth++;
-                if (ch === ')') {
-                    parenDepth--;
-                    if (parenDepth === 0) {
-                        foundClose = true;
-                        closeLine = j;
-                        break;
-                    }
-                }
-            }
-            if (foundClose)
-                break;
-        }
-        if (!foundClose)
-            continue;
-        // Check for `->` between `)` and `{`
-        const cLine = lines[closeLine];
-        const cIdx = cLine.lastIndexOf(')');
-        let afterParen = cLine.slice(cIdx + 1);
-        if (closeLine + 1 < lines.length)
-            afterParen += ' ' + lines[closeLine + 1].trim();
-        const hasReturnType = /->/.test(afterParen.split('{')[0]);
-        if (!hasReturnType) {
-            // Check body for return with values
-            let braceDepth = 0;
-            let bodyEnd = closeLine;
-            for (let j = closeLine; j < Math.min(closeLine + 200, lines.length); j++) {
-                for (const ch of lines[j]) {
-                    if (ch === '{')
-                        braceDepth++;
-                    if (ch === '}') {
-                        braceDepth--;
-                        if (braceDepth === 0) {
-                            bodyEnd = j;
-                            break;
-                        }
-                    }
-                }
-                if (braceDepth === 0 && j > closeLine)
-                    break;
-            }
-            const body = lines.slice(closeLine, bodyEnd + 1).join('\n');
-            if (/\breturn\s+\S/.test(body)) {
-                issues.push({
-                    id: `local-return-${Date.now()}-${issues.length}`,
-                    type: 'types',
-                    severity: 'medium',
-                    file: relativePath,
-                    line: i + 1,
-                    description: `Public function '${funcName}' returns a value but has no declared return type`,
-                    status: 'found',
-                    source: 'local',
-                });
-            }
-        }
-    }
-    return issues;
-}
-/**
  * Detect unused named imports within a single file.
  * Only flags imports where the identifier appears exactly once in the file (the import itself).
  * Conservative: skips React (implicit JSX usage), re-exports, and namespace imports.
@@ -32377,18 +32060,6 @@ function localScanFile(filePath, cwd, extraPatterns = []) {
     }
     else if (['.js', '.jsx'].includes(ext)) {
         issues.push(...detectUnusedImports(content, relativePath, ext));
-    }
-    else if (ext === '.py') {
-        issues.push(...detectMissingReturnTypesPython(content, relativePath));
-    }
-    else if (ext === '.go') {
-        issues.push(...detectMissingReturnTypesGo(content, relativePath));
-    }
-    else if (['.java', '.kt'].includes(ext)) {
-        issues.push(...detectMissingReturnTypesJavaKt(content, relativePath, ext));
-    }
-    else if (ext === '.rs') {
-        issues.push(...detectMissingReturnTypesRust(content, relativePath));
     }
     return issues;
 }
@@ -35055,6 +34726,33 @@ const ISSUES_SCHEMA = {
         },
     },
 };
+const VERIFICATION_SCHEMA = {
+    type: 'json_schema',
+    json_schema: {
+        name: 'verification_results',
+        strict: true,
+        schema: {
+            type: 'object',
+            properties: {
+                results: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            index: { type: 'number' },
+                            is_real: { type: 'boolean' },
+                            reason: { type: 'string' },
+                        },
+                        required: ['index', 'is_real', 'reason'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['results'],
+            additionalProperties: false,
+        },
+    },
+};
 function collectFiles(dir, files = []) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.name.startsWith('.') && entry.name !== '.github')
@@ -35330,6 +35028,94 @@ function verifyIssues(aiIssues, localIssues, cwd) {
         verified.push(issue);
     }
     return { verified, rejected };
+}
+/**
+ * AI verification pass: send actual code to a low-tier model to confirm issues.
+ * Groups issues into batches, reads ±15 lines of real code around each,
+ * and asks the model which issues are genuine.
+ * Costs 1 API call per ~8 issues (~500 tokens each).
+ */
+async function runAIVerificationPass(issues, cwd, primaryModel, budget) {
+    if (issues.length === 0)
+        return [];
+    const verifyModel = budget.selectModel(primaryModel, 'fingerprint');
+    if (budget.remaining(verifyModel) < 1) {
+        core.info(`  No API budget for verification — keeping all issues`);
+        return issues;
+    }
+    core.info(`  Verifying ${issues.length} AI issues against actual code...`);
+    const BATCH_SIZE = 8;
+    const verified = [];
+    for (let batchStart = 0; batchStart < issues.length; batchStart += BATCH_SIZE) {
+        const batch = issues.slice(batchStart, batchStart + BATCH_SIZE);
+        // Build context: actual code around each issue
+        const snippets = [];
+        for (let i = 0; i < batch.length; i++) {
+            const issue = batch[i];
+            const fullPath = path.join(cwd, issue.file);
+            let codeContext = '[file not readable]';
+            try {
+                const content = fs.readFileSync(fullPath, 'utf-8');
+                const fileLines = content.split('\n');
+                const start = Math.max(0, (issue.line || 1) - 16);
+                const end = Math.min(fileLines.length, (issue.line || 1) + 15);
+                codeContext = fileLines
+                    .slice(start, end)
+                    .map((l, j) => `${start + j + 1}: ${l}`)
+                    .join('\n');
+            }
+            catch { }
+            snippets.push(`--- Issue #${i} ---\n` +
+                `File: ${issue.file}\n` +
+                `Line: ${issue.line}\n` +
+                `Type: ${issue.type} (${issue.severity})\n` +
+                `Claim: ${issue.description}\n` +
+                `Actual code:\n${codeContext}\n`);
+        }
+        const prompt = `You are verifying code issues. For each issue, the ACTUAL source code is shown. Determine if each is REAL or FALSE POSITIVE.
+
+Key rules:
+- A framework decorator providing the return type (FastAPI response_model=, Flask, Django) means it is NOT missing a return type.
+- f-strings or template literals in logger/print/error calls are NOT SQL injection.
+- Config defaults, placeholder values, or env var fallbacks are NOT hardcoded secrets.
+- Input models/schemas accepting secrets is normal — only flag if secrets appear in unmasked output.
+- When in doubt, mark FALSE POSITIVE. We prefer missing a real issue over reporting a fake one.
+
+${snippets.join('\n')}
+For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
+        try {
+            const model = budget.selectModel(primaryModel, 'fingerprint');
+            if (budget.remaining(model) < 1) {
+                verified.push(...batch);
+                break;
+            }
+            const { content } = await (0, github_models_1.callGitHubModels)([
+                { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+                { role: 'user', content: prompt },
+            ], model, { responseFormat: VERIFICATION_SCHEMA });
+            budget.recordRequest(model);
+            const data = JSON.parse(content);
+            const results = data.results || [];
+            const realIndices = new Set(results.filter(r => r.is_real).map(r => r.index));
+            for (let j = 0; j < batch.length; j++) {
+                if (realIndices.has(j)) {
+                    verified.push(batch[j]);
+                }
+            }
+            const rejectedCount = batch.length - realIndices.size;
+            if (rejectedCount > 0) {
+                core.info(`    ${ui.c(String(rejectedCount), ui.S.yellow)} issues rejected by AI verification`);
+            }
+        }
+        catch (e) {
+            core.warning(`  AI verification failed: ${e}. Keeping batch.`);
+            verified.push(...batch);
+        }
+        if (batchStart + BATCH_SIZE < issues.length) {
+            await (0, utils_1.sleep)(2000);
+        }
+    }
+    return verified;
 }
 // ---------------------------------------------------------------------------
 // Layer 1: Fingerprint scanning (compact representations → fewer API calls)
@@ -35662,6 +35448,44 @@ async function runScan(config, pluginCtx) {
                 aiIssues = fpResult.issues;
                 totalTokens += fpResult.tokens;
                 totalApiCalls += fpResult.apiCalls;
+                // TARGETED DEEP SCAN (Option C)
+                // Fingerprint scan identifies suspicious files. Deep scan them with full
+                // code for higher accuracy. Uses 1-3 extra API calls on suspicious files.
+                if (aiIssues.length > 0 && scanLevel === 'flush') {
+                    const suspiciousFileSet = new Set(aiIssues.map(i => i.file));
+                    const suspiciousFilePaths = filesToScan
+                        .filter(fp => suspiciousFileSet.has(path.relative(cwd, fp)))
+                        .slice(0, 5);
+                    if (suspiciousFilePaths.length > 0) {
+                        const deepModel = budget.selectModel(config.githubModelsModel, 'deep');
+                        if (budget.remaining(deepModel) > 0) {
+                            core.info(`  ${ui.c('Targeted deep scan:', ui.S.gray)} ${suspiciousFilePaths.length} suspicious files`);
+                            const deepChunks = (0, smart_split_1.prepareChunks)(suspiciousFilePaths, cwd, deepModel);
+                            for (const chunk of deepChunks) {
+                                if (budget.remaining(deepModel) < 1)
+                                    break;
+                                try {
+                                    const chunkStart = Date.now();
+                                    const { issues: deepIssues, tokens } = await scanChunk(chunk, 1, deepChunks.length, deepModel, 0, customPrompt || undefined);
+                                    budget.recordRequest(deepModel);
+                                    totalTokens += tokens;
+                                    totalApiCalls++;
+                                    aiIssues.push(...deepIssues);
+                                    const elapsed = (0, utils_1.formatDuration)(Date.now() - chunkStart);
+                                    if (deepIssues.length > 0) {
+                                        core.info(`    ${ui.c(ui.SYM.bullet, ui.S.yellow)} Deep scan found ${ui.c(String(deepIssues.length), ui.S.bold)} additional issues ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                                    }
+                                    else {
+                                        core.info(`    ${ui.c(ui.SYM.check, ui.S.green)} Deep scan clean ${ui.c(`(${tokens} tokens, ${elapsed})`, ui.S.gray)}`);
+                                    }
+                                }
+                                catch (e) {
+                                    core.warning(`  Targeted deep scan chunk failed: ${e}`);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             // ================================================================
             // POST-SCAN VERIFICATION (Option 3)
@@ -35673,6 +35497,11 @@ async function runScan(config, pluginCtx) {
                     core.info(`  ${ui.c('Verification:', ui.S.gray)} ${verified.length} verified, ${ui.c(String(rejected.length), ui.S.yellow)} rejected (duplicates/hallucinations)`);
                 }
                 aiIssues = verified;
+            }
+            // AI VERIFICATION PASS (Option B)
+            // Send actual code context to a low-tier model to catch hallucinations.
+            if (aiIssues.length > 0) {
+                aiIssues = await runAIVerificationPass(aiIssues, cwd, config.githubModelsModel, budget);
             }
             allIssues.push(...aiIssues);
             // Run post-scan hooks

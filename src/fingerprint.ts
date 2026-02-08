@@ -455,16 +455,23 @@ Focus your analysis on issues that require REASONING — things a static analyze
 - BUGS: Logic errors, race conditions, incorrect error handling, edge cases.
 - DEAD-CODE: Functions/classes defined but never referenced by other files in the import graph.
 - DUPLICATES: Similar function signatures across different files that should be shared.
-- COVERAGE: Public functions with no apparent test coverage.
 
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
+FRAMEWORK-AWARE RULES (avoid false positives):
+- FastAPI/Flask/Django: A route decorator with response_model= or return type annotation IS the return type. Do NOT flag decorated route handlers for missing return types.
+- f-strings, template literals, or format() calls inside logger/print/error messages are NOT SQL injection. SQL injection requires the interpolated string to reach a database query or cursor.
+- Config defaults, environment variable fallbacks (os.getenv("X", "default")), and placeholder values are NOT hardcoded secrets.
+- Pydantic models or dataclasses that accept secret fields as INPUT are normal. Only flag if secrets appear UNMASKED in API responses or logs.
+- Functions with @override, @abstractmethod, or interface implementations may intentionally omit types to match the parent signature.
+- Empty __init__.py files and re-export modules (from X import *) are NOT dead code.
+
 RULES:
-- Only report REAL issues visible from the fingerprints. No speculation.
+- Only report REAL issues clearly visible from the fingerprints. No speculation.
 - Be specific: exact file, use the exact line number from the L-prefixed signatures/flags.
 - Provide the evidence field with the exact code pattern you observed.
-- If everything looks clean, return an empty issues array.
+- If everything looks clean, return an empty issues array. Prefer returning fewer, high-confidence issues over many uncertain ones.
 
 ${hotspotCount > 0 ? `Note: ${hotspotCount} hotspot lines flagged across ${fileCount} files.\n` : ''}
 FILE FINGERPRINTS:
