@@ -31191,13 +31191,16 @@ Focus your analysis on issues that require REASONING — things a static analyze
 DO NOT report these (already handled by local static analysis):
 - Missing return types, console.log/debugger/print, any-type usage, unused imports, TODO/FIXME markers
 
-FRAMEWORK-AWARE RULES (avoid false positives):
-- FastAPI/Flask/Django: A route decorator with response_model= or return type annotation IS the return type. Do NOT flag decorated route handlers for missing return types.
-- f-strings, template literals, or format() calls inside logger/print/error messages are NOT SQL injection. SQL injection requires the interpolated string to reach a database query or cursor.
-- Config defaults, environment variable fallbacks (os.getenv("X", "default")), and placeholder values are NOT hardcoded secrets.
-- Pydantic models or dataclasses that accept secret fields as INPUT are normal. Only flag if secrets appear UNMASKED in API responses or logs.
-- Functions with @override, @abstractmethod, or interface implementations may intentionally omit types to match the parent signature.
-- Empty __init__.py files and re-export modules (from X import *) are NOT dead code.
+CRITICAL — avoid false positives:
+- ORM query builders, parameterized queries, and prepared statements are NOT SQL injection — regardless of language or framework. Only flag raw SQL strings with unsanitized user input directly interpolated.
+- String interpolation in log messages, error messages, or print statements is NOT SQL injection. SQL injection requires the string to reach a database query.
+- Decorated route handlers or annotated endpoints where the framework infers the return type are NOT missing return types.
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
+- Input validation models or schemas that accept sensitive fields are normal. Only flag secrets appearing unmasked in responses or logs.
+- Abstract methods, interface implementations, or overrides may intentionally omit types to match a parent signature.
+- Re-export modules and package init files are NOT dead code.
+- Test files: mock data, fixtures, assertions, and test helpers are NOT real issues. Only flag actual bugs in test logic.
+- Catching specific exception types (e.g. narrowly-scoped errors) and ignoring them is intentional — only flag broad catch-all exception handlers.
 
 RULES:
 - Only report REAL issues clearly visible from the fingerprints. No speculation.
@@ -31754,7 +31757,7 @@ const PATTERNS = [
     },
     // ── Bugs: empty error handling ───────────────────────────────────
     {
-        regex: /except\s*(?:\w+\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
+        regex: /except\s*(?:(?:Exception|BaseException)(?:\s+as\s+\w+)?\s*)?:\s*(?:pass|\.\.\.)\s*$/gm,
         type: 'bugs',
         severity: 'high',
         description: 'Empty except clause silently swallows errors',
@@ -34274,11 +34277,11 @@ const MODEL_TIERS = {
         requestsPerDay: 50, requestsPerMinute: 10,
         inputTokens: 8000, outputTokens: 4000, concurrent: 2, tier: 'high',
     },
-    'mistral-ai/mistral-small': {
+    'mistral-ai/Mistral-small': {
         requestsPerDay: 150, requestsPerMinute: 15,
         inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
     },
-    'meta-llama/Meta-Llama-3.1-70B-Instruct': {
+    'meta-llama/Llama-3.3-70B-Instruct': {
         requestsPerDay: 150, requestsPerMinute: 15,
         inputTokens: 8000, outputTokens: 4000, concurrent: 5, tier: 'low',
     },
@@ -35075,25 +35078,47 @@ async function runAIVerificationPass(issues, cwd, primaryModel, budget) {
         const prompt = `You are verifying code issues. For each issue, the ACTUAL source code is shown. Determine if each is REAL or FALSE POSITIVE.
 
 Key rules:
-- A framework decorator providing the return type (FastAPI response_model=, Flask, Django) means it is NOT missing a return type.
-- f-strings or template literals in logger/print/error calls are NOT SQL injection.
-- Config defaults, placeholder values, or env var fallbacks are NOT hardcoded secrets.
-- Input models/schemas accepting secrets is normal — only flag if secrets appear in unmasked output.
+- ORM query builders, parameterized queries, and prepared statements are NOT SQL injection. Only flag raw SQL strings with unsanitized user input directly interpolated.
+- String interpolation in log/error/print statements is NOT SQL injection.
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
+- Input validation models accepting sensitive fields are normal — only flag secrets in unmasked output.
+- Test files: mock data, fixtures, and test assertions are NOT real issues.
+- Catching specific/narrow exception types and ignoring them is intentional — only flag broad catch-all handlers.
 - When in doubt, mark FALSE POSITIVE. We prefer missing a real issue over reporting a fake one.
 
 ${snippets.join('\n')}
 For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
         try {
-            const model = budget.selectModel(primaryModel, 'fingerprint');
+            let model = budget.selectModel(primaryModel, 'fingerprint');
             if (budget.remaining(model) < 1) {
                 verified.push(...batch);
                 break;
             }
-            const { content } = await (0, github_models_1.callGitHubModels)([
-                { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
-                { role: 'user', content: prompt },
-            ], model, { responseFormat: VERIFICATION_SCHEMA });
-            budget.recordRequest(model);
+            let content;
+            try {
+                const result = await (0, github_models_1.callGitHubModels)([
+                    { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+                    { role: 'user', content: prompt },
+                ], model, { responseFormat: VERIFICATION_SCHEMA });
+                content = result.content;
+                budget.recordRequest(model);
+            }
+            catch (modelErr) {
+                // If selected model fails (404 unknown model), fall back to primary
+                if (model !== primaryModel && budget.remaining(primaryModel) > 0) {
+                    core.info(`    ${ui.c('Model fallback:', ui.S.gray)} ${model} unavailable, using ${primaryModel}`);
+                    model = primaryModel;
+                    const result = await (0, github_models_1.callGitHubModels)([
+                        { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+                        { role: 'user', content: prompt },
+                    ], model, { responseFormat: VERIFICATION_SCHEMA });
+                    content = result.content;
+                    budget.recordRequest(model);
+                }
+                else {
+                    throw modelErr;
+                }
+            }
             const data = JSON.parse(content);
             const results = data.results || [];
             const realIndices = new Set(results.filter(r => r.is_real).map(r => r.index));
@@ -36198,10 +36223,9 @@ const SIGNATURE_BODY_LINES = 3;
 const MODEL_INPUT_LIMITS = {
     'openai/gpt-4o-mini': 8000,
     'openai/gpt-4o': 8000,
-    'mistral-ai/mistral-small': 8000,
-    'meta-llama/Meta-Llama-3.1-70B-Instruct': 8000,
+    'mistral-ai/Mistral-small': 8000,
+    'meta-llama/Llama-3.3-70B-Instruct': 8000,
     'meta-llama/Meta-Llama-3.1-8B-Instruct': 8000,
-    'mistral-ai/Mistral-Small-3.1-24B-Instruct-2503': 8000,
 };
 // ---------------------------------------------------------------------------
 // Token estimation

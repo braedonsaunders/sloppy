@@ -460,31 +460,55 @@ async function runAIVerificationPass(
     const prompt = `You are verifying code issues. For each issue, the ACTUAL source code is shown. Determine if each is REAL or FALSE POSITIVE.
 
 Key rules:
-- A framework decorator providing the return type (FastAPI response_model=, Flask, Django) means it is NOT missing a return type.
-- f-strings or template literals in logger/print/error calls are NOT SQL injection.
-- Config defaults, placeholder values, or env var fallbacks are NOT hardcoded secrets.
-- Input models/schemas accepting secrets is normal — only flag if secrets appear in unmasked output.
+- ORM query builders, parameterized queries, and prepared statements are NOT SQL injection. Only flag raw SQL strings with unsanitized user input directly interpolated.
+- String interpolation in log/error/print statements is NOT SQL injection.
+- Config defaults, environment variable fallbacks, and placeholder values are NOT hardcoded secrets.
+- Input validation models accepting sensitive fields are normal — only flag secrets in unmasked output.
+- Test files: mock data, fixtures, and test assertions are NOT real issues.
+- Catching specific/narrow exception types and ignoring them is intentional — only flag broad catch-all handlers.
 - When in doubt, mark FALSE POSITIVE. We prefer missing a real issue over reporting a fake one.
 
 ${snippets.join('\n')}
 For each issue, respond with its index (0-based within this batch), whether it's real, and a brief reason.`;
 
     try {
-      const model = budget.selectModel(primaryModel, 'fingerprint');
+      let model = budget.selectModel(primaryModel, 'fingerprint');
       if (budget.remaining(model) < 1) {
         verified.push(...batch);
         break;
       }
 
-      const { content } = await callGitHubModels(
-        [
-          { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
-          { role: 'user', content: prompt },
-        ],
-        model,
-        { responseFormat: VERIFICATION_SCHEMA },
-      );
-      budget.recordRequest(model);
+      let content: string;
+      try {
+        const result = await callGitHubModels(
+          [
+            { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+            { role: 'user', content: prompt },
+          ],
+          model,
+          { responseFormat: VERIFICATION_SCHEMA },
+        );
+        content = result.content;
+        budget.recordRequest(model);
+      } catch (modelErr) {
+        // If selected model fails (404 unknown model), fall back to primary
+        if (model !== primaryModel && budget.remaining(primaryModel) > 0) {
+          core.info(`    ${ui.c('Model fallback:', ui.S.gray)} ${model} unavailable, using ${primaryModel}`);
+          model = primaryModel;
+          const result = await callGitHubModels(
+            [
+              { role: 'system', content: 'You verify whether reported code issues are real by examining actual source code. Be strict — reject anything uncertain.' },
+              { role: 'user', content: prompt },
+            ],
+            model,
+            { responseFormat: VERIFICATION_SCHEMA },
+          );
+          content = result.content;
+          budget.recordRequest(model);
+        } else {
+          throw modelErr;
+        }
+      }
 
       const data = JSON.parse(content);
       const results: Array<{ index: number; is_real: boolean }> = data.results || [];
