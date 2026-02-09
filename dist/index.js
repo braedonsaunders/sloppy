@@ -32007,15 +32007,17 @@ function detectMissingReturnTypesTS(content, relativePath) {
         let parenDepth = 0;
         let foundClose = false;
         let closeLine = i;
+        let closeCharIdx = -1; // character index of depth-0 closing paren
         for (let j = i; j < Math.min(i + 30, lines.length); j++) {
-            for (const ch of lines[j]) {
-                if (ch === '(')
+            for (let k = 0; k < lines[j].length; k++) {
+                if (lines[j][k] === '(')
                     parenDepth++;
-                if (ch === ')') {
+                if (lines[j][k] === ')') {
                     parenDepth--;
                     if (parenDepth === 0) {
                         foundClose = true;
                         closeLine = j;
+                        closeCharIdx = k;
                         break;
                     }
                 }
@@ -32026,18 +32028,26 @@ function detectMissingReturnTypesTS(content, relativePath) {
         if (!foundClose)
             continue;
         // Gather text after the closing paren (same line + next few lines)
-        const closeContent = lines[closeLine];
-        const closeIdx = closeContent.lastIndexOf(')');
-        let afterParen = closeContent.slice(closeIdx + 1);
+        // Use the tracked position of the actual depth-0 closing paren, not
+        // lastIndexOf(')') which can be wrong when the line has multiple ')'.
+        let afterParen = lines[closeLine].slice(closeCharIdx + 1);
         for (let j = closeLine + 1; j < Math.min(closeLine + 3, lines.length); j++) {
             afterParen += ' ' + lines[j].trim();
         }
         // For arrow functions, verify `=>` actually exists after the closing paren.
         // This prevents matching parenthesized expressions like:
         //   const section = (e as CustomEvent).detail as AISection
-        // where the `(` is a type-cast grouping, not function parameters.
-        if (isArrow && !afterParen.includes('=>'))
-            continue;
+        //   const winRate = (data.wins + data.losses) > 0 ? ... : 0
+        // where the `(` is a grouping/expression, not function parameters.
+        if (isArrow) {
+            const arrowIdx = afterParen.indexOf('=>');
+            if (arrowIdx === -1)
+                continue;
+            // If ?, ;, {, or } appears before `=>`, it's a ternary/expression, not an arrow function
+            const beforeArrow = afterParen.slice(0, arrowIdx);
+            if (/[?;{}]/.test(beforeArrow))
+                continue;
+        }
         // A return type annotation starts with `:` after the closing paren.
         // For arrow functions, also check for `=>` — if `:` comes before `=>` it's a return type.
         const hasReturnType = isArrow
