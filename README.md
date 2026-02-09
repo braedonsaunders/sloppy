@@ -43,10 +43,12 @@ jobs:
       models: read
     steps:
       - uses: actions/checkout@v4
-      - uses: braedonsaunders/sloppy@v1
+      - uses: braedonsaunders/sloppy@main
 ```
 
 That's it. No API key. No config file. No hosted service. You get a code quality score from 0 to 100 on every PR, posted as a comment.
+
+> **Versioning:** Use `@main` to track the latest release. A `v1` tag will be published once the action reaches a stable release, at which point you can pin to `@v1` for a fixed major version.
 
 Want auto-fixes too? Add an API key. [Jump to fix mode.](#fix-mode)
 
@@ -106,7 +108,7 @@ jobs:
       models: read
     steps:
       - uses: actions/checkout@v4
-      - uses: braedonsaunders/sloppy@v1
+      - uses: braedonsaunders/sloppy@main
         with:
           scan-scope: auto
 ```
@@ -127,7 +129,7 @@ model: ""                # optional model override
 Or in the workflow:
 
 ```yaml
-- uses: braedonsaunders/sloppy@v1
+- uses: braedonsaunders/sloppy@main
   with:
     mode: scan
     scan-provider: agent
@@ -164,7 +166,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
-      - uses: braedonsaunders/sloppy@v1
+      - uses: braedonsaunders/sloppy@main
         with:
           mode: fix
           agent: claude
@@ -177,7 +179,7 @@ jobs:
 **With OpenAI Codex:**
 
 ```yaml
-      - uses: braedonsaunders/sloppy@v1
+      - uses: braedonsaunders/sloppy@main
         with:
           mode: fix
           agent: codex
@@ -196,7 +198,7 @@ claude setup-token
 Store the token as `CLAUDE_CODE_OAUTH_TOKEN` secret, then:
 
 ```yaml
-      - uses: braedonsaunders/sloppy@v1
+      - uses: braedonsaunders/sloppy@main
         with:
           mode: fix
           agent: claude
@@ -294,7 +296,7 @@ KLOC = thousands of non-blank lines of code across scanned files.
 ### CI Gate
 
 ```yaml
-- uses: braedonsaunders/sloppy@v1
+- uses: braedonsaunders/sloppy@main
   with:
     fail-below: '70'
 ```
@@ -472,7 +474,7 @@ strictness: high
 
 Activate a profile via the action input:
 ```yaml
-- uses: braedonsaunders/sloppy@v1
+- uses: braedonsaunders/sloppy@main
   with:
     profile: ci
 ```
@@ -548,7 +550,7 @@ Add it as a repository secret named `GIST_TOKEN`.
 ### 3. Configure the action
 
 ```yaml
-- uses: braedonsaunders/sloppy@v1
+- uses: braedonsaunders/sloppy@main
   with:
     gist-id: 'your-gist-id-here'
     gist-token: ${{ secrets.GIST_TOKEN }}
