@@ -31348,7 +31348,15 @@ async function callGitHubModels(messages, model = 'openai/gpt-4o-mini', options)
             const retryAfter = response.headers.get('retry-after');
             let waitMs;
             if (retryAfter) {
-                waitMs = (parseInt(retryAfter) || 10) * 1000;
+                const retryAfterSec = parseInt(retryAfter) || 10;
+                // If the server asks us to wait longer than 60s, the rate limit is
+                // too severe to wait out — fail immediately so the CI job doesn't hang.
+                if (retryAfterSec > 60) {
+                    throw new Error(`GitHub Models rate limit requires a ${retryAfterSec}s wait (Retry-After header). ` +
+                        'This exceeds the maximum tolerable delay. ' +
+                        'Try again later or use a smaller model (openai/gpt-4o-mini gets 3x the quota of gpt-4o).');
+                }
+                waitMs = retryAfterSec * 1000;
             }
             else {
                 // Exponential backoff: 5s, 15s, 30s, 60s
